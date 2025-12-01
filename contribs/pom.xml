@@ -75,6 +75,7 @@
 		<module>dvrp</module>
 		<module>ev</module>
 		<module>emissions</module>
+		<module>exmas</module>
 		<module>freight</module>
 		<module>freightreceiver</module>
 		<module>hybridsim</module>
