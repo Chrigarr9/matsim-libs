@@ -1,8 +1,10 @@
 package org.matsim.contrib.exmas_algorithm.extension;
 
-import com.exmas.ridesharing.domain.*;
-import com.exmas.ridesharing.graph.ShareabilityGraph;
-import com.exmas.ridesharing.network.Network;
+import org.matsim.contrib.exmas.demand.DrtRequest;
+import org.matsim.contrib.exmas_algorithm.domain.*;
+import org.matsim.contrib.exmas_algorithm.graph.ShareabilityGraph;
+import org.matsim.contrib.exmas_algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.exmas_algorithm.validation.BudgetValidator;
 import it.unimi.dsi.fastutil.ints.*;
 import java.util.*;
 
@@ -11,22 +13,25 @@ import java.util.*;
  * Python reference: extensions.py lines 13-194
  */
 public final class RideExtender {
-    private final Network network;
+    private final MatsimNetworkCache network;
     private final ShareabilityGraph graph;
-    private final Map<Integer, Request> requestMap;
+    private final BudgetValidator budgetValidator;
+    private final Map<Integer, DrtRequest> requestMap;
     private final Map<Integer, Ride> rideMap;
     private static final double EPSILON = 1e-9;
 
-    public RideExtender(Network network, ShareabilityGraph graph, List<Request> requests, List<Ride> rides) {
+    public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
+                        List<DrtRequest> requests, List<Ride> rides) {
         this.network = network;
         this.graph = graph;
+        this.budgetValidator = budgetValidator;
         this.requestMap = new HashMap<>();
-        for (Request r : requests) requestMap.put(r.getIndex(), r);
+        for (DrtRequest r : requests) requestMap.put(r.index, r);
         this.rideMap = new HashMap<>();
         for (Ride r : rides) rideMap.put(r.getIndex(), r);
     }
 
-    public List<Ride> extendRides(List<Ride> ridesToExtend, int nextRideIndex) {
+    public List<Ride> extendRides(List<Ride> ridesToExtend, DrtRequest[] drtRequests, int nextRideIndex) {
         List<Ride> extended = new ArrayList<>();
         int rideIndex = nextRideIndex;
 
@@ -34,13 +39,29 @@ public final class RideExtender {
             IntSet commonNeighbors = graph.findCommonNeighbors(ride.getRequestIndices());
 
             for (int candidateReq : commonNeighbors) {
+                // Check that candidate request has different personId from all existing passengers
+                DrtRequest newRequest = requestMap.get(candidateReq);
+                boolean duplicatePerson = false;
+                for (int existingReqIdx : ride.getRequestIndices()) {
+                    DrtRequest existingRequest = requestMap.get(existingReqIdx);
+                    if (newRequest.getPaxId().equals(existingRequest.getPaxId())) {
+                        duplicatePerson = true;
+                        break;
+                    }
+                }
+                if (duplicatePerson) continue;
+
                 int[] pairRides = getPairRides(ride.getRequestIndices(), candidateReq);
                 if (pairRides == null) continue;
 
                 Ride ext = tryExtend(ride, candidateReq, pairRides, rideIndex);
                 if (ext != null) {
-                    extended.add(ext);
-                    rideIndex++;
+                    // Validate budgets before adding
+                    Ride validated = budgetValidator.validateAndPopulateBudgets(ext, drtRequests);
+                    if (validated != null) {
+                        extended.add(validated);
+                        rideIndex++;
+                    }
                 }
             }
         }
@@ -58,13 +79,17 @@ public final class RideExtender {
     }
 
     private Ride tryExtend(Ride base, int newReq, int[] pairRides, int index) {
-        Request newRequest = requestMap.get(newReq);
+        DrtRequest newRequest = requestMap.get(newReq);
+        int newOriginNode = network.getNodeIndex(newRequest.originLinkId);
+        int newDestNode = network.getNodeIndex(newRequest.destinationLinkId);
         int degree = base.getDegree();
         int[] destIndex = base.getDestinationsIndex();
 
         // Determine insertion position
-        int fifoCount = 0, lifoCount = 0;
-        int minLifoPos = Integer.MAX_VALUE, maxFifoPos = -1;
+        int fifoCount = 0;
+		int lifoCount = 0;
+        int minLifoPos = Integer.MAX_VALUE;
+		int maxFifoPos = -1;
 
         for (int i = 0; i < pairRides.length; i++) {
             Ride pairRide = rideMap.get(pairRides[i]);
@@ -98,9 +123,9 @@ public final class RideExtender {
 
         // Build new arrays
         int[] reqIndices = append(base.getRequestIndices(), newReq);
-        int[] originsOrdered = append(base.getOriginsOrdered(), newRequest.getOrigin());
+        int[] originsOrdered = append(base.getOriginsOrdered(), newOriginNode);
         int[] originsIndex = append(base.getOriginsIndex(), newReq);  // Store REQUEST index, not position
-        int[] destinationsOrdered = insert(base.getDestinationsOrdered(), insertPos, newRequest.getDestination());
+        int[] destinationsOrdered = insert(base.getDestinationsOrdered(), insertPos, newDestNode);
         int[] destinationsIndex = insert(base.getDestinationsIndex(), insertPos, newReq);  // Store REQUEST index, not position
 
         // Build connection sequence
@@ -124,7 +149,7 @@ public final class RideExtender {
 
         for (int i = 0; i < degree + 1; i++) {
             int reqIdx = reqIndices[i];
-            Request req = requestMap.get(reqIdx);
+            DrtRequest req = requestMap.get(reqIdx);
 
             // Origin position is always i (origins are always in sequential order)
             int origIdx = i;
@@ -170,7 +195,7 @@ public final class RideExtender {
         double[] effMaxPos = new double[degree + 1];
 
         for (int i = 0; i < degree + 1; i++) {
-            Request req = requestMap.get(reqIndices[i]);
+            DrtRequest req = requestMap.get(reqIndices[i]);
             double detour = pttActual[i] - req.getTravelTime();
 
             double posAdj = req.getPositiveDelayRelComponent() > 0.0

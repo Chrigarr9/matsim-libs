@@ -1,7 +1,9 @@
 package org.matsim.contrib.exmas_algorithm.generation;
 
-import com.exmas.ridesharing.domain.*;
-import com.exmas.ridesharing.network.Network;
+import org.matsim.contrib.exmas.demand.DrtRequest;
+import org.matsim.contrib.exmas_algorithm.domain.*;
+import org.matsim.contrib.exmas_algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.exmas_algorithm.validation.BudgetValidator;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -10,26 +12,28 @@ import java.util.List;
  * Python reference: rides.py lines 55-370
  */
 public final class PairGenerator {
-    private final Network network;
+    private final MatsimNetworkCache network;
+    private final BudgetValidator budgetValidator;
     private final double horizon;
     private static final double EPSILON = 1e-9;
 
-    public PairGenerator(Network network, double horizon) {
+    public PairGenerator(MatsimNetworkCache network, BudgetValidator budgetValidator, double horizon) {
         this.network = network;
+        this.budgetValidator = budgetValidator;
         this.horizon = horizon;
     }
 
-    public List<Ride> generatePairs(Request[] requests) {
+    public List<Ride> generatePairs(DrtRequest[] requests) {
         TimeFilter filter = new TimeFilter(requests);
         List<Ride> pairs = new ArrayList<>();
         int rideIndex = requests.length; // Start after single rides
 
         for (int i = 0; i < filter.size(); i++) {
-            Request reqI = filter.getRequest(i);
+            DrtRequest reqI = filter.getRequest(i);
             int[] candidates = filter.findCandidatesInHorizon(i, horizon);
 
             for (int j : candidates) {
-                Request reqJ = filter.getRequest(j);
+                DrtRequest reqJ = filter.getRequest(j);
 
                 if (reqI.getPaxId().equals(reqJ.getPaxId())) continue;
 
@@ -42,25 +46,38 @@ public final class PairGenerator {
                 // Try FIFO: Oi -> Oj -> Di -> Dj
                 Ride fifo = tryFifo(reqI, reqJ, rideIndex);
                 if (fifo != null) {
-                    pairs.add(fifo);
-                    rideIndex++;
+                    // Validate budgets before adding
+                    Ride validated = budgetValidator.validateAndPopulateBudgets(fifo, requests);
+                    if (validated != null) {
+                        pairs.add(validated);
+                        rideIndex++;
+                    }
                 }
 
                 // Try LIFO: Oi -> Oj -> Dj -> Di
                 Ride lifo = tryLifo(reqI, reqJ, rideIndex);
                 if (lifo != null) {
-                    pairs.add(lifo);
-                    rideIndex++;
+                    // Validate budgets before adding
+                    Ride validated = budgetValidator.validateAndPopulateBudgets(lifo, requests);
+                    if (validated != null) {
+                        pairs.add(validated);
+                        rideIndex++;
+                    }
                 }
             }
         }
         return pairs;
     }
 
-    private Ride tryFifo(Request i, Request j, int index) {
-        TravelSegment oo = network.getSegment(i.getOrigin(), j.getOrigin());
-        TravelSegment od = network.getSegment(j.getOrigin(), i.getDestination());
-        TravelSegment dd = network.getSegment(i.getDestination(), j.getDestination());
+    private Ride tryFifo(DrtRequest i, DrtRequest j, int index) {
+        int iOrigin = network.getNodeIndex(i.originLinkId);
+        int iDest = network.getNodeIndex(i.destinationLinkId);
+        int jOrigin = network.getNodeIndex(j.originLinkId);
+        int jDest = network.getNodeIndex(j.destinationLinkId);
+        
+        TravelSegment oo = network.getSegment(iOrigin, jOrigin);
+        TravelSegment od = network.getSegment(jOrigin, iDest);
+        TravelSegment dd = network.getSegment(iDest, jDest);
 
         if (!oo.isReachable() || !od.isReachable() || !dd.isReachable()) return null;
 
@@ -112,11 +129,11 @@ public final class PairGenerator {
             .index(index)
             .degree(2)
             .kind(RideKind.FIFO)
-            .requestIndices(new int[]{i.getIndex(), j.getIndex()})
-            .originsOrdered(new int[]{i.getOrigin(), j.getOrigin()})
-            .destinationsOrdered(new int[]{i.getDestination(), j.getDestination()})
-            .originsIndex(new int[]{i.getIndex(), j.getIndex()})
-            .destinationsIndex(new int[]{i.getIndex(), j.getIndex()})
+            .requestIndices(new int[]{i.index, j.index})
+            .originsOrdered(new int[]{iOrigin, jOrigin})
+            .destinationsOrdered(new int[]{iDest, jDest})
+            .originsIndex(new int[]{i.index, j.index})
+            .destinationsIndex(new int[]{i.index, j.index})
             .passengerTravelTimes(new double[]{pttI, pttJ})
             .passengerDistances(new double[]{oo.getDistance() + od.getDistance(), od.getDistance() + dd.getDistance()})
             .passengerNetworkUtilities(new double[]{oo.getNetworkUtility() + od.getNetworkUtility(), od.getNetworkUtility() + dd.getNetworkUtility()})
@@ -128,10 +145,15 @@ public final class PairGenerator {
             .build();
     }
 
-    private Ride tryLifo(Request i, Request j, int index) {
-        TravelSegment oo = network.getSegment(i.getOrigin(), j.getOrigin());
-        TravelSegment oj = network.getSegment(j.getOrigin(), j.getDestination());
-        TravelSegment jd = network.getSegment(j.getDestination(), i.getDestination());
+    private Ride tryLifo(DrtRequest i, DrtRequest j, int index) {
+        int iOrigin = network.getNodeIndex(i.originLinkId);
+        int iDest = network.getNodeIndex(i.destinationLinkId);
+        int jOrigin = network.getNodeIndex(j.originLinkId);
+        int jDest = network.getNodeIndex(j.destinationLinkId);
+        
+        TravelSegment oo = network.getSegment(iOrigin, jOrigin);
+        TravelSegment oj = network.getSegment(jOrigin, jDest);
+        TravelSegment jd = network.getSegment(jDest, iDest);
 
         if (!oo.isReachable() || !oj.isReachable() || !jd.isReachable()) return null;
 
@@ -183,11 +205,11 @@ public final class PairGenerator {
             .index(index)
             .degree(2)
             .kind(RideKind.LIFO)
-            .requestIndices(new int[]{i.getIndex(), j.getIndex()})
-            .originsOrdered(new int[]{i.getOrigin(), j.getOrigin()})
-            .destinationsOrdered(new int[]{j.getDestination(), i.getDestination()})
-            .originsIndex(new int[]{i.getIndex(), j.getIndex()})
-            .destinationsIndex(new int[]{j.getIndex(), i.getIndex()})
+            .requestIndices(new int[]{i.index, j.index})
+            .originsOrdered(new int[]{iOrigin, jOrigin})
+            .destinationsOrdered(new int[]{jDest, iDest})
+            .originsIndex(new int[]{i.index, j.index})
+            .destinationsIndex(new int[]{j.index, i.index})
             .passengerTravelTimes(new double[]{pttI, pttJ})
             .passengerDistances(new double[]{oo.getDistance() + oj.getDistance() + jd.getDistance(), oj.getDistance()})
             .passengerNetworkUtilities(new double[]{oo.getNetworkUtility() + oj.getNetworkUtility() + jd.getNetworkUtility(), oj.getNetworkUtility()})

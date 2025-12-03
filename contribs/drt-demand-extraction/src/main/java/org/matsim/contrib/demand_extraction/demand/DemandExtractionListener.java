@@ -4,8 +4,14 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.util.List;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.exmas.config.ExMasConfigGroup;
+import org.matsim.contrib.exmas_algorithm.domain.Ride;
+import org.matsim.contrib.exmas_algorithm.engine.ExMasEngine;
+import org.matsim.contrib.exmas_algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.exmas_algorithm.validation.BudgetValidator;
 import org.matsim.core.config.Config;
 import org.matsim.core.controler.events.IterationEndsEvent;
 import org.matsim.core.controler.listener.IterationEndsListener;
@@ -16,6 +22,8 @@ import com.google.inject.Singleton;
 
 @Singleton
 public class DemandExtractionListener implements IterationEndsListener {
+	private static final Logger log = LogManager.getLogger(DemandExtractionListener.class);
+	private static final String ARRAY_CLEAN_PATTERN = "[\\[\\] ]";
 
     private final ModeRoutingCache modeRoutingCache;
     private final ChainIdentifier chainIdentifier;
@@ -23,16 +31,22 @@ public class DemandExtractionListener implements IterationEndsListener {
     private final Population population;
 	private final ExMasConfigGroup exMasConfig;
 	private final Config config;
+	private final MatsimNetworkCache networkCache;
+	private final BudgetValidator budgetValidator;
 
     @Inject
     public DemandExtractionListener(ModeRoutingCache modeRoutingCache, ChainIdentifier chainIdentifier,
-			BudgetCalculator budgetCalculator, Population population, ExMasConfigGroup exMasConfig, Config config) {
+			BudgetCalculator budgetCalculator, Population population, ExMasConfigGroup exMasConfig, Config config,
+			MatsimNetworkCache networkCache,
+			BudgetValidator budgetValidator) {
         this.modeRoutingCache = modeRoutingCache;
         this.chainIdentifier = chainIdentifier;
         this.budgetCalculator = budgetCalculator;
         this.population = population;
 		this.exMasConfig = exMasConfig;
 		this.config = config;
+		this.networkCache = networkCache;
+		this.budgetValidator = budgetValidator;
     }
 
     @Override
@@ -56,7 +70,18 @@ public class DemandExtractionListener implements IterationEndsListener {
 			// vehicles)
             List<DrtRequest> requests = budgetCalculator.calculateBudgets(population);
 
-            // 4. Write Output
+			// 4. Generate ExMAS Rides (with budget validation)
+			log.info("Running ExMAS ride generation...");
+			ExMasEngine exmasEngine = new ExMasEngine(
+					networkCache, 
+					budgetValidator, 
+					exMasConfig.getSearchHorizon(),
+					exMasConfig.getMaxPoolingDegree()
+				);
+			List<Ride> rides = exmasEngine.run(requests);
+			log.info("Generated {} total rides", rides.size());
+
+            // 5. Write DRT Requests Output
 			String filename = event.getServices().getControllerIO().getOutputFilename("drt_requests.csv");
             try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
                 writer.write(
@@ -71,6 +96,27 @@ public class DemandExtractionListener implements IterationEndsListener {
             } catch (IOException e) {
                 throw new RuntimeException("Could not write drt_requests.csv", e);
             }
+			
+			// 6. Write ExMAS Rides Output
+			String ridesFilename = event.getServices().getControllerIO().getOutputFilename("exmas_rides.csv");
+			try (BufferedWriter writer = IOUtils.getBufferedWriter(ridesFilename)) {
+				writer.write("rideIndex,degree,kind,requestIndices,startTime,duration,distance,delays,remainingBudgets");
+				writer.newLine();
+				for (Ride ride : rides) {
+					String reqIndices = java.util.Arrays.toString(ride.getRequestIndices()).replaceAll(ARRAY_CLEAN_PATTERN, "");
+					String delays = java.util.Arrays.toString(ride.getDelays()).replaceAll(ARRAY_CLEAN_PATTERN, "");
+					String budgets = ride.getRemainingBudgets() != null 
+						? java.util.Arrays.toString(ride.getRemainingBudgets()).replaceAll(ARRAY_CLEAN_PATTERN, "")
+						: "";
+					writer.write(String.format(java.util.Locale.US, "%d,%d,%s,%s,%.2f,%.2f,%.2f,%s,%s",
+						ride.getIndex(), ride.getDegree(), ride.getKind(), reqIndices,
+						ride.getStartTime(), ride.getRideTravelTime(), ride.getRideDistance(),
+						delays, budgets));
+					writer.newLine();
+				}
+			} catch (IOException e) {
+				throw new RuntimeException("Could not write exmas_rides.csv", e);
+			}
         }
     }
 }

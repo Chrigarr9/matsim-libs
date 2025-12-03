@@ -1,6 +1,7 @@
 package org.matsim.contrib.exmas.demand;
 
 import org.matsim.contrib.exmas.config.ExMasConfigGroup;
+import org.matsim.contrib.exmas_algorithm.ExMasAlgorithmModule;
 import org.matsim.core.controler.AbstractModule;
 
 public class DemandExtractionModule extends AbstractModule {
@@ -14,9 +15,15 @@ public class DemandExtractionModule extends AbstractModule {
                     + "config.addModule(new ExMasConfigGroup())");
         }
 
+        // Bind demand extraction components
         bind(ModeRoutingCache.class).asEagerSingleton();
         bind(ChainIdentifier.class).asEagerSingleton();
         bind(BudgetCalculator.class).asEagerSingleton();
+        
+        // Install ExMAS algorithm module (validators, network cache, etc.)
+        install(new ExMasAlgorithmModule());
+        
+        // Register controller listener
         addControlerListenerBinding().to(DemandExtractionListener.class);
     }
 }

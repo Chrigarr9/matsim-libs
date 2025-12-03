@@ -1,6 +1,6 @@
 package org.matsim.contrib.exmas_algorithm.generation;
 
-import com.exmas.ridesharing.domain.Request;
+import org.matsim.contrib.exmas.demand.DrtRequest;
 import java.util.Arrays;
 import java.util.Comparator;
 
@@ -9,12 +9,12 @@ import java.util.Comparator;
  * Python reference: rides.py lines 55-81 (np.searchsorted)
  */
 public final class TimeFilter {
-    private final Request[] sortedRequests;
+    private final DrtRequest[] sortedRequests;
     private final double[] requestTimes;
 
-    public TimeFilter(Request[] requests) {
+    public TimeFilter(DrtRequest[] requests) {
         this.sortedRequests = requests.clone();
-        Arrays.sort(sortedRequests, Comparator.comparingDouble(Request::getRequestTime));
+        Arrays.sort(sortedRequests, Comparator.comparingDouble(DrtRequest::getRequestTime));
 
         this.requestTimes = new double[sortedRequests.length];
         for (int i = 0; i < sortedRequests.length; i++) {
@@ -52,7 +52,7 @@ public final class TimeFilter {
         return idx >= 0 ? idx + 1 : -(idx + 1);
     }
 
-    public Request getRequest(int index) {
+    public DrtRequest getRequest(int index) {
         return sortedRequests[index];
     }
 

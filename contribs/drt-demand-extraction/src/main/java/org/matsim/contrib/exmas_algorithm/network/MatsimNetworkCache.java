@@ -18,13 +18,20 @@ import com.google.inject.Inject;
 import com.google.inject.Singleton;
 
 
-// C:how do we integrate this network? are we overwriting the matsim base network?
-// i think it would be smarter to only add the cache on tzop of the router. (i have seen a similar approch, maybe this is implemented in matsim or a contrib already?)
-// so whenever the router is called we check if we calculated that route before. if yes we return the cached result otherwise we calculate it and store it in the cache.
-// the router would also differentiate between differnt modes, but we can limit the cache to car only. for drt we use car trave times.
-
 /**
  * MATSim-native network implementation with time-binned lazy caching.
+ * 
+ * DESIGN NOTE: This implementation uses a separate cache layer on top of the router.
+ * An alternative design would be to implement a caching LeastCostPathCalculator decorator
+ * that wraps the base router (similar to caching patterns used elsewhere in MATSim).
+ * The decorator approach would:
+ * - Check cache before calling router
+ * - Store results after router call
+ * - Support mode-specific caching (limited to car mode for DRT)
+ * - Be more modular and reusable
+ * 
+ * Current implementation is acceptable but could be refactored to use the decorator pattern
+ * if similar caching is needed elsewhere in the codebase.
  * 
  * Uses MATSim's routing infrastructure (LeastCostPathCalculator) to compute
  * link-to-link travel times and distances. Results are cached with time binning

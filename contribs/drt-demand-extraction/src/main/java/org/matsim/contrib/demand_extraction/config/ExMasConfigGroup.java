@@ -60,6 +60,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private double maxDetourFactor = 1.5; // Maximum detour factor (50% longer than direct)
 	
 	private int networkTimeBinSize = 900; // Network cache time bin size in seconds (15 minutes)
+	
+	// ExMAS algorithm parameters
+	private double searchHorizon = 600.0; // Time horizon for pairing requests (seconds, 10 minutes)
+	private int maxPoolingDegree = 2; // Maximum number of passengers per ride
 
     public ExMasConfigGroup() {
         super(GROUP_NAME);
@@ -233,6 +237,26 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	public void setMaxDetourFactor(double maxDetourFactor) {
 		this.maxDetourFactor = maxDetourFactor;
 	}
+	
+	@StringGetter("searchHorizon")
+	public double getSearchHorizon() {
+		return searchHorizon;
+	}
+
+	@StringSetter("searchHorizon")
+	public void setSearchHorizon(double searchHorizon) {
+		this.searchHorizon = searchHorizon;
+	}
+	
+	@StringGetter("maxPoolingDegree")
+	public int getMaxPoolingDegree() {
+		return maxPoolingDegree;
+	}
+
+	@StringSetter("maxPoolingDegree")
+	public void setMaxPoolingDegree(int maxPoolingDegree) {
+		this.maxPoolingDegree = maxPoolingDegree;
+	}
 
     @Override
     public Map<String, String> getComments() {
@@ -263,6 +287,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Maximum detour factor. Maximum travel time = factor * direct travel time. 1.5 means 50% longer. Default: 1.5");
 		map.put("networkTimeBinSize",
 				"Time bin size for network travel time caching (seconds). Queries within same bin reuse cached values. Default: 900 (15 min)");
+		map.put("searchHorizon",
+				"Time horizon for pairing requests in ExMAS algorithm (seconds). Requests within this window can be paired. Default: 600 (10 min)");
+		map.put("maxPoolingDegree",
+				"Maximum number of passengers per shared ride. Default: 2");
         return map;
     }
 }

@@ -10,18 +10,18 @@ import java.util.Set;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import org.matsim.api.core.v01.Scenario;
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Population;
-import org.matsim.contrib.drt.run.DrtControlerCreator;
+	import org.matsim.contrib.drt.run.DrtControlerCreator;
 import org.matsim.contrib.drt.run.MultiModeDrtConfigGroup;
 import org.matsim.contrib.dvrp.run.DvrpConfigGroup;
 import org.matsim.contrib.exmas.config.ExMasConfigGroup;
 import org.matsim.contrib.exmas.demand.DemandExtractionModule;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
+import org.matsim.core.config.groups.ScoringConfigGroup;
 import org.matsim.core.controler.Controler;
 import org.matsim.core.controler.OutputDirectoryHierarchy;
 import org.matsim.core.population.PersonUtils;
@@ -43,11 +43,11 @@ import org.matsim.examples.ExamplesUtils;
  */
 public class ExMasDemandExtractionE2ETest {
 
-	@TempDir
-	Path tempDir;
-
 	@Test
 	void testDemandExtractionWithDvrpGridScenario() throws IOException {
+		// Use persistent output directory for inspection
+		Path testOutputDir = Path.of("test/output/exmas-e2e-test");
+		Files.createDirectories(testOutputDir);
 		// 1. Load base config from dvrp-grid example with proper DRT config groups
 		URL scenarioUrl = ExamplesUtils.getTestScenarioURL("dvrp-grid");
 		Config config = ConfigUtils.loadConfig(
@@ -60,33 +60,67 @@ public class ExMasDemandExtractionE2ETest {
 		config.removeModule("otfvis");
 
 		// 2. Override output directory
-		config.controller().setOutputDirectory(tempDir.resolve("output").toString());
+		config.controller().setOutputDirectory(testOutputDir.toString());
 		config.controller()
 				.setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
+		
+		// 3. Configure monetary constants for car and PT scoring
+		configureMonetaryConstants(config);
 
-		// 3. Create scenario with DRT route factory to handle DRT routes properly
+		// 4. Create scenario with DRT route factory to handle DRT routes properly
 		Scenario scenario = DrtControlerCreator.createScenarioWithDrtRouteFactory(config);
 		ScenarioUtils.loadScenario(scenario);
 
-		// 4. Enhance population with person attributes for testing
+		// 5. Enhance population with person attributes for testing
 		enhancePopulationWithAttributes(scenario.getPopulation());
 
-		// 5. Configure ExMas (this is all we really need to add!)
+		// 6. Configure ExMas with algorithm parameters
 		configureExMas(config);
 
-		// 6. Run simulation with ExMas demand extraction
+		// 7. Run simulation with ExMas demand extraction and ride generation
 		Controler controler = DrtControlerCreator.createControler(config, scenario, false);
 		controler.addOverridingModule(new DemandExtractionModule());
 		controler.run();
 
-		// 7. Verify output
-		Path requestsFile = tempDir.resolve("output").resolve("drt_requests.csv");
-		Assertions.assertTrue(Files.exists(requestsFile), "DRT requests file should exist");
+		// 8. Verify output files exist
+		Path requestsFile = testOutputDir.resolve("drt_requests.csv");
+		Path ridesFile = testOutputDir.resolve("exmas_rides.csv");
+		Assertions.assertTrue(Files.exists(requestsFile), "DRT requests file should exist: " + requestsFile);
+		Assertions.assertTrue(Files.exists(ridesFile), "ExMAS rides file should exist: " + ridesFile);
 
-		// 8. Validate request content
+		// 9. Validate request and ride content
 		validateRequests(requestsFile);
+		validateRides(ridesFile);
+		
+		System.out.println("\n=== Test Output Location ===");
+		System.out.println("Requests: " + requestsFile.toAbsolutePath());
+		System.out.println("Rides: " + ridesFile.toAbsolutePath());
+		System.out.println("============================\n");
 	}
 
+	/**
+	 * Configures monetary constants for car and PT to ensure proper budget calculation.
+	 * Sets utility-of-money parameters that affect mode choice scoring.
+	 */
+	private void configureMonetaryConstants(Config config) {
+		ScoringConfigGroup scoring = config.scoring();
+		
+		// Set marginal utility of money (€^-1)
+		// This converts monetary costs to utility values
+		scoring.setMarginalUtilityOfMoney(1.0);
+		
+		// Configure car mode monetary constant
+		// Daily monetary constant represents fixed costs (€/day)
+		ScoringConfigGroup.ModeParams carParams = scoring.getOrCreateModeParams(TransportMode.car);
+		carParams.setDailyMonetaryConstant(-5.0); // €5/day for car ownership
+		carParams.setMonetaryDistanceRate(-0.0002); // €0.0002/m = €0.20/km
+		
+		// Configure PT mode monetary constant
+		ScoringConfigGroup.ModeParams ptParams = scoring.getOrCreateModeParams(TransportMode.pt);
+		ptParams.setDailyMonetaryConstant(-2.0); // €2/day for PT pass
+		ptParams.setMonetaryDistanceRate(-0.0001); // €0.0001/m = €0.10/km
+	}
+	
 	/**
 	 * Enhances the existing dvrp-grid population with person attributes needed for
 	 * ExMas testing.
@@ -144,6 +178,13 @@ public class ExMasDemandExtractionE2ETest {
 		exMasConfig.setMinMaxDetourFactor(1.0); // Direct route
 		exMasConfig.setMinMaxWaitingTime(0.0); // No waiting
 		exMasConfig.setMinDrtAccessEgressDistance(0.0); // Minimal access/egress distance
+		
+		// Set ExMAS algorithm parameters
+		exMasConfig.setSearchHorizon(600.0); // 10 minutes time window for pairing
+		exMasConfig.setMaxPoolingDegree(2); // Maximum 2 passengers per ride
+		exMasConfig.setMaxDetourFactor(1.5); // Allow 50% detour
+		exMasConfig.setOriginFlexibilityAbsolute(300.0); // 5 minutes departure flexibility
+		exMasConfig.setDestinationFlexibilityAbsolute(300.0); // 5 minutes arrival flexibility
 	}
 
 	private void validateRequests(Path requestsFile) throws IOException {
@@ -186,5 +227,52 @@ public class ExMasDemandExtractionE2ETest {
 		Assertions.assertTrue(requestCount >= 3, "Should have multiple trip requests");
 
 		// Test passed - all validations successful
+	}
+	
+	private void validateRides(Path ridesFile) throws IOException {
+		int rideCount = 0;
+		int degree1Rides = 0; // Single passenger rides
+		int degree2Rides = 0; // Two passenger rides
+
+		try (BufferedReader reader = IOUtils.getBufferedReader(ridesFile.toString())) {
+			String header = reader.readLine();
+			Assertions.assertNotNull(header, "File should have header");
+			Assertions.assertTrue(header.contains("rideIndex"), "Header should contain rideIndex");
+			Assertions.assertTrue(header.contains("degree"), "Header should contain degree");
+			Assertions.assertTrue(header.contains("requestIndices"), "Header should contain requestIndices");
+			Assertions.assertTrue(header.contains("startTime"), "Header should contain startTime");
+			Assertions.assertTrue(header.contains("duration"), "Header should contain duration");
+			Assertions.assertTrue(header.contains("distance"), "Header should contain distance");
+
+			String line;
+			while ((line = reader.readLine()) != null) {
+				String[] parts = line.split(",");
+				Assertions.assertTrue(parts.length >= 7, "Each ride should have at least 7 fields");
+
+				int degree = Integer.parseInt(parts[1]);
+				Assertions.assertTrue(degree >= 1 && degree <= 2, "Degree should be 1 or 2 (max pooling degree)");
+				
+				if (degree == 1) degree1Rides++;
+				if (degree == 2) degree2Rides++;
+				
+				double duration = Double.parseDouble(parts[4]);
+				Assertions.assertTrue(duration >= 0, "Duration should be non-negative");
+				
+				double distance = Double.parseDouble(parts[5]);
+				Assertions.assertTrue(distance >= 0, "Distance should be non-negative");
+
+				rideCount++;
+			}
+		}
+
+		// Validate we generated some rides
+		Assertions.assertTrue(rideCount > 0, "Should have generated at least one ride");
+		Assertions.assertTrue(degree1Rides > 0, "Should have generated at least one single-passenger ride");
+		
+		System.out.println("\n=== Ride Generation Results ===");
+		System.out.println("Total rides: " + rideCount);
+		System.out.println("Single-passenger rides (degree 1): " + degree1Rides);
+		System.out.println("Shared rides (degree 2): " + degree2Rides);
+		System.out.println("================================\n");
 	}
 }

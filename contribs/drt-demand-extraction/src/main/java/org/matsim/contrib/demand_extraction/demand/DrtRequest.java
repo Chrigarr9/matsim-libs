@@ -65,9 +65,46 @@ public class DrtRequest {
         return new Builder();
     }
     
-    // Computed getters for ExMAS compatibility
+    // Computed and compatibility getters for ExMAS algorithm
     public double getLatestDeparture() {
         return latestArrival - directTravelTime;
+    }
+    
+    public double getEarliestDeparture() {
+        return earliestDeparture;
+    }
+    
+    public double getRequestTime() {
+        return requestTime;
+    }
+    
+    public double getTravelTime() {
+        return directTravelTime;
+    }
+    
+    public double getDistance() {
+        return directDistance;
+    }
+    
+    public String getPaxId() {
+        return personId.toString();
+    }
+    
+	// Delay methods for temporal flexibility (used by pair generation algorithm)	
+	public double getMaxPositiveDelay() {
+        return getLatestDeparture() - requestTime;
+    }
+    
+    public double getMaxNegativeDelay() {
+        return requestTime - earliestDeparture;
+    }
+    
+    public double getPositiveDelayRelComponent() {
+        return 0.0; // No pre-consumed flexibility
+    }
+    
+    public double getNegativeDelayRelComponent() {
+        return 0.0; // No pre-consumed flexibility
     }
     
     public static class Builder {
@@ -102,7 +139,6 @@ public class DrtRequest {
         public Builder destinationX(double destinationX) { this.destinationX = destinationX; return this; }
         public Builder destinationY(double destinationY) { this.destinationY = destinationY; return this; }
         public Builder requestTime(double requestTime) { this.requestTime = requestTime; return this; }
-		// C: these need to be calculated from the budget. i think we need a module that can translate remaining budget into deutour time, waiting time, walk distance or costs/km, etc.
         public Builder earliestDeparture(double earliestDeparture) { this.earliestDeparture = earliestDeparture; return this; }
         public Builder latestArrival(double latestArrival) { this.latestArrival = latestArrival; return this; }
         public Builder directTravelTime(double directTravelTime) { this.directTravelTime = directTravelTime; return this; }
