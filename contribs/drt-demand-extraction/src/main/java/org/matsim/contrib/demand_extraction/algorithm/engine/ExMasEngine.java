@@ -1,13 +1,13 @@
-package org.matsim.contrib.exmas_algorithm.engine;
+package org.matsim.contrib.demand_extraction.algorithm.engine;
 
-import org.matsim.contrib.exmas.demand.DrtRequest;
-import org.matsim.contrib.exmas_algorithm.domain.*;
-import org.matsim.contrib.exmas_algorithm.generation.PairGenerator;
-import org.matsim.contrib.exmas_algorithm.generation.SingleRideGenerator;
-import org.matsim.contrib.exmas_algorithm.extension.RideExtender;
-import org.matsim.contrib.exmas_algorithm.graph.ShareabilityGraph;
-import org.matsim.contrib.exmas_algorithm.network.MatsimNetworkCache;
-import org.matsim.contrib.exmas_algorithm.validation.BudgetValidator;
+import org.matsim.contrib.demand_extraction.demand.DrtRequest;
+import org.matsim.contrib.demand_extraction.algorithm.domain.*;
+import org.matsim.contrib.demand_extraction.algorithm.generation.PairGenerator;
+import org.matsim.contrib.demand_extraction.algorithm.generation.SingleRideGenerator;
+import org.matsim.contrib.demand_extraction.algorithm.extension.RideExtender;
+import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
+import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import java.util.*;
 
 /**
@@ -26,6 +26,7 @@ public final class ExMasEngine {
 
     private List<DrtRequest> requests;
     private List<Ride> allRides;
+    private ShareabilityGraph graph;
 
     public ExMasEngine(MatsimNetworkCache network, BudgetValidator budgetValidator, 
                        double horizon, int maxDegree) {
@@ -48,6 +49,7 @@ public final class ExMasEngine {
         DrtRequest[] reqArray = drtRequests.toArray(new DrtRequest[0]);
 
         // Phase 1: Generate single rides (always budget-feasible by definition)
+		// C: Use the matim logger here (and everywhere else)
         System.out.println("Generating single rides...");
         SingleRideGenerator singleGen = new SingleRideGenerator(network);
         List<Ride> singleRides = singleGen.generate(drtRequests);

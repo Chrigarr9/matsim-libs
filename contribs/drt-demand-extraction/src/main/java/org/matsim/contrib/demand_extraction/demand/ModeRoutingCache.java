@@ -1,4 +1,4 @@
-package org.matsim.contrib.exmas.demand;
+package org.matsim.contrib.demand_extraction.demand;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,7 +14,7 @@ import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.PlanElement;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.api.core.v01.population.Route;
-import org.matsim.contrib.exmas.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.core.config.Config;
 import org.matsim.core.population.PersonUtils;
 import org.matsim.core.population.routes.RouteFactories;

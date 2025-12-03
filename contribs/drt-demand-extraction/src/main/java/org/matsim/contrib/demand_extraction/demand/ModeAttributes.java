@@ -1,4 +1,4 @@
-package org.matsim.contrib.exmas.demand;
+package org.matsim.contrib.demand_extraction.demand;
 
 public class ModeAttributes {
     public final double travelTime;

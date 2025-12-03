@@ -1,4 +1,4 @@
-package org.matsim.contrib.exmas;
+package org.matsim.contrib.demand_extraction;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -17,8 +17,8 @@ import org.matsim.api.core.v01.population.Population;
 	import org.matsim.contrib.drt.run.DrtControlerCreator;
 import org.matsim.contrib.drt.run.MultiModeDrtConfigGroup;
 import org.matsim.contrib.dvrp.run.DvrpConfigGroup;
-import org.matsim.contrib.exmas.config.ExMasConfigGroup;
-import org.matsim.contrib.exmas.demand.DemandExtractionModule;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.demand.DemandExtractionModule;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.config.groups.ScoringConfigGroup;

@@ -1,9 +1,9 @@
-package org.matsim.contrib.exmas.demand;
+package org.matsim.contrib.demand_extraction.demand;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Population;
-import org.matsim.contrib.exmas.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.core.router.TripStructureUtils;
 
 import com.google.inject.Inject;

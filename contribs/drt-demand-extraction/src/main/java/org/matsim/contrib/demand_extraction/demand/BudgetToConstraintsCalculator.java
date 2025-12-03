@@ -1,8 +1,8 @@
-package org.matsim.contrib.exmas.demand;
+package org.matsim.contrib.demand_extraction.demand;
 
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
-import org.matsim.contrib.exmas.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.groups.ScoringConfigGroup;
 
@@ -24,6 +24,7 @@ import com.google.inject.Singleton;
 @Singleton
 public class BudgetToConstraintsCalculator {
 	
+	private final Config config;
 	private final ScoringConfigGroup scoringConfig;
 	private final ExMasConfigGroup exMasConfig;
 	private final DrtConfigGroup drtConfig;
@@ -42,6 +43,7 @@ public class BudgetToConstraintsCalculator {
 	
 	@Inject
 	public BudgetToConstraintsCalculator(Config config, ExMasConfigGroup exMasConfig) {
+		this.config = config;
 		this.scoringConfig = config.scoring();
 		this.exMasConfig = exMasConfig;
 		this.drtConfig = DrtConfigGroup.getSingleModeDrtConfig(config);
@@ -97,6 +99,10 @@ public class BudgetToConstraintsCalculator {
 		
 		// Total marginal disutility per second of detour:
 		// = travel time disutility + distance disutility + fare
+		// C: are there person specific scoring poarams in MATSim? Maybe not in the default but defuinetly in more advaed scoring systems.
+		// This means that we have to use the person specific Utilities. Maybe using the scoring function factory r similar?
+		// example: rich people do not care so much over hicg prices. Thats the whole point of Agent based simulations
+		// this also goes for all the other scoring instances we use.
 		double travelDisutilityPerSecond = marginalUtilityOfTraveling_s;
 		double distanceDisutilityPerSecond = marginalUtilityOfDistance_m * speedMps;
 		double fareDisutilityPerSecond = (distanceFare_m * speedMps + timeFare_h / 3600.0) * marginalUtilityOfMoney;
@@ -159,7 +165,7 @@ public class BudgetToConstraintsCalculator {
 			return exMasConfig.getMinDrtAccessEgressDistance();
 		}
 		
-		double walkSpeed = scoringConfig.getOrCreateModeRoutingParams(TransportMode.walk).getTeleportedModeSpeed();
+		double walkSpeed = config.routing().getOrCreateModeRoutingParams(TransportMode.walk).getTeleportedModeSpeed();
 		if (walkSpeed == 0.0) {
 			walkSpeed = 0.833333333; // 3 km/h default
 		}

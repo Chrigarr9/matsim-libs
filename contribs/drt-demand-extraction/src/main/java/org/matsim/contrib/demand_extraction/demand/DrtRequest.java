@@ -1,4 +1,4 @@
-package org.matsim.contrib.exmas.demand;
+package org.matsim.contrib.demand_extraction.demand;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
@@ -88,6 +88,16 @@ public class DrtRequest {
     
     public String getPaxId() {
         return personId.toString();
+    }
+    
+    /**
+     * Maximum acceptable pooled travel time (used by ExMAS algorithm).
+     * This is the maximum time window available: from earliest departure to latest arrival.
+     */
+	// C: nope this should be direct travel time + max detour factor* direct travel time
+	// alternativly we could also calculate this using the BudgetToConstarintsClaculatopr
+    public double getMaxTravelTime() {
+        return latestArrival - earliestDeparture;
     }
     
 	// Delay methods for temporal flexibility (used by pair generation algorithm)	

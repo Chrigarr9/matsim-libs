@@ -1,4 +1,4 @@
-package org.matsim.contrib.exmas_algorithm.domain;
+package org.matsim.contrib.demand_extraction.algorithm.domain;
 
 /**
  * Represents the type/kind of ride based on pickup/dropoff order.

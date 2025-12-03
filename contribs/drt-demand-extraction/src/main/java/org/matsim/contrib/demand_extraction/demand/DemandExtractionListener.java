@@ -1,4 +1,4 @@
-package org.matsim.contrib.exmas.demand;
+package org.matsim.contrib.demand_extraction.demand;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -7,11 +7,11 @@ import java.util.List;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.population.Population;
-import org.matsim.contrib.exmas.config.ExMasConfigGroup;
-import org.matsim.contrib.exmas_algorithm.domain.Ride;
-import org.matsim.contrib.exmas_algorithm.engine.ExMasEngine;
-import org.matsim.contrib.exmas_algorithm.network.MatsimNetworkCache;
-import org.matsim.contrib.exmas_algorithm.validation.BudgetValidator;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
+import org.matsim.contrib.demand_extraction.algorithm.engine.ExMasEngine;
+import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.core.config.Config;
 import org.matsim.core.controler.events.IterationEndsEvent;
 import org.matsim.core.controler.listener.IterationEndsListener;
@@ -85,11 +85,11 @@ public class DemandExtractionListener implements IterationEndsListener {
 			String filename = event.getServices().getControllerIO().getOutputFilename("drt_requests.csv");
             try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
                 writer.write(
-                        "personId,groupId,tripIndex,budget,departureTime,originX,originY,destinationX,destinationY");
+                        "personId,groupId,tripIndex,budget,requestTime,originX,originY,destinationX,destinationY");
                 writer.newLine();
                 for (DrtRequest req : requests) {
 					writer.write(String.format(java.util.Locale.US, "%s,%s,%d,%.4f,%.2f,%.2f,%.2f,%.2f,%.2f",
-                            req.personId, req.groupId, req.tripIndex, req.budget, req.departureTime,
+                            req.personId, req.groupId, req.tripIndex, req.budget, req.requestTime,
                             req.originX, req.originY, req.destinationX, req.destinationY));
                     writer.newLine();
                 }
@@ -98,6 +98,8 @@ public class DemandExtractionListener implements IterationEndsListener {
             }
 			
 			// 6. Write ExMAS Rides Output
+			// C: is there a better way to write this? the goal is to easily import it to python. json maybe?
+			// same goes for requests
 			String ridesFilename = event.getServices().getControllerIO().getOutputFilename("exmas_rides.csv");
 			try (BufferedWriter writer = IOUtils.getBufferedWriter(ridesFilename)) {
 				writer.write("rideIndex,degree,kind,requestIndices,startTime,duration,distance,delays,remainingBudgets");

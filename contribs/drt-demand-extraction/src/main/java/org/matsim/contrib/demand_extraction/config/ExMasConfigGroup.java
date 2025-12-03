@@ -1,4 +1,4 @@
-package org.matsim.contrib.exmas.config;
+package org.matsim.contrib.demand_extraction.config;
 
 import java.util.Map;
 import java.util.Set;
@@ -42,6 +42,8 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private double minDrtAccessEgressDistance = 0.0; // Minimum access/egress distance (meters)
 	private double minMaxWaitingTime = 0.0; // Minimum maximum waiting time (minutes)
 	
+
+	//C: dont we also need a origin activity type and a destination activity type? orient on C:\Users\VWAUCCY\dev\msf\projects\Dissertation\ExmasCommuters\src\exmas_commuters\core\requests\processing.py
 	// ExMAS algorithm parameters
 	// Flexible temporal windows for departure and arrival
 	// Origin flexibility (departure window): How much earlier/later can passenger depart?
@@ -63,7 +65,7 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	
 	// ExMAS algorithm parameters
 	private double searchHorizon = 600.0; // Time horizon for pairing requests (seconds, 10 minutes)
-	private int maxPoolingDegree = 2; // Maximum number of passengers per ride
+	private int maxPoolingDegree = Integer.MAX_VALUE; // Maximum number of passengers per ride
 
     public ExMasConfigGroup() {
         super(GROUP_NAME);
@@ -154,26 +156,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     public void setMinDrtAccessEgressDistance(double minDrtAccessEgressDistance) {
         this.minDrtAccessEgressDistance = minDrtAccessEgressDistance;
     }
-
-	@StringGetter("departureFlexibilitySeconds")
-	public double getDepartureFlexibilitySeconds() {
-		return departureFlexibilitySeconds;
-	}
-
-	@StringSetter("departureFlexibilitySeconds")
-	public void setDepartureFlexibilitySeconds(double departureFlexibilitySeconds) {
-		this.departureFlexibilitySeconds = departureFlexibilitySeconds;
-	}
-
-	@StringGetter("maxDetourSeconds")
-	public double getMaxDetourSeconds() {
-		return maxDetourSeconds;
-	}
-
-	@StringSetter("maxDetourSeconds")
-	public void setMaxDetourSeconds(double maxDetourSeconds) {
-		this.maxDetourSeconds = maxDetourSeconds;
-	}
 
 	@StringGetter("networkTimeBinSize")
 	public int getNetworkTimeBinSize() {

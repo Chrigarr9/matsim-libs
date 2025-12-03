@@ -1,14 +1,17 @@
-package org.matsim.contrib.exmas_algorithm.validation;
+package org.matsim.contrib.demand_extraction.algorithm.validation;
 
 import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
+import org.matsim.api.core.v01.population.Route;
 import org.matsim.contrib.drt.routing.DrtRoute;
-import org.matsim.contrib.exmas.config.ExMasConfigGroup;
-import org.matsim.contrib.exmas.demand.DrtRequest;
-import org.matsim.contrib.exmas_algorithm.domain.Ride;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.demand.DrtRequest;
+import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
+import org.matsim.core.config.groups.ScoringConfigGroup;
 import org.matsim.core.network.NetworkUtils;
 import org.matsim.core.population.PopulationUtils;
 import org.matsim.core.population.routes.NetworkRoute;
@@ -145,6 +148,7 @@ public class BudgetValidator {
 			double actualTravelTime, double actualDistance) {
 		
 		// Create a pseudo-person for scoring
+		// C: instead of a pseudo person use the real person here. either tie it to ther request or get it from population using the id. then thgis will pay attention to the person specific scoring params.
 		Person person = PopulationUtils.getFactory().createPerson(request.personId);
 		ScoringFunction scoringFunction = scoringFunctionFactory.createNewScoringFunction(person);
 		
@@ -154,6 +158,7 @@ public class BudgetValidator {
 		// Access leg (walk from origin activity to pickup point)
 		// Always add even if distance is 0 - scoring can handle it
 		Leg accessLeg = PopulationUtils.createLeg("walk");
+		// C: the pickup time is request.requestTime + delay. the walk has to start early to arrive at pickup at this time
 		accessLeg.setDepartureTime(currentTime);
 		double accessTime = accessEgressDistance / walkSpeed;
 		accessLeg.setTravelTime(accessTime);
@@ -171,6 +176,7 @@ public class BudgetValidator {
 		
 		// DRT leg (main ride)
 		Leg drtLeg = PopulationUtils.createLeg(exMasConfig.getDrtMode());
+		//C: see comment above
 		drtLeg.setDepartureTime(currentTime);
 		drtLeg.setTravelTime(actualTravelTime);
 		
@@ -195,8 +201,8 @@ public class BudgetValidator {
 		egressLeg.setTravelTime(egressTime);
 		
 		// Use teleported route (same as ModeRoutingCache)
-		org.matsim.core.population.routes.Route egressRoute = 
-			org.matsim.core.population.routes.RouteUtils.createGenericRouteImpl(
+		Route egressRoute = 
+			RouteUtils.createGenericRouteImpl(
 				request.destinationLinkId, request.destinationLinkId);
 		egressRoute.setDistance(accessEgressDistance);
 		egressRoute.setTravelTime(egressTime);

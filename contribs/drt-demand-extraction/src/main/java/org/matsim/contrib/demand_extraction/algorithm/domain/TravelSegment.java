@@ -1,4 +1,4 @@
-package org.matsim.contrib.exmas_algorithm.domain;
+package org.matsim.contrib.demand_extraction.algorithm.domain;
 
 import java.util.Objects;
 
@@ -16,6 +16,8 @@ public final class TravelSegment {
     private final double distance;
     private final double networkUtility;
 
+	//C: instead of ints wouldnt it make more sense to move this to link ids instaed!?
+	// also this seems redundant to the Travel Segment class in the MatsimNetworkCache file
     public TravelSegment(int origin, int destination, double travelTime,
                         double distance, double networkUtility) {
         if (travelTime < 0 && !Double.isInfinite(travelTime)) {
@@ -44,6 +46,14 @@ public final class TravelSegment {
      */
     public boolean isReachable() {
         return !Double.isInfinite(travelTime) && !Double.isInfinite(distance);
+    }
+    
+    /**
+     * Creates an unreachable segment (with infinite travel time and distance).
+     */
+    public static TravelSegment unreachable() {
+        return new TravelSegment(0, 0, Double.POSITIVE_INFINITY, 
+                               Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY);
     }
 
     @Override

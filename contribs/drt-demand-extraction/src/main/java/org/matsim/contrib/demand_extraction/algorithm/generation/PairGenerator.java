@@ -1,9 +1,9 @@
-package org.matsim.contrib.exmas_algorithm.generation;
+package org.matsim.contrib.demand_extraction.algorithm.generation;
 
-import org.matsim.contrib.exmas.demand.DrtRequest;
-import org.matsim.contrib.exmas_algorithm.domain.*;
-import org.matsim.contrib.exmas_algorithm.network.MatsimNetworkCache;
-import org.matsim.contrib.exmas_algorithm.validation.BudgetValidator;
+import org.matsim.contrib.demand_extraction.demand.DrtRequest;
+import org.matsim.contrib.demand_extraction.algorithm.domain.*;
+import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import java.util.ArrayList;
 import java.util.List;
 

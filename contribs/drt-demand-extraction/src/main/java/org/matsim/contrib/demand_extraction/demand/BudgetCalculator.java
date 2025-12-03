@@ -1,15 +1,18 @@
-package org.matsim.contrib.exmas.demand;
+package org.matsim.contrib.demand_extraction.demand;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import org.matsim.api.core.v01.Coord;
+import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.population.Activity;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Plan;
-import org.matsim.contrib.exmas.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.core.router.TripStructureUtils;
 
 import com.google.inject.Inject;
@@ -110,7 +113,7 @@ public class BudgetCalculator {
 					// No valid baseline mode found
 					continue;
 				}
-
+				//C: maybe ecapsulate the request building into its own function
 				// Calculate budget: utility gain from switching to DRT
 				double drtScore = modeAttrs.get(drtMode).score;
 				double budget = drtScore - bestBaselineScore;
@@ -139,6 +142,7 @@ public class BudgetCalculator {
 				// max_absolute_detour is the smaller of:
 				// 1) Budget-derived detour (how much delay utility budget allows)
 				// 2) Config max factor (policy limit on detour)
+				//C: i think this must be agent based
 				double budgetDerivedDetour = budgetToConstraintsCalculator.budgetToMaxDetourTime(
 					budget, drtAttrs.travelTime, drtAttrs.distance);
 				double configMaxDetour = drtAttrs.travelTime * (config.getMaxDetourFactor() - 1.0);

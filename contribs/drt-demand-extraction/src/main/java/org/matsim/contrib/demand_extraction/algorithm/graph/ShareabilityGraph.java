@@ -1,4 +1,4 @@
-package org.matsim.contrib.exmas_algorithm.graph;
+package org.matsim.contrib.demand_extraction.algorithm.graph;
 
 import it.unimi.dsi.fastutil.ints.*;
 

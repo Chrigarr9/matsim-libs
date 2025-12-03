@@ -1,10 +1,10 @@
-package org.matsim.contrib.exmas_algorithm.extension;
+package org.matsim.contrib.demand_extraction.algorithm.extension;
 
-import org.matsim.contrib.exmas.demand.DrtRequest;
-import org.matsim.contrib.exmas_algorithm.domain.*;
-import org.matsim.contrib.exmas_algorithm.graph.ShareabilityGraph;
-import org.matsim.contrib.exmas_algorithm.network.MatsimNetworkCache;
-import org.matsim.contrib.exmas_algorithm.validation.BudgetValidator;
+import org.matsim.contrib.demand_extraction.demand.DrtRequest;
+import org.matsim.contrib.demand_extraction.algorithm.domain.*;
+import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
+import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import it.unimi.dsi.fastutil.ints.*;
 import java.util.*;
 
@@ -26,6 +26,7 @@ public final class RideExtender {
         this.graph = graph;
         this.budgetValidator = budgetValidator;
         this.requestMap = new HashMap<>();
+		// C: should we build rides and requests directly as maps instead of lists? would this have benefits within the whole algorithm?
         for (DrtRequest r : requests) requestMap.put(r.index, r);
         this.rideMap = new HashMap<>();
         for (Ride r : rides) rideMap.put(r.getIndex(), r);
@@ -73,6 +74,7 @@ public final class RideExtender {
         for (int i = 0; i < requests.length; i++) {
             IntList edges = graph.getEdges(requests[i], candidate);
             if (edges.isEmpty()) return null;
+			// C: we need to explore why we oly use [0] here. test without and look if there are rides with the exact same originsOrderd + destinations ordered (duplicates)
             pairRides[i] = edges.getInt(0);
         }
         return pairRides;

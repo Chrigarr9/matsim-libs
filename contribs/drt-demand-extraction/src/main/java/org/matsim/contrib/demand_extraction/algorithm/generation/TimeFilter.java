@@ -1,6 +1,6 @@
-package org.matsim.contrib.exmas_algorithm.generation;
+package org.matsim.contrib.demand_extraction.algorithm.generation;
 
-import org.matsim.contrib.exmas.demand.DrtRequest;
+import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import java.util.Arrays;
 import java.util.Comparator;
 

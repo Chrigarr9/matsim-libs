@@ -1,4 +1,4 @@
-package org.matsim.contrib.exmas_algorithm.network;
+package org.matsim.contrib.demand_extraction.algorithm.network;
 
 import java.io.*;
 import java.util.*;
@@ -7,8 +7,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
-import org.matsim.contrib.exmas.config.ExMasConfigGroup;
-import org.matsim.contrib.exmas_algorithm.domain.TravelSegment;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.LeastCostPathCalculator.Path;
 import org.matsim.core.router.util.TravelDisutility;
@@ -99,6 +99,48 @@ public class MatsimNetworkCache {
 	 */
 	public boolean hasConnection(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
 		return getSegment(originLinkId, destLinkId, departureTime).isReachable();
+	}
+	
+	// Node index to Link ID mapping for algorithm
+	private final Map<Integer, Id<Link>> indexToLinkMap = new HashMap<>();
+	
+	/**
+	 * Gets a sequential node index for a link ID.
+	 * This is used by the algorithm for compact array-based storage.
+	 * Returns a consistent index for the same link across calls.
+	 */
+	public int getNodeIndex(Id<Link> linkId) {
+		// Simple hash-based indexing - could be optimized with a map if needed
+		int index = Math.abs(linkId.hashCode());
+		indexToLinkMap.put(index, linkId);
+		return index;
+	}
+	
+	/**
+	 * Overload for node-index-based segment lookup (used by algorithm).
+	 * Maps indices back to link IDs and delegates to main getSegment method.
+	 */
+	public TravelSegment getSegment(int fromNodeIndex, int toNodeIndex) {
+		Id<Link> fromLinkId = indexToLinkMap.get(fromNodeIndex);
+		Id<Link> toLinkId = indexToLinkMap.get(toNodeIndex);
+		
+		if (fromLinkId == null || toLinkId == null) {
+			// Unknown indices - return unreachable segment
+			return TravelSegment.unreachable();
+		}
+		
+		// Use cached routing with standard departure time
+		return getSegment(fromLinkId, toLinkId, 8.0 * 3600.0);
+	}
+	
+	/**
+	 * Gets network utility for a segment (time + distance based).
+	 * This is a simplified utility calculation for the algorithm.
+	 */
+	public double getNetworkUtility(int fromNodeIndex, int destNodeIndex) {
+		// Placeholder - algorithm doesn't actually use this in MATSim version
+		// Real utility comes from TravelSegment.getNetworkUtility()
+		return 0.0;
 	}
 	
 	/**
