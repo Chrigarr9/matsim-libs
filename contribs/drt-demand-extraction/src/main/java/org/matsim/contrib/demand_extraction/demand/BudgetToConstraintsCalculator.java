@@ -1,8 +1,8 @@
 package org.matsim.contrib.demand_extraction.demand;
 
 import org.matsim.api.core.v01.TransportMode;
-import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.groups.ScoringConfigGroup;
 
@@ -34,6 +34,7 @@ public class BudgetToConstraintsCalculator {
 	private final double marginalUtilityOfDistance_m;
 	private final double marginalUtilityOfMoney;
 	private final double monetaryDistanceCostRate;
+	private final double marginalUtilityOfWaiting_s;
 	
 	// DRT fare parameters
 	private final double baseFare;
@@ -42,6 +43,7 @@ public class BudgetToConstraintsCalculator {
 	private final double minFarePerTrip;
 	
 	@Inject
+
 	public BudgetToConstraintsCalculator(Config config, ExMasConfigGroup exMasConfig) {
 		this.config = config;
 		this.scoringConfig = config.scoring();
@@ -53,11 +55,12 @@ public class BudgetToConstraintsCalculator {
 		if (drtParams == null) {
 			throw new IllegalStateException("No scoring parameters configured for DRT mode: " + exMasConfig.getDrtMode());
 		}
-		
+		//C: do these need to be personalized per agent/person??
 		this.marginalUtilityOfTraveling_s = drtParams.getMarginalUtilityOfTraveling() / 3600.0; // per second
 		this.marginalUtilityOfDistance_m = drtParams.getMarginalUtilityOfDistance(); // per meter
 		this.marginalUtilityOfMoney = scoringConfig.getMarginalUtilityOfMoney();
 		this.monetaryDistanceCostRate = drtParams.getMonetaryDistanceRate();
+		this.marginalUtilityOfWaiting_s = scoringConfig.getMarginalUtlOfWaiting_utils_hr() / 3600.0; // per second
 		
 		// Get DRT fare parameters
 		var drtFareParams = drtConfig.getDrtFareParams().orElse(null);
@@ -126,9 +129,9 @@ public class BudgetToConstraintsCalculator {
 	/**
 	 * Calculate maximum acceptable waiting time (departure delay) from budget.
 	 * 
-	 * Waiting time affects:
-	 * - Activity timing (early departure disutility)
-	 * - Potential travel time scoring (if scored as travel)
+	 * Waiting time is scored using marginalUtilityOfWaiting parameter.
+	 * In MATSim DRT, stop duration (pickup/dropoff time) is included in the route's
+	 * travel time and thus scored as travel time, not waiting time.
 	 * 
 	 * @param budget remaining utility budget (utils)
 	 * @return maximum waiting time in seconds
@@ -138,13 +141,12 @@ public class BudgetToConstraintsCalculator {
 			return 0.0;
 		}
 		
-		// Waiting is typically scored as travel time
-		// Some implementations score it differently, but we use travel time scoring
-		if (marginalUtilityOfTraveling_s >= 0) {
-			return Double.POSITIVE_INFINITY; // Positive utility for traveling (unusual)
+		// Use marginalUtilityOfWaiting for waiting time (departure delay before pickup)
+		if (marginalUtilityOfWaiting_s >= 0) {
+			return Double.POSITIVE_INFINITY; // Positive utility for waiting (unusual)
 		}
 		
-		return Math.abs(budget) / Math.abs(marginalUtilityOfTraveling_s);
+		return Math.abs(budget) / Math.abs(marginalUtilityOfWaiting_s);
 	}
 	
 	/**

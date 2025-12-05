@@ -1,12 +1,23 @@
 package org.matsim.contrib.demand_extraction.algorithm.extension;
 
-import org.matsim.contrib.demand_extraction.demand.DrtRequest;
-import org.matsim.contrib.demand_extraction.algorithm.domain.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.network.Link;
+import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
+import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
+import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
-import it.unimi.dsi.fastutil.ints.*;
-import java.util.*;
+import org.matsim.contrib.demand_extraction.demand.DrtRequest;
+
+import it.unimi.dsi.fastutil.ints.IntList;
+import it.unimi.dsi.fastutil.ints.IntSet;
 
 /**
  * Extends rides from degree N to N+1 using sharability graph.
@@ -82,8 +93,8 @@ public final class RideExtender {
 
     private Ride tryExtend(Ride base, int newReq, int[] pairRides, int index) {
         DrtRequest newRequest = requestMap.get(newReq);
-        int newOriginNode = network.getNodeIndex(newRequest.originLinkId);
-        int newDestNode = network.getNodeIndex(newRequest.destinationLinkId);
+		Id<Link> newOriginLink = newRequest.originLinkId;
+		Id<Link> newDestLink = newRequest.destinationLinkId;
         int degree = base.getDegree();
         int[] destIndex = base.getDestinationsIndex();
 
@@ -124,20 +135,22 @@ public final class RideExtender {
         }
 
         // Build new arrays
-        int[] reqIndices = append(base.getRequestIndices(), newReq);
-        int[] originsOrdered = append(base.getOriginsOrdered(), newOriginNode);
-        int[] originsIndex = append(base.getOriginsIndex(), newReq);  // Store REQUEST index, not position
-        int[] destinationsOrdered = insert(base.getDestinationsOrdered(), insertPos, newDestNode);
-        int[] destinationsIndex = insert(base.getDestinationsIndex(), insertPos, newReq);  // Store REQUEST index, not position
+		int[] reqIndices = appendInt(base.getRequestIndices(), newReq);
+		Id<Link>[] originsOrdered = appendLink(base.getOriginsOrdered(), newOriginLink);
+		int[] originsIndex = appendInt(base.getOriginsIndex(), newReq); // Store REQUEST index, not position
+		Id<Link>[] destinationsOrdered = insertLink(base.getDestinationsOrdered(), insertPos, newDestLink);
+		int[] destinationsIndex = insertInt(base.getDestinationsIndex(), insertPos, newReq); // Store REQUEST index, not
+																								// position
 
         // Build connection sequence
-        int[] sequence = concat(originsOrdered, destinationsOrdered);
+		Id<Link>[] sequence = concatLink(originsOrdered, destinationsOrdered);
         double[] connTT = new double[sequence.length - 1];
         double[] connDist = new double[sequence.length - 1];
         double[] connUtil = new double[sequence.length - 1];
 
+		double startTime = requestMap.get(reqIndices[0]).getRequestTime();
         for (int i = 0; i < sequence.length - 1; i++) {
-            TravelSegment seg = network.getSegment(sequence[i], sequence[i + 1]);
+			TravelSegment seg = network.getSegment(sequence[i], sequence[i + 1], startTime);
             if (!seg.isReachable()) return null;
             connTT[i] = seg.getTravelTime();
             connDist[i] = seg.getDistance();
@@ -179,8 +192,7 @@ public final class RideExtender {
             if (pttActual[i] > req.getMaxTravelTime()) return null;
         }
 
-        // Calculate delays
-        double startTime = requestMap.get(reqIndices[0]).getRequestTime();
+		// Calculate delays
         double[] delays = new double[degree + 1];
         for (int i = 0; i < degree + 1; i++) {
             double arrivalAtOrigin = startTime;
@@ -270,13 +282,13 @@ public final class RideExtender {
         return -1;
     }
 
-    private int[] append(int[] arr, int val) {
+	private int[] appendInt(int[] arr, int val) {
         int[] res = Arrays.copyOf(arr, arr.length + 1);
         res[arr.length] = val;
         return res;
     }
 
-    private int[] insert(int[] arr, int pos, int val) {
+	private int[] insertInt(int[] arr, int pos, int val) {
         int[] res = new int[arr.length + 1];
         System.arraycopy(arr, 0, res, 0, pos);
         res[pos] = val;
@@ -284,8 +296,26 @@ public final class RideExtender {
         return res;
     }
 
-    private int[] concat(int[] a, int[] b) {
-        int[] res = new int[a.length + b.length];
+	@SuppressWarnings("unchecked")
+	private Id<Link>[] appendLink(Id<Link>[] arr, Id<Link> val) {
+		Id<Link>[] res = (Id<Link>[]) new Id[arr.length + 1];
+		System.arraycopy(arr, 0, res, 0, arr.length);
+		res[arr.length] = val;
+		return res;
+	}
+
+	@SuppressWarnings("unchecked")
+	private Id<Link>[] insertLink(Id<Link>[] arr, int pos, Id<Link> val) {
+		Id<Link>[] res = (Id<Link>[]) new Id[arr.length + 1];
+		System.arraycopy(arr, 0, res, 0, pos);
+		res[pos] = val;
+		System.arraycopy(arr, pos, res, pos + 1, arr.length - pos);
+		return res;
+	}
+
+	@SuppressWarnings("unchecked")
+	private Id<Link>[] concatLink(Id<Link>[] a, Id<Link>[] b) {
+		Id<Link>[] res = (Id<Link>[]) new Id[a.length + b.length];
         System.arraycopy(a, 0, res, 0, a.length);
         System.arraycopy(b, 0, res, a.length, b.length);
         return res;

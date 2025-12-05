@@ -1,11 +1,16 @@
 package org.matsim.contrib.demand_extraction.algorithm.generation;
 
-import org.matsim.contrib.demand_extraction.demand.DrtRequest;
-import org.matsim.contrib.demand_extraction.algorithm.domain.*;
-import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
-import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import java.util.ArrayList;
 import java.util.List;
+
+import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.network.Link;
+import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
+import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
+import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
+import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
+import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
 /**
  * Generates FIFO and LIFO ride pairs with delay optimization.
@@ -70,14 +75,9 @@ public final class PairGenerator {
     }
 
     private Ride tryFifo(DrtRequest i, DrtRequest j, int index) {
-        int iOrigin = network.getNodeIndex(i.originLinkId);
-        int iDest = network.getNodeIndex(i.destinationLinkId);
-        int jOrigin = network.getNodeIndex(j.originLinkId);
-        int jDest = network.getNodeIndex(j.destinationLinkId);
-        
-        TravelSegment oo = network.getSegment(iOrigin, jOrigin);
-        TravelSegment od = network.getSegment(jOrigin, iDest);
-        TravelSegment dd = network.getSegment(iDest, jDest);
+		TravelSegment oo = network.getSegment(i.originLinkId, j.originLinkId, i.requestTime);
+		TravelSegment od = network.getSegment(j.originLinkId, i.destinationLinkId, i.requestTime);
+		TravelSegment dd = network.getSegment(i.destinationLinkId, j.destinationLinkId, i.requestTime);
 
         if (!oo.isReachable() || !od.isReachable() || !dd.isReachable()) return null;
 
@@ -125,13 +125,18 @@ public final class PairGenerator {
         double[] adjusted = optimizeDelays(delays, effMaxNeg, effMaxPos);
         if (adjusted == null) return null;
 
+		@SuppressWarnings("unchecked")
+		Id<Link>[] origins = (Id<Link>[]) new Id[] { i.originLinkId, j.originLinkId };
+		@SuppressWarnings("unchecked")
+		Id<Link>[] destinations = (Id<Link>[]) new Id[] { i.destinationLinkId, j.destinationLinkId };
+
         return Ride.builder()
             .index(index)
             .degree(2)
             .kind(RideKind.FIFO)
             .requestIndices(new int[]{i.index, j.index})
-            .originsOrdered(new int[]{iOrigin, jOrigin})
-            .destinationsOrdered(new int[]{iDest, jDest})
+				.originsOrdered(origins)
+				.destinationsOrdered(destinations)
             .originsIndex(new int[]{i.index, j.index})
             .destinationsIndex(new int[]{i.index, j.index})
             .passengerTravelTimes(new double[]{pttI, pttJ})
@@ -146,14 +151,9 @@ public final class PairGenerator {
     }
 
     private Ride tryLifo(DrtRequest i, DrtRequest j, int index) {
-        int iOrigin = network.getNodeIndex(i.originLinkId);
-        int iDest = network.getNodeIndex(i.destinationLinkId);
-        int jOrigin = network.getNodeIndex(j.originLinkId);
-        int jDest = network.getNodeIndex(j.destinationLinkId);
-        
-        TravelSegment oo = network.getSegment(iOrigin, jOrigin);
-        TravelSegment oj = network.getSegment(jOrigin, jDest);
-        TravelSegment jd = network.getSegment(jDest, iDest);
+		TravelSegment oo = network.getSegment(i.originLinkId, j.originLinkId, i.requestTime);
+		TravelSegment oj = network.getSegment(j.originLinkId, j.destinationLinkId, i.requestTime);
+		TravelSegment jd = network.getSegment(j.destinationLinkId, i.destinationLinkId, i.requestTime);
 
         if (!oo.isReachable() || !oj.isReachable() || !jd.isReachable()) return null;
 
@@ -201,13 +201,18 @@ public final class PairGenerator {
         double[] adjusted = optimizeDelays(delays, effMaxNeg, effMaxPos);
         if (adjusted == null) return null;
 
+		@SuppressWarnings("unchecked")
+		Id<Link>[] origins = (Id<Link>[]) new Id[] { i.originLinkId, j.originLinkId };
+		@SuppressWarnings("unchecked")
+		Id<Link>[] destinations = (Id<Link>[]) new Id[] { j.destinationLinkId, i.destinationLinkId };
+
         return Ride.builder()
             .index(index)
             .degree(2)
             .kind(RideKind.LIFO)
             .requestIndices(new int[]{i.index, j.index})
-            .originsOrdered(new int[]{iOrigin, jOrigin})
-            .destinationsOrdered(new int[]{jDest, iDest})
+				.originsOrdered(origins)
+				.destinationsOrdered(destinations)
             .originsIndex(new int[]{i.index, j.index})
             .destinationsIndex(new int[]{j.index, i.index})
             .passengerTravelTimes(new double[]{pttI, pttJ})

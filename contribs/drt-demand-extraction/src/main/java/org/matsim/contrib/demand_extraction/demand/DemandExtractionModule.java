@@ -1,7 +1,7 @@
 package org.matsim.contrib.demand_extraction.demand;
 
-import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithmModule;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.core.controler.AbstractModule;
 
 public class DemandExtractionModule extends AbstractModule {
@@ -18,7 +18,7 @@ public class DemandExtractionModule extends AbstractModule {
         // Bind demand extraction components
         bind(ModeRoutingCache.class).asEagerSingleton();
         bind(ChainIdentifier.class).asEagerSingleton();
-        bind(BudgetCalculator.class).asEagerSingleton();
+		bind(DrtRequestFactory.class).asEagerSingleton();
         
         // Install ExMAS algorithm module (validators, network cache, etc.)
         install(new ExMasAlgorithmModule());

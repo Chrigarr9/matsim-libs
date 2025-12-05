@@ -2,6 +2,9 @@ package org.matsim.contrib.demand_extraction.algorithm.domain;
 
 import java.util.Arrays;
 
+import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.network.Link;
+
 /**
  * Immutable representation of a shared ride.
  * Corresponds to a row in the Python rides DataFrame.
@@ -17,8 +20,8 @@ public final class Ride {
 
     // Request information (arrays of length = degree)
     private final int[] requestIndices;
-    private final int[] originsOrdered;      // Pickup sequence (physical locations)
-    private final int[] destinationsOrdered; // Dropoff sequence (physical locations)
+	private final Id<Link>[] originsOrdered; // Pickup sequence (Link IDs)
+	private final Id<Link>[] destinationsOrdered; // Dropoff sequence (Link IDs)
     private final int[] originsIndex;        // Request indices in pickup order (matches requestIndices for FIFO)
     private final int[] destinationsIndex;   // Request indices in dropoff order (reversed for LIFO, reordered for MIXED)
 
@@ -95,8 +98,14 @@ public final class Ride {
 
     // Array getters return defensive copies to maintain immutability
     public int[] getRequestIndices() { return requestIndices.clone(); }
-    public int[] getOriginsOrdered() { return originsOrdered.clone(); }
-    public int[] getDestinationsOrdered() { return destinationsOrdered.clone(); }
+
+	public Id<Link>[] getOriginsOrdered() {
+		return originsOrdered.clone();
+	}
+
+	public Id<Link>[] getDestinationsOrdered() {
+		return destinationsOrdered.clone();
+	}
     public int[] getOriginsIndex() { return originsIndex.clone(); }
     public int[] getDestinationsIndex() { return destinationsIndex.clone(); }
     public double[] getPassengerTravelTimes() { return passengerTravelTimes.clone(); }
@@ -128,8 +137,8 @@ public final class Ride {
         private int degree;
         private RideKind kind;
         private int[] requestIndices;
-        private int[] originsOrdered;
-        private int[] destinationsOrdered;
+		private Id<Link>[] originsOrdered;
+		private Id<Link>[] destinationsOrdered;
         private int[] originsIndex;
         private int[] destinationsIndex;
         private double[] passengerTravelTimes;
@@ -167,12 +176,12 @@ public final class Ride {
             return this;
         }
 
-        public Builder originsOrdered(int[] originsOrdered) {
+		public Builder originsOrdered(Id<Link>[] originsOrdered) {
             this.originsOrdered = originsOrdered;
             return this;
         }
 
-        public Builder destinationsOrdered(int[] destinationsOrdered) {
+		public Builder destinationsOrdered(Id<Link>[] destinationsOrdered) {
             this.destinationsOrdered = destinationsOrdered;
             return this;
         }

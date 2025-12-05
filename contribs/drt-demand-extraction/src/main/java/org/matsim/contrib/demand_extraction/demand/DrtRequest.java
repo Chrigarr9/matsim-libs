@@ -23,6 +23,8 @@ public class DrtRequest {
     // Budget information
     public final double budget; // Utility difference: drtScore - bestModeScore
     public final double bestModeScore; // Score of best baseline mode (for budget validation)
+    public final String bestMode; 
+
     
     // Location (link-based for MATSim routing)
     public final Id<Link> originLinkId;
@@ -48,6 +50,7 @@ public class DrtRequest {
         this.tripIndex = builder.tripIndex;
         this.budget = builder.budget;
         this.bestModeScore = builder.bestModeScore;
+		this.bestMode = builder.bestMode;
         this.originLinkId = builder.originLinkId;
         this.destinationLinkId = builder.destinationLinkId;
         this.originX = builder.originX;
@@ -91,11 +94,22 @@ public class DrtRequest {
     }
     
     /**
-     * Maximum acceptable pooled travel time (used by ExMAS algorithm).
-     * This is the maximum time window available: from earliest departure to latest arrival.
-     */
-	// C: nope this should be direct travel time + max detour factor* direct travel time
-	// alternativly we could also calculate this using the BudgetToConstarintsClaculatopr
+	 * Maximum acceptable pooled travel time (used by ExMAS algorithm).
+	 * 
+	 * This represents the maximum total travel time INCLUDING detour:
+	 * = direct travel time + maximum acceptable detour
+	 * 
+	 * The maximum detour is already baked into the temporal window
+	 * (earliestDeparture to latestArrival) during budget calculation,
+	 * where BudgetToConstraintsCalculator.budgetToMaxDetourTime() converts
+	 * the utility budget into a time constraint.
+	 * 
+	 * Therefore: maxTravelTime = latestArrival - earliestDeparture
+	 * = directTravelTime + maxDetourFromBudget
+	 * 
+	 * This is equivalent to: directTravelTime * (1.0 + effectiveDetourFactor)
+	 * where effectiveDetourFactor is determined by budget, not config.
+	 */
     public double getMaxTravelTime() {
         return latestArrival - earliestDeparture;
     }
@@ -124,6 +138,7 @@ public class DrtRequest {
         private int tripIndex;
         private double budget;
         private double bestModeScore;
+		private String bestMode;
         private Id<Link> originLinkId;
         private Id<Link> destinationLinkId;
         private double originX;
@@ -142,6 +157,7 @@ public class DrtRequest {
         public Builder tripIndex(int tripIndex) { this.tripIndex = tripIndex; return this; }
         public Builder budget(double budget) { this.budget = budget; return this; }
         public Builder bestModeScore(double bestModeScore) { this.bestModeScore = bestModeScore; return this; }
+		public Builder bestMode(String bestMode) {this.bestMode = bestMode; return this;}
         public Builder originLinkId(Id<Link> originLinkId) { this.originLinkId = originLinkId; return this; }
         public Builder destinationLinkId(Id<Link> destinationLinkId) { this.destinationLinkId = destinationLinkId; return this; }
         public Builder originX(double originX) { this.originX = originX; return this; }

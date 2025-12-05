@@ -1,9 +1,11 @@
 package org.matsim.contrib.demand_extraction.demand;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.matsim.api.core.v01.Id;
@@ -48,7 +50,7 @@ public class ModeRoutingCache {
     private final Map<Id<Person>, Map<Integer, Map<String, ModeAttributes>>> cache = new ConcurrentHashMap<>();
 
 	// Maps: Person ID -> Trip Index -> Best Baseline Mode (excludes DRT)
-	private final Map<Id<Person>, Map<Integer, String>> bestBaselineModes = new ConcurrentHashMap<>();
+	private final Map<Id<Person>, Map<Integer, Entry<String, Double>>> bestBaselineModes = new ConcurrentHashMap<>();
 
     @Inject
     public ModeRoutingCache(Provider<TripRouter> tripRouterProvider, ExMasConfigGroup exMasConfig,
@@ -68,7 +70,7 @@ public class ModeRoutingCache {
         population.getPersons().values().parallelStream().forEach(person -> {
             TripRouter tripRouter = tripRouterProvider.get();
             Map<Integer, Map<String, ModeAttributes>> personCache = new ConcurrentHashMap<>();
-			Map<Integer, String> personBestModes = new ConcurrentHashMap<>();
+			Map<Integer, Entry<String, Double>> personBestModes = new ConcurrentHashMap<>();
             List<TripStructureUtils.Trip> trips = TripStructureUtils.getTrips(person.getSelectedPlan());
 
             // Get scoring params for person (needed for opportunity cost)
@@ -79,7 +81,7 @@ public class ModeRoutingCache {
                 Map<String, ModeAttributes> modeCache = new ConcurrentHashMap<>();
 
 				// Filter modes based on person attributes (consistent with MATSim conventions)
-				Set<String> allModes = new java.util.HashSet<>(exMasConfig.getBaseModes());
+				Set<String> allModes = new HashSet<>(exMasConfig.getBaseModes());
 				allModes.add(exMasConfig.getDrtMode()); // Add DRT to modes to evaluate
 				Set<String> availableModes = filterAvailableModes(person, allModes);
 
@@ -89,18 +91,20 @@ public class ModeRoutingCache {
 					// (e.g., "car")
 					// Other modes: Use mode name itself as routing mode
 					String routingMode;
-					if (mode.equals(exMasConfig.getDrtMode())) {
+					if (mode.equals(exMasConfig.getDrtMode())) {	
 						// For DRT: check if dedicated DRT routing module exists in TripRouter
-						if (tripRouter.getRoutingModule(mode) != null) {
+						// C : here bind a NetworkRouter, that only drives on roads where drt is allowed.
+						// Everythinh else is like car router direct link to link
+						if (tripRouter.getRoutingModule("directDrtRouter") != null) {
 							routingMode = mode; // Use DRT-specific routing
 						} else {
-							routingMode = exMasConfig.getDrtRoutingMode(); // Fallback to configured routing (typically
+						routingMode = exMasConfig.getDrtRoutingMode(); // Fallback to configured routing (typically
 																			// "car")
 						}
 					} else {
 						routingMode = mode; // Standard modes route as themselves
 					}
-
+					
                     List<? extends PlanElement> tripElements;
 
                     // Convert activities to facilities for routing
@@ -115,11 +119,7 @@ public class ModeRoutingCache {
                             person,
                             trip.getTripAttributes());
 
-                    // If DRT mode, adjust route for access/egress
-                    if (mode.equals(exMasConfig.getDrtMode())) {
-                        tripElements = adjustDrtTripElements(tripElements, population.getFactory().getRouteFactories(),
-                                fromFacility, toFacility);
-                    }
+
 
                     if (tripElements == null || tripElements.isEmpty())
                         continue;
@@ -164,7 +164,7 @@ public class ModeRoutingCache {
 
 				if (bestMode != null) {
 					personCache.put(tripIndex, modeCache);
-					personBestModes.put(tripIndex, bestMode);
+					personBestModes.put(tripIndex, Map.entry(bestMode, bestScore));
 				} else {
 					// No valid baseline mode found - skip this trip
 					personCache.put(tripIndex, modeCache);
@@ -180,38 +180,7 @@ public class ModeRoutingCache {
         });
     }
 
-    private List<? extends PlanElement> adjustDrtTripElements(List<? extends PlanElement> tripElements,
-            RouteFactories routingFactories,
-            Facility fromFacility, Facility toFacility) {
-        boolean containsDrtLeg = false;
-        for (PlanElement element : tripElements) {
-            if (element instanceof Leg leg && exMasConfig.getDrtMode().equals(leg.getMode())) {
-                containsDrtLeg = true;
-            }
-            if (element instanceof Leg leg && TransportMode.walk.equals(leg.getMode())) {
-                double walkDist = exMasConfig.getMinDrtAccessEgressDistance();
-                double walkSpeed = config.routing().getOrCreateModeRoutingParams(TransportMode.walk)
-                        .getTeleportedModeSpeed();
-                if (walkSpeed == 0.0) {
-                    // Fallback to default walk speed if not configured (0.833 m/s = 3 km/h)
-                    walkSpeed = 0.833333333;
-                }
-                double walkTime = walkDist / walkSpeed;
-                Route route = routingFactories.createRoute(Route.class, fromFacility.getLinkId(),
-                        toFacility.getLinkId());
-                route.setTravelTime(walkTime);
-                route.setDistance(walkDist);
-                leg.setDepartureTime(leg.getDepartureTime().orElse(0.0) + leg.getTravelTime().orElse(0.0)
-                        - route.getTravelTime().orElse(0));
-                leg.setRoute(route);
-                leg.setTravelTime(walkTime);
-            }
-        }
-        if (!containsDrtLeg) {
-            return new ArrayList<>();
-        }
-        return tripElements;
-    }
+
 
 	/**
 	 * Filters modes based on person attributes following MATSim conventions.
@@ -267,6 +236,7 @@ public class ModeRoutingCache {
 
 		// MATSim's monetaryDistanceCostRate is the cost per meter (e.g., EUR/m)
 		// Total cost = distance (m) * rate (EUR/m)
+		// C: add all other trip costs here if needed (e.g., fixed costs, time-based costs)
 		double cost = distance * modeParams.monetaryDistanceCostRate;
 
 		// Add daily monetary constant if this is the first trip of the day for this
@@ -316,7 +286,7 @@ public class ModeRoutingCache {
         return cache.get(personId);
     }
 
-	public Map<Id<Person>, Map<Integer, String>> getBestBaselineModes() {
+	public Map<Id<Person>, Map<Integer, Entry<String, Double>>> getBestBaselineModes() {
 		return bestBaselineModes;
 	}
 }

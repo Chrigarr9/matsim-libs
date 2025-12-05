@@ -13,6 +13,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -48,10 +49,10 @@ public class ChainIdentifier {
      * Identifies subtour chains and determines grouping based on private vehicle usage.
      * Must be called AFTER ModeRoutingCache.cacheModes() so we know the best baseline mode for each trip.
      */
-    public void identifyChains(Population population, Map<Id<Person>, Map<Integer, String>> bestBaselineModes) {
+    public void identifyChains(Population population, Map<Id<Person>,Map<Integer,Entry<String,Double>>> bestBaselineModes) {
         population.getPersons().values().parallelStream().forEach(person -> {
             Map<Integer, String> personGroupIds = new HashMap<>();
-            Map<Integer, String> personBestModes = bestBaselineModes.get(person.getId());
+            Map<Integer,Entry<String,Double>> personBestModes = bestBaselineModes.get(person.getId());
             
             if (personBestModes == null) {
                 // No routing cache available - treat all trips independently
@@ -131,12 +132,12 @@ public class ChainIdentifier {
      *   - Inner subtour evaluates: car(W→L→W) vs pt(W→L→W) vs walk(W→L→W)
      * 
      * @param subtour The subtour to evaluate
-     * @param bestBaselineModes The best per-trip baseline modes (used for quick heuristic)
+     * @param personBestModes The best per-trip baseline modes (used for quick heuristic)
      * @param person The person making the trips
      * @return true if the best feasible mode combination for this subtour uses a private vehicle
      */
     private boolean subtourUsesPrivateVehicle(TripStructureUtils.Subtour subtour, 
-                                               Map<Integer, String> bestBaselineModes,
+                                               Map<Integer,Entry<String,Double>> personBestModes,
                                                Person person) {
         List<TripStructureUtils.Trip> allTrips = TripStructureUtils.getTrips(person.getSelectedPlan());
         List<Integer> subtourTripIndices = new ArrayList<>();

@@ -1,23 +1,31 @@
 package org.matsim.contrib.demand_extraction.algorithm.validation;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
+import org.matsim.api.core.v01.population.PlanElement;
+import org.matsim.api.core.v01.population.Population;
 import org.matsim.api.core.v01.population.Route;
-import org.matsim.contrib.drt.routing.DrtRoute;
+import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
-import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
-import org.matsim.core.config.groups.ScoringConfigGroup;
-import org.matsim.core.network.NetworkUtils;
+import org.matsim.contrib.drt.routing.DrtRoute;
+import org.matsim.contrib.drt.run.DrtConfigGroup;
+import org.matsim.core.config.Config;
 import org.matsim.core.population.PopulationUtils;
-import org.matsim.core.population.routes.NetworkRoute;
+import org.matsim.core.population.routes.RouteFactories;
 import org.matsim.core.population.routes.RouteUtils;
 import org.matsim.core.scoring.ScoringFunction;
 import org.matsim.core.scoring.ScoringFunctionFactory;
+import org.matsim.core.scoring.functions.ScoringParameters;
+import org.matsim.core.scoring.functions.ScoringParametersForPerson;
+import org.matsim.facilities.Facility;
 
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
@@ -36,19 +44,29 @@ import com.google.inject.Singleton;
 public class BudgetValidator {
 	
 	private final ScoringFunctionFactory scoringFunctionFactory;
+	private final ScoringParametersForPerson scoringParametersForPerson;
 	private final ExMasConfigGroup exMasConfig;
 	private final Network network;
 	private final double walkSpeed;
+	private final DrtConfigGroup drtConfig;
+	private final Config config;
+	private final Population population;
 	
 	@Inject
 	public BudgetValidator(
 			ScoringFunctionFactory scoringFunctionFactory,
+			ScoringParametersForPerson scoringParametersForPerson,
 			ExMasConfigGroup exMasConfig,
 			Network network,
-			org.matsim.core.config.Config config) {
+			Config config,
+			Population population) {
 		this.scoringFunctionFactory = scoringFunctionFactory;
+		this.scoringParametersForPerson = scoringParametersForPerson;
 		this.exMasConfig = exMasConfig;
 		this.network = network;
+		this.population = population;
+		this.config = config;
+		this.drtConfig = org.matsim.contrib.drt.run.DrtConfigGroup.getSingleModeDrtConfig(config);
 		
 		// Get configured walking speed (same logic as ModeRoutingCache)
 		double configuredSpeed = config.routing()
@@ -123,13 +141,34 @@ public class BudgetValidator {
 					request,
 					delays[i],
 					travelTimes[i],
-					distances[i]);
+					distances[i],
+					// for now we will use the walk distance from the settings. Later with hyperpool
+					// we will use actual walk distances
+					exMasConfig.getMinDrtAccessEgressDistance(),
+					exMasConfig.getMinDrtAccessEgressDistance());
 			
-			// Calculate remaining budget
-			remainingBudgets[i] = request.bestModeScore - actualDrtScore;
+			// Calculate remaining budget (positive = DRT is better than baseline)
+			remainingBudgets[i] = actualDrtScore - request.bestModeScore;
 		}
 		
 		return remainingBudgets;
+	}
+	
+	/**
+	 * Calculate initial budget for a request (direct travel, no delays).
+	 * This should be used during request creation to ensure consistent methodology.
+	 * 
+	 * @param request the DRT request with bestModeScore already populated
+	 * @param directTravelTime direct in-vehicle travel time (seconds)
+	 * @param directDistance direct travel distance (meters)
+	 * @return budget = actualDrtScore - bestModeScore (positive = DRT better than baseline)
+	 */
+	public double calculateInitialBudget(DrtRequest request) {
+		// route the trip to get direct travel time and distance
+		double walkDistance = exMasConfig.getMinDrtAccessEgressDistance();
+		double actualDrtScore = calculateDrtScore(request, 0.0, request.getTravelTime(), request.getDistance(),
+				walkDistance, walkDistance);
+		return actualDrtScore - request.bestModeScore;
 	}
 	
 	/**
@@ -145,72 +184,179 @@ public class BudgetValidator {
 	 * @return total utility score (includes all legs)
 	 */
 	private double calculateDrtScore(DrtRequest request, double delay, 
-			double actualTravelTime, double actualDistance) {
+			double actualTravelTime, double actualDistance,
+			double actualWalkDistanceAccess, double actualWalkDistanceEgress) {
 		
-		// Create a pseudo-person for scoring
-		// C: instead of a pseudo person use the real person here. either tie it to ther request or get it from population using the id. then thgis will pay attention to the person specific scoring params.
-		Person person = PopulationUtils.getFactory().createPerson(request.personId);
+		// Create the real persons scoring function
+		Person person = population.getPersons().get(request.personId);
 		ScoringFunction scoringFunction = scoringFunctionFactory.createNewScoringFunction(person);
+
+		double accessTime = actualWalkDistanceAccess / walkSpeed;
 		
-		double accessEgressDistance = exMasConfig.getMinDrtAccessEgressDistance();
-		double currentTime = request.requestTime + delay;
-		
+		// Timeline:
+		// 1. request.requestTime: person ready to depart (earliest departure time)
+		// 2. request.requestTime to (request.requestTime + accessTime): access walk
+		// 3. (request.requestTime + accessTime) to (request.requestTime + delay): WAITING for vehicle
+		// 4. (request.requestTime + delay): pickup (PersonEntersVehicle)
+		// 5. (request.requestTime + delay) to (request.requestTime + delay + actualTravelTime): in-vehicle
+		// 6. dropoff, then egress walk
+
+		double pickupTime = request.requestTime + delay; // When vehicle actually arrives
+
 		// Access leg (walk from origin activity to pickup point)
-		// Always add even if distance is 0 - scoring can handle it
-		Leg accessLeg = PopulationUtils.createLeg("walk");
-		// C: the pickup time is request.requestTime + delay. the walk has to start early to arrive at pickup at this time
-		accessLeg.setDepartureTime(currentTime);
-		double accessTime = accessEgressDistance / walkSpeed;
+		Leg accessLeg = PopulationUtils.createLeg(TransportMode.walk);
+		accessLeg.setDepartureTime(pickupTime - accessTime);
 		accessLeg.setTravelTime(accessTime);
 		
 		// Use teleported route (same as ModeRoutingCache)
 		Route accessRoute = 
 			RouteUtils.createGenericRouteImpl(
 				request.originLinkId, request.originLinkId);
-		accessRoute.setDistance(accessEgressDistance);
+		accessRoute.setDistance(actualWalkDistanceAccess);
 		accessRoute.setTravelTime(accessTime);
 		accessLeg.setRoute(accessRoute);
 		
 		scoringFunction.handleLeg(accessLeg);
-		currentTime += accessTime;
-		
-		// DRT leg (main ride)
+
+		// DRT leg (main ride) - departs at pickup time
 		Leg drtLeg = PopulationUtils.createLeg(exMasConfig.getDrtMode());
-		//C: see comment above
-		drtLeg.setDepartureTime(currentTime);
+		drtLeg.setDepartureTime(pickupTime); // currentTime = pickupTime
 		drtLeg.setTravelTime(actualTravelTime);
 		
-		// Use proper DrtRoute
-		// directRideTime = unshared direct travel time (for fare calculation)
-		// travelTime = actual travel time including waiting + detour (for scoring)
-		// Waiting time is automatically scored as travel time by MATSim scoring function
-		DrtRoute drtRoute = new DrtRoute(request.originLinkId, request.destinationLinkId);
-		drtRoute.setDirectRideTime(request.directTravelTime);
-		drtRoute.setDistance(actualDistance);
-		drtRoute.setTravelTime(actualTravelTime);
+		// Build realistic DrtRoute exactly as MATSim router would
+		// This includes: directRideTime, distance, travelTime, and constraints
+		DrtRoute drtRoute = buildDrtRoute(
+				request.originLinkId,
+				request.destinationLinkId,
+				request.directTravelTime, // unshared direct ride time
+				request.directDistance,   // unshared direct distance
+				actualTravelTime,         // actual ride time (may include detours + stop durations)
+				actualDistance);          // actual distance (may include detours)
 		drtLeg.setRoute(drtRoute);
 		
 		scoringFunction.handleLeg(drtLeg);
-		currentTime += actualTravelTime;
-		
+
 		// Egress leg (walk from dropoff point to destination activity)
 		// Always add even if distance is 0 - scoring can handle it
 		Leg egressLeg = PopulationUtils.createLeg("walk");
-		egressLeg.setDepartureTime(currentTime);
-		double egressTime = accessEgressDistance / walkSpeed;
+		egressLeg.setDepartureTime(pickupTime + actualTravelTime);
+		double egressTime = actualWalkDistanceEgress / walkSpeed;
 		egressLeg.setTravelTime(egressTime);
 		
 		// Use teleported route (same as ModeRoutingCache)
 		Route egressRoute = 
 			RouteUtils.createGenericRouteImpl(
 				request.destinationLinkId, request.destinationLinkId);
-		egressRoute.setDistance(accessEgressDistance);
+		egressRoute.setDistance(actualWalkDistanceEgress);
 		egressRoute.setTravelTime(egressTime);
 		egressLeg.setRoute(egressRoute);
 		
 		scoringFunction.handleLeg(egressLeg);
 		
+		// Wait time scoring - get person-specific waiting utility parameter
+		ScoringParameters scoringParams = scoringParametersForPerson.getScoringParameters(person);
+		double marginalUtilityOfWaitingPt_s = scoringParams.marginalUtilityOfWaitingPt_s;
+
+		// Calculate wait time based on delay
+		// delay is positive -> delay is wait time. User waits for departure
+		double waitTime = 0.0;
+		if (delay > 0) {
+			waitTime = delay;
+		}
+		// delay negative -> user has to leave early, wait time is at destination, but
+		// reduced by detour
+		else if (delay < 0) {
+			waitTime = Math.abs(delay) - (actualTravelTime - request.directTravelTime);
+		}
+
+		// Apply person-specific waiting disutility
+		double waitScore = marginalUtilityOfWaitingPt_s * waitTime;
+		scoringFunction.addScore(waitScore);
+
 		scoringFunction.finish();
 		return scoringFunction.getScore();
+	}
+	
+	/**
+	 * Build a realistic DrtRoute exactly as MATSim's DrtRouteCreator would.
+	 * 
+	 * This matches the logic in DrtRouteCreator.createRoute():
+	 * 1. Set directRideTime (unshared direct travel time for fare calculation)
+	 * 2. Set distance (actual distance including any detours)
+	 * 3. Set travelTime (actual IN-VEHICLE time from pickup to dropoff)
+	 * 4. Calculate and set constraints (maxTravelTime, maxRideTime, maxWaitTime)
+	 * 
+	 * CRITICAL: actualRideTime is ONLY the in-vehicle time (PersonEntersVehicle to PersonLeavesVehicle).
+	 * It does NOT include:
+	 * - Access walk time (before pickup)
+	 * - Wait time (delay before vehicle arrives)
+	 * - Egress walk time (after dropoff)
+	 * 
+	 * However, it DOES include stop durations at pickup/dropoff:
+	 * - DrtStopActivity waits for stopDuration before allowing pickups
+	 * - This waiting AT THE STOP is part of in-vehicle time, not pre-pickup waiting
+	 * - Scored as travel time using marginalUtilityOfTraveling
+	 * 
+	 * @param originLinkId origin link
+	 * @param destinationLinkId destination link
+	 * @param directRideTime unshared direct in-vehicle ride time (seconds) - NOT including access/egress
+	 * @param directDistance unshared direct distance (meters)
+	 * @param actualRideTime actual in-vehicle ride time including detours and stop durations (seconds)
+	 * @param actualDistance actual distance including detours (meters)
+	 * @return DrtRoute with all components set
+	 */
+	private DrtRoute buildDrtRoute(
+			Id<Link> originLinkId,
+			Id<Link> destinationLinkId,
+			double directRideTime,
+			double directDistance,
+			double actualRideTime,
+			double actualDistance) {
+		
+		DrtRoute route = new DrtRoute(originLinkId, destinationLinkId);
+		
+		// 1. Set direct ride time (used for fare calculation)
+		route.setDirectRideTime(directRideTime);
+		
+		// 2. Set actual distance
+		route.setDistance(directDistance);
+
+		// 5. Override travelTime with actual ride time for scoring
+		route.setTravelTime(actualRideTime);
+		
+		return route;
+	}
+
+	private List<? extends PlanElement> adjustDrtTripElements(List<? extends PlanElement> tripElements,
+			RouteFactories routingFactories,
+			Facility fromFacility, Facility toFacility) {
+		boolean containsDrtLeg = false;
+		for (PlanElement element : tripElements) {
+			if (element instanceof Leg leg && exMasConfig.getDrtMode().equals(leg.getMode())) {
+				containsDrtLeg = true;
+			}
+			if (element instanceof Leg leg && TransportMode.walk.equals(leg.getMode())) {
+				double walkDist = exMasConfig.getMinDrtAccessEgressDistance();
+				double walkSpeed = config.routing().getOrCreateModeRoutingParams(TransportMode.walk)
+						.getTeleportedModeSpeed();
+				if (walkSpeed == 0.0) {
+					// Fallback to default walk speed if not configured (0.833 m/s = 3 km/h)
+					walkSpeed = 0.833333333;
+				}
+				double walkTime = walkDist / walkSpeed;
+				Route route = routingFactories.createRoute(Route.class, fromFacility.getLinkId(),
+						toFacility.getLinkId());
+				route.setTravelTime(walkTime);
+				route.setDistance(walkDist);
+				leg.setDepartureTime(leg.getDepartureTime().orElse(0.0) + leg.getTravelTime().orElse(0.0)
+						- route.getTravelTime().orElse(0));
+				leg.setRoute(route);
+				leg.setTravelTime(walkTime);
+			}
+		}
+		if (!containsDrtLeg) {
+			return new ArrayList<>();
+		}
+		return tripElements;
 	}
 }

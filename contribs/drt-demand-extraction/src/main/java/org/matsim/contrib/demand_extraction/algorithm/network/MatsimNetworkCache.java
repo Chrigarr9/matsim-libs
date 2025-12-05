@@ -1,21 +1,34 @@
 package org.matsim.contrib.demand_extraction.algorithm.network;
 
-import java.io.*;
-import java.util.*;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
-import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.api.core.v01.population.Person;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.core.population.PopulationUtils;
+import org.matsim.core.router.costcalculators.TravelDisutilityFactory;
 import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.LeastCostPathCalculator.Path;
 import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
+import org.matsim.vehicles.Vehicle;
+import org.matsim.vehicles.VehicleType;
+import org.matsim.vehicles.VehicleUtils;
 
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
+import com.google.inject.name.Named;
 
 
 /**
@@ -50,6 +63,10 @@ public class MatsimNetworkCache {
 	private final TravelDisutility travelDisutility;
 	private final int timeBinSize;
 	
+	// Dummy person and vehicle for generic routing (required by router)
+	private final Person dummyPerson;
+	private final Vehicle dummyVehicle;
+
 	// Cache: (originLinkId, destLinkId, timeBin) -> TravelSegment
 	private final ConcurrentHashMap<CacheKey, TravelSegment> cache = new ConcurrentHashMap<>();
 	
@@ -57,14 +74,20 @@ public class MatsimNetworkCache {
 	public MatsimNetworkCache(
 			Network network,
 			LeastCostPathCalculator router,
-			TravelTime travelTime,
-			TravelDisutility travelDisutility,
+			@Named(TransportMode.car) TravelTime travelTime,
+			@Named(TransportMode.car) TravelDisutilityFactory travelDisutilityFactory,
 			ExMasConfigGroup config) {
 		this.network = network;
 		this.router = router;
 		this.travelTime = travelTime;
-		this.travelDisutility = travelDisutility;
+		this.travelDisutility = travelDisutilityFactory.createTravelDisutility(travelTime);
 		this.timeBinSize = config.getNetworkTimeBinSize();
+
+		// Create dummy person and vehicle for generic routing
+		// These are required by the router/travel time/disutility calculations
+		this.dummyPerson = PopulationUtils.getFactory().createPerson(Id.createPersonId("exmas_dummy"));
+		VehicleType dummyType = VehicleUtils.createVehicleType(Id.create("car", VehicleType.class));
+		this.dummyVehicle = VehicleUtils.createVehicle(Id.createVehicleId("exmas_dummy_vehicle"), dummyType);
 	}
 	
 	/**
@@ -100,49 +123,7 @@ public class MatsimNetworkCache {
 	public boolean hasConnection(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
 		return getSegment(originLinkId, destLinkId, departureTime).isReachable();
 	}
-	
-	// Node index to Link ID mapping for algorithm
-	private final Map<Integer, Id<Link>> indexToLinkMap = new HashMap<>();
-	
-	/**
-	 * Gets a sequential node index for a link ID.
-	 * This is used by the algorithm for compact array-based storage.
-	 * Returns a consistent index for the same link across calls.
-	 */
-	public int getNodeIndex(Id<Link> linkId) {
-		// Simple hash-based indexing - could be optimized with a map if needed
-		int index = Math.abs(linkId.hashCode());
-		indexToLinkMap.put(index, linkId);
-		return index;
-	}
-	
-	/**
-	 * Overload for node-index-based segment lookup (used by algorithm).
-	 * Maps indices back to link IDs and delegates to main getSegment method.
-	 */
-	public TravelSegment getSegment(int fromNodeIndex, int toNodeIndex) {
-		Id<Link> fromLinkId = indexToLinkMap.get(fromNodeIndex);
-		Id<Link> toLinkId = indexToLinkMap.get(toNodeIndex);
-		
-		if (fromLinkId == null || toLinkId == null) {
-			// Unknown indices - return unreachable segment
-			return TravelSegment.unreachable();
-		}
-		
-		// Use cached routing with standard departure time
-		return getSegment(fromLinkId, toLinkId, 8.0 * 3600.0);
-	}
-	
-	/**
-	 * Gets network utility for a segment (time + distance based).
-	 * This is a simplified utility calculation for the algorithm.
-	 */
-	public double getNetworkUtility(int fromNodeIndex, int destNodeIndex) {
-		// Placeholder - algorithm doesn't actually use this in MATSim version
-		// Real utility comes from TravelSegment.getNetworkUtility()
-		return 0.0;
-	}
-	
+
 	/**
 	 * Pre-populate cache with specific O-D pairs only.
 	 * Useful for filtering cache to only relevant connections.
@@ -203,7 +184,7 @@ public class MatsimNetworkCache {
 					// Only import if links exist in network
 					if (network.getLinks().containsKey(origin) && network.getLinks().containsKey(dest)) {
 						CacheKey key = new CacheKey(origin, dest, timeBin);
-						TravelSegment seg = new TravelSegment(0, 0, tt, dist, util);
+						TravelSegment seg = new TravelSegment(tt, dist, util);
 						cache.put(key, seg);
 					}
 				} catch (Exception e) {
@@ -253,40 +234,43 @@ public class MatsimNetworkCache {
 		}
 		
 		if (originLinkId.equals(destLinkId)) {
-			// Same link - zero travel
-			return new TravelSegment(0, 0, 0.0, 0.0, 0.0);
+			// Same link - only need to traverse the link itself
+			// Use actual travel time (respects simulation state), not freespeed
+			double linkTravelTime = travelTime.getLinkTravelTime(originLink, departureTime, dummyPerson, dummyVehicle);
+			double linkDistance = originLink.getLength();
+			// Disutility for traversing the link
+			double linkDisutility = travelDisutility.getLinkTravelDisutility(originLink, departureTime, dummyPerson,
+					dummyVehicle);
+			return new TravelSegment(linkTravelTime, linkDistance, -linkDisutility);
 		}
-		
 		try {
-			// Route from end of origin link to start of destination link
-			Path path = router.calcLeastCostPath(
-					originLink.getToNode(),
-					destLink.getFromNode(),
-					departureTime,
-					null, // person (null = generic routing)
-					null  // vehicle (null = generic routing)
-			);
-			
-			if (path == null || path.links.isEmpty()) {
+				// Use link-based routing (new non-deprecated method)
+				// This properly handles turn restrictions and considers full link-to-link
+				// travel
+				// Use dummy person/vehicle for generic routing (required by TravelDisutility)
+				Path path = router.calcLeastCostPath(
+				originLink,
+				destLink,
+				departureTime,
+				dummyPerson,
+				dummyVehicle);
+		if (path == null || path.links.isEmpty()) {
 				// No path found
 				return createInfinitySegment();
 			}
 			
-			// Calculate metrics
+			// path.travelTime already includes origin and destination links
+			// path.links already includes all traversed links
+			// Router implementations handle link-to-link travel correctly
 			double tt = path.travelTime;
 			double dist = path.links.stream().mapToDouble(link -> link.getLength()).sum();
-			
-			// Add origin and destination link lengths
-			tt += originLink.getLength() / originLink.getFreespeed();
-			tt += destLink.getLength() / destLink.getFreespeed();
-			dist += originLink.getLength() + destLink.getLength();
-			
+
 			// Network utility: negative of generalized cost (disutility)
 			// This allows sorting by "best" routes (higher utility = better)
 			double disutility = path.travelCost;
 			double utility = -disutility;
 			
-			return new TravelSegment(0, 0, tt, dist, utility);
+			return new TravelSegment(tt, dist, utility);
 			
 		} catch (Exception e) {
 			// Routing failed
@@ -295,10 +279,7 @@ public class MatsimNetworkCache {
 	}
 	
 	private TravelSegment createInfinitySegment() {
-		return new TravelSegment(0, 0, 
-				Double.POSITIVE_INFINITY, 
-				Double.POSITIVE_INFINITY, 
-				Double.NEGATIVE_INFINITY);
+		return TravelSegment.unreachable();
 	}
 	
 	/**

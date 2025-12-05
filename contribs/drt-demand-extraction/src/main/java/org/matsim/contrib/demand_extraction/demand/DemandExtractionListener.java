@@ -1,21 +1,19 @@
 package org.matsim.contrib.demand_extraction.demand;
 
-import java.io.BufferedWriter;
-import java.io.IOException;
 import java.util.List;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.population.Population;
-import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.engine.ExMasEngine;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.io.ExMasCsvWriter;
 import org.matsim.core.config.Config;
 import org.matsim.core.controler.events.IterationEndsEvent;
 import org.matsim.core.controler.listener.IterationEndsListener;
-import org.matsim.core.utils.io.IOUtils;
 
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
@@ -23,11 +21,10 @@ import com.google.inject.Singleton;
 @Singleton
 public class DemandExtractionListener implements IterationEndsListener {
 	private static final Logger log = LogManager.getLogger(DemandExtractionListener.class);
-	private static final String ARRAY_CLEAN_PATTERN = "[\\[\\] ]";
 
     private final ModeRoutingCache modeRoutingCache;
     private final ChainIdentifier chainIdentifier;
-    private final BudgetCalculator budgetCalculator;
+	private final DrtRequestFactory budgetCalculator;
     private final Population population;
 	private final ExMasConfigGroup exMasConfig;
 	private final Config config;
@@ -36,7 +33,7 @@ public class DemandExtractionListener implements IterationEndsListener {
 
     @Inject
     public DemandExtractionListener(ModeRoutingCache modeRoutingCache, ChainIdentifier chainIdentifier,
-			BudgetCalculator budgetCalculator, Population population, ExMasConfigGroup exMasConfig, Config config,
+			DrtRequestFactory budgetCalculator, Population population, ExMasConfigGroup exMasConfig, Config config,
 			MatsimNetworkCache networkCache,
 			BudgetValidator budgetValidator) {
         this.modeRoutingCache = modeRoutingCache;
@@ -68,7 +65,7 @@ public class DemandExtractionListener implements IterationEndsListener {
 
 			// 3. Calculate Budgets (trip-wise with linking for subtours using private
 			// vehicles)
-            List<DrtRequest> requests = budgetCalculator.calculateBudgets(population);
+			List<DrtRequest> requests = budgetCalculator.buildRequests(population);
 
 			// 4. Generate ExMAS Rides (with budget validation)
 			log.info("Running ExMAS ride generation...");
@@ -82,43 +79,12 @@ public class DemandExtractionListener implements IterationEndsListener {
 			log.info("Generated {} total rides", rides.size());
 
             // 5. Write DRT Requests Output
-			String filename = event.getServices().getControllerIO().getOutputFilename("drt_requests.csv");
-            try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
-                writer.write(
-                        "personId,groupId,tripIndex,budget,requestTime,originX,originY,destinationX,destinationY");
-                writer.newLine();
-                for (DrtRequest req : requests) {
-					writer.write(String.format(java.util.Locale.US, "%s,%s,%d,%.4f,%.2f,%.2f,%.2f,%.2f,%.2f",
-                            req.personId, req.groupId, req.tripIndex, req.budget, req.requestTime,
-                            req.originX, req.originY, req.destinationX, req.destinationY));
-                    writer.newLine();
-                }
-            } catch (IOException e) {
-                throw new RuntimeException("Could not write drt_requests.csv", e);
-            }
+			String requestsFilename = event.getServices().getControllerIO().getOutputFilename("drt_requests.csv");
+			ExMasCsvWriter.writeRequests(requestsFilename, requests);
 			
 			// 6. Write ExMAS Rides Output
-			// C: is there a better way to write this? the goal is to easily import it to python. json maybe?
-			// same goes for requests
 			String ridesFilename = event.getServices().getControllerIO().getOutputFilename("exmas_rides.csv");
-			try (BufferedWriter writer = IOUtils.getBufferedWriter(ridesFilename)) {
-				writer.write("rideIndex,degree,kind,requestIndices,startTime,duration,distance,delays,remainingBudgets");
-				writer.newLine();
-				for (Ride ride : rides) {
-					String reqIndices = java.util.Arrays.toString(ride.getRequestIndices()).replaceAll(ARRAY_CLEAN_PATTERN, "");
-					String delays = java.util.Arrays.toString(ride.getDelays()).replaceAll(ARRAY_CLEAN_PATTERN, "");
-					String budgets = ride.getRemainingBudgets() != null 
-						? java.util.Arrays.toString(ride.getRemainingBudgets()).replaceAll(ARRAY_CLEAN_PATTERN, "")
-						: "";
-					writer.write(String.format(java.util.Locale.US, "%d,%d,%s,%s,%.2f,%.2f,%.2f,%s,%s",
-						ride.getIndex(), ride.getDegree(), ride.getKind(), reqIndices,
-						ride.getStartTime(), ride.getRideTravelTime(), ride.getRideDistance(),
-						delays, budgets));
-					writer.newLine();
-				}
-			} catch (IOException e) {
-				throw new RuntimeException("Could not write exmas_rides.csv", e);
-			}
+			ExMasCsvWriter.writeRides(ridesFilename, rides);
         }
     }
 }

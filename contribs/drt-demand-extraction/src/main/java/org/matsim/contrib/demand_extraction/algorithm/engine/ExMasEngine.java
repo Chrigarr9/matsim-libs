@@ -1,14 +1,19 @@
 package org.matsim.contrib.demand_extraction.algorithm.engine;
 
-import org.matsim.contrib.demand_extraction.demand.DrtRequest;
-import org.matsim.contrib.demand_extraction.algorithm.domain.*;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
+import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
+import org.matsim.contrib.demand_extraction.algorithm.extension.RideExtender;
 import org.matsim.contrib.demand_extraction.algorithm.generation.PairGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.generation.SingleRideGenerator;
-import org.matsim.contrib.demand_extraction.algorithm.extension.RideExtender;
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
-import java.util.*;
+import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
 /**
  * Main orchestrator for ExMAS algorithm with MATSim integration.
@@ -19,6 +24,8 @@ import java.util.*;
  * - Iterative ride extension up to maxDegree
  */
 public final class ExMasEngine {
+	private static final Logger log = LogManager.getLogger(ExMasEngine.class);
+
     private final MatsimNetworkCache network;
     private final BudgetValidator budgetValidator;
     private final double horizon;
@@ -48,53 +55,55 @@ public final class ExMasEngine {
         
         DrtRequest[] reqArray = drtRequests.toArray(new DrtRequest[0]);
 
-        // Phase 1: Generate single rides (always budget-feasible by definition)
-		// C: Use the matim logger here (and everywhere else)
-        System.out.println("Generating single rides...");
-        SingleRideGenerator singleGen = new SingleRideGenerator(network);
+		// Phase 1: Generate single rides with budget validation
+		log.info("Generating single rides...");
+		SingleRideGenerator singleGen = new SingleRideGenerator(network, budgetValidator);
         List<Ride> singleRides = singleGen.generate(drtRequests);
         allRides.addAll(singleRides);
-        System.out.println("  Single rides: " + singleRides.size());
+		log.info("  Single rides: {}", singleRides.size());
 
         // Phase 2: Generate pair rides with budget validation
-        System.out.println("Generating pair rides...");
+		log.info("Generating pair rides...");
         PairGenerator pairGen = new PairGenerator(network, budgetValidator, horizon);
         List<Ride> pairRides = pairGen.generatePairs(reqArray);
         allRides.addAll(pairRides);
-        System.out.println("  Pair rides: " + pairRides.size());
+		log.info("  Pair rides: {}", pairRides.size());
 
         if (maxDegree <= 2) {
             return allRides;
         }
 
         // Phase 3: Build sharability graph from pairs
-        System.out.println("Building sharability graph...");
+		log.info("Building sharability graph...");
         graph = buildGraph(pairRides);
-        System.out.println("  Graph: " + graph.getEdgeCount() + " edges, " + graph.getNodeCount() + " nodes");
+		log.info("  Graph: {} edges, {} nodes", graph.getEdgeCount(), graph.getNodeCount());
 
         // Phase 4: Iteratively extend rides with budget validation
         List<Ride> currentDegreeRides = pairRides;
         for (int degree = 2; degree < maxDegree; degree++) {
-            System.out.println("Extending to degree " + (degree + 1) + "...");
+			log.info("Extending to degree {}...", (degree + 1));
             RideExtender extender = new RideExtender(network, graph, budgetValidator,
                                                      requests, allRides);
             List<Ride> extended = extender.extendRides(currentDegreeRides, reqArray, allRides.size());
 
             if (extended.isEmpty()) {
-                System.out.println("  No more extensions possible.");
+				log.info("  No more extensions possible.");
                 break;
             }
 
             allRides.addAll(extended);
             currentDegreeRides = extended;
-            System.out.println("  Degree " + (degree + 1) + " rides: " + extended.size());
+			log.info("  Degree {} rides: {}", (degree + 1), extended.size());
         }
 
         return allRides;
     }
 
     private ShareabilityGraph buildGraph(List<Ride> pairRides) {
-        ShareabilityGraph.Builder builder = ShareabilityGraph.builder(pairRides.size() * 2);
+		// Use at least capacity 1 to avoid IllegalArgumentException when no pair rides
+		// exist
+		int initialCapacity = Math.max(1, pairRides.size() * 2);
+		ShareabilityGraph.Builder builder = ShareabilityGraph.builder(initialCapacity);
 
         for (Ride ride : pairRides) {
             if (ride.getDegree() != 2) continue;
