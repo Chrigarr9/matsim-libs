@@ -2,7 +2,12 @@ package org.matsim.contrib.demand_extraction.algorithm.generation;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.IntStream;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
@@ -17,6 +22,8 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  * Python reference: rides.py lines 55-370
  */
 public final class PairGenerator {
+	private static final Logger log = LogManager.getLogger(PairGenerator.class);
+
     private final MatsimNetworkCache network;
     private final BudgetValidator budgetValidator;
     private final double horizon;
@@ -29,61 +36,136 @@ public final class PairGenerator {
     }
 
     public List<Ride> generatePairs(DrtRequest[] requests) {
-        TimeFilter filter = new TimeFilter(requests);
-        List<Ride> pairs = new ArrayList<>();
-        int rideIndex = requests.length; // Start after single rides
+		log.info("Generating pair rides from {} requests (horizon={}s)...", requests.length, horizon);
+		long startTime = System.currentTimeMillis();
 
-        for (int i = 0; i < filter.size(); i++) {
+		TimeFilter filter = new TimeFilter(requests);
+
+		// Thread-safe collections for parallel processing
+		ConcurrentHashMap<Integer, Ride> pairsMap = new ConcurrentHashMap<>();
+		AtomicInteger rideIndex = new AtomicInteger(requests.length); // Start after single rides
+
+		// Statistics tracking (thread-safe)
+		AtomicInteger totalComparisons = new AtomicInteger(0);
+		AtomicInteger temporalFiltered = new AtomicInteger(0);
+		AtomicInteger samePerson = new AtomicInteger(0);
+		AtomicInteger fifoAttempts = new AtomicInteger(0);
+		AtomicInteger lifoAttempts = new AtomicInteger(0);
+		AtomicInteger fifoCreated = new AtomicInteger(0);
+		AtomicInteger lifoCreated = new AtomicInteger(0);
+		AtomicInteger processedRequests = new AtomicInteger(0);
+		int logInterval = Math.max(1, filter.size() / 10);
+
+		// Parallel processing of request pairs
+		IntStream.range(0, filter.size()).parallel().forEach(i -> {
+			// Progress logging (thread-safe)
+			int processed = processedRequests.incrementAndGet();
+			if (processed % logInterval == 0 && processed > 0) {
+				double percent = (processed * 100.0) / filter.size();
+				log.info("  Pair generation progress: {}/{} ({}%) - {} pairs found",
+						processed, filter.size(), String.format("%.1f", percent), pairsMap.size());
+			}
+
             DrtRequest reqI = filter.getRequest(i);
             int[] candidates = filter.findCandidatesInHorizon(i, horizon);
 
-            for (int j : candidates) {
-                DrtRequest reqJ = filter.getRequest(j);
+			// Pre-filter candidates (matches Python approach - lines 89-95)
+			// This avoids expensive network calls for obviously incompatible pairs
+			List<Integer> validCandidates = new ArrayList<>();
+			for (int j : candidates) {
+				DrtRequest reqJ = filter.getRequest(j);
+				totalComparisons.incrementAndGet();
 
-                if (reqI.getPaxId().equals(reqJ.getPaxId())) continue;
+				// Quick filter: same person
+				if (reqI.getPaxId().equals(reqJ.getPaxId())) {
+					samePerson.incrementAndGet();
+					continue;
+				}
 
-                // Apply temporal window constraint (Python rides.py:82-88)
-                // Constraint 1: reqJ.latestDeparture >= reqI.earliestDeparture
-                if (reqJ.getLatestDeparture() < reqI.getEarliestDeparture()) continue;
-                // Constraint 2: reqJ.earliestDeparture <= reqI.latestDeparture + reqI.travelTime
-                if (reqJ.getEarliestDeparture() > reqI.getLatestDeparture() + reqI.getTravelTime()) continue;
+				// Temporal window constraint (Python rides.py:89-92)
+				// Filter BEFORE any network calls (major performance win)
+				if (reqJ.getLatestDeparture() < reqI.getEarliestDeparture() ||
+						reqJ.getEarliestDeparture() > reqI.getLatestDeparture() + reqI.getTravelTime()) {
+					temporalFiltered.incrementAndGet();
+					continue;
+				}
+
+				validCandidates.add(j);
+			}
+
+			// Only process candidates that passed temporal filtering
+			for (int j : validCandidates) {
+				DrtRequest reqJ = filter.getRequest(j);
+
+				// Pre-fetch common segment (Oi -> Oj) used by both FIFO and LIFO
+				// Python does bulk merge_data() at lines 118-119, we do it per-pair
+				TravelSegment oo = network.getSegment(reqI.originLinkId, reqJ.originLinkId, reqI.requestTime);
+				if (!oo.isReachable())
+					continue; // Both FIFO and LIFO need this
+
+				// Second temporal constraint with actual travel time (Python rides.py:120-122)
+				// Python: query '(latest_departure_i + travel_time_oo >= earliest_departure_j)'
+				if (reqI.getLatestDeparture() + oo.getTravelTime() < reqJ.getEarliestDeparture())
+					continue;
+				if (reqI.getEarliestDeparture() + oo.getTravelTime() > reqJ.getLatestDeparture())
+					continue;
 
                 // Try FIFO: Oi -> Oj -> Di -> Dj
-                Ride fifo = tryFifo(reqI, reqJ, rideIndex);
+				fifoAttempts.incrementAndGet();
+				Ride fifo = tryFifoWithSegment(reqI, reqJ, oo, rideIndex.get());
                 if (fifo != null) {
                     // Validate budgets before adding
                     Ride validated = budgetValidator.validateAndPopulateBudgets(fifo, requests);
                     if (validated != null) {
-                        pairs.add(validated);
-                        rideIndex++;
+						int idx = rideIndex.getAndIncrement();
+						pairsMap.put(idx, validated);
+						fifoCreated.incrementAndGet();
                     }
                 }
 
                 // Try LIFO: Oi -> Oj -> Dj -> Di
-                Ride lifo = tryLifo(reqI, reqJ, rideIndex);
+				lifoAttempts.incrementAndGet();
+				Ride lifo = tryLifoWithSegment(reqI, reqJ, oo, rideIndex.get());
                 if (lifo != null) {
                     // Validate budgets before adding
                     Ride validated = budgetValidator.validateAndPopulateBudgets(lifo, requests);
                     if (validated != null) {
-                        pairs.add(validated);
-                        rideIndex++;
-                    }
-                }
-            }
-        }
+						int idx = rideIndex.getAndIncrement();
+						pairsMap.put(idx, validated);
+						lifoCreated.incrementAndGet();
+					}
+				}
+			}
+		});
+
+		// Convert map to list
+		List<Ride> pairs = new ArrayList<>(pairsMap.values());
+
+		long elapsed = System.currentTimeMillis() - startTime;
+		double seconds = elapsed / 1000.0;
+		double pairsPerSecond = pairs.size() / seconds;
+		log.info("Pair generation complete: {} pairs from {} requests in {}s ({} pairs/s)",
+				pairs.size(), requests.length, String.format("%.1f", seconds), String.format("%.1f", pairsPerSecond));
+		log.info("  Filtering: {} comparisons, {} same person, {} temporal filtered",
+				totalComparisons.get(), samePerson.get(), temporalFiltered.get());
+		log.info("  Attempts: {} FIFO ({} created), {} LIFO ({} created)",
+				fifoAttempts.get(), fifoCreated.get(), lifoAttempts.get(), lifoCreated.get());
+
         return pairs;
     }
 
-    private Ride tryFifo(DrtRequest i, DrtRequest j, int index) {
-		TravelSegment oo = network.getSegment(i.originLinkId, j.originLinkId, i.requestTime);
+	/**
+	 * Optimized FIFO generation that reuses pre-fetched Oi->Oj segment.
+	 */
+	private Ride tryFifoWithSegment(DrtRequest i, DrtRequest j, TravelSegment oo, int index) {
+		// oo (Oi -> Oj) already fetched and validated by caller
 		TravelSegment od = network.getSegment(j.originLinkId, i.destinationLinkId, i.requestTime);
 		TravelSegment dd = network.getSegment(i.destinationLinkId, j.destinationLinkId, i.requestTime);
 
-        if (!oo.isReachable() || !od.isReachable() || !dd.isReachable()) return null;
+		if (!od.isReachable() || !dd.isReachable())
+			return null;
 
-        // Second temporal constraint using actual network travel time (Python rides.py:128-132)
-        if (i.getLatestDeparture() + oo.getTravelTime() < j.getEarliestDeparture()) return null;
-        if (i.getEarliestDeparture() + oo.getTravelTime() > j.getLatestDeparture()) return null;
+		// Temporal constraints already checked by caller
 
         double pttI = oo.getTravelTime() + od.getTravelTime();
         double pttJ = od.getTravelTime() + dd.getTravelTime();
@@ -150,16 +232,29 @@ public final class PairGenerator {
             .build();
     }
 
-    private Ride tryLifo(DrtRequest i, DrtRequest j, int index) {
+	/**
+	 * Legacy method - calls optimized version with fetched segment.
+	 * Kept for API compatibility.
+	 */
+	private Ride tryFifo(DrtRequest i, DrtRequest j, int index) {
 		TravelSegment oo = network.getSegment(i.originLinkId, j.originLinkId, i.requestTime);
+		if (!oo.isReachable())
+			return null;
+		return tryFifoWithSegment(i, j, oo, index);
+	}
+
+	/**
+	 * Optimized LIFO generation that reuses pre-fetched Oi->Oj segment.
+	 */
+	private Ride tryLifoWithSegment(DrtRequest i, DrtRequest j, TravelSegment oo, int index) {
+		// oo (Oi -> Oj) already fetched and validated by caller
 		TravelSegment oj = network.getSegment(j.originLinkId, j.destinationLinkId, i.requestTime);
 		TravelSegment jd = network.getSegment(j.destinationLinkId, i.destinationLinkId, i.requestTime);
 
-        if (!oo.isReachable() || !oj.isReachable() || !jd.isReachable()) return null;
+		if (!oj.isReachable() || !jd.isReachable())
+			return null;
 
-        // Second temporal constraint for LIFO using actual network travel time
-        if (i.getLatestDeparture() + oo.getTravelTime() < j.getEarliestDeparture()) return null;
-        if (i.getEarliestDeparture() + oo.getTravelTime() > j.getLatestDeparture()) return null;
+		// Temporal constraints already checked by caller
 
         double pttI = oo.getTravelTime() + oj.getTravelTime() + jd.getTravelTime();
         double pttJ = oj.getTravelTime();
@@ -225,6 +320,17 @@ public final class PairGenerator {
             .startTime(i.getRequestTime())
             .build();
     }
+
+	/**
+	 * Legacy method - calls optimized version with fetched segment.
+	 * Kept for API compatibility.
+	 */
+	private Ride tryLifo(DrtRequest i, DrtRequest j, int index) {
+		TravelSegment oo = network.getSegment(i.originLinkId, j.originLinkId, i.requestTime);
+		if (!oo.isReachable())
+			return null;
+		return tryLifoWithSegment(i, j, oo, index);
+	}
 
     private double[] optimizeDelays(double[] delays, double[] maxNeg, double[] maxPos) {
         // Check initial feasibility

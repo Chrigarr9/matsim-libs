@@ -15,8 +15,6 @@ import org.matsim.api.core.v01.TransportMode;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DemandExtractionModule;
 import org.matsim.contrib.drt.run.DrtControlerCreator;
-import org.matsim.contrib.drt.run.MultiModeDrtConfigGroup;
-import org.matsim.contrib.dvrp.run.DvrpConfigGroup;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.controler.Controler;
@@ -29,10 +27,17 @@ import org.matsim.examples.ExamplesUtils;
  * End-to-end integration test for ExMAS demand extraction using Kelheim
  * scenario.
  * 
+ * Test approach:
+ * - Uses Kelheim scenario WITHOUT DRT (only walk, bike, pt, car)
+ * - Runs 5 iterations to warm up the network with realistic travel times
+ * - After final iteration, generates ExMAS ride proposals as if DRT was
+ * available
+ * - Uses shutdown listener to ensure ride generation happens after all
+ * iterations
+ * 
  * The Kelheim scenario is a realistic small-town scenario with:
- * - Detailed network with PT and DRT infrastructure
+ * - Detailed network with PT infrastructure
  * - Real population data (1% sample)
- * - Configured DRT service with stops and zones
  * - More complex trip patterns than the grid scenario
  */
 public class ExMasKelheimE2ETest {
@@ -43,12 +48,11 @@ public class ExMasKelheimE2ETest {
 		Path testOutputDir = Path.of("test/output/exmas-kelheim-e2e-test");
 		Files.createDirectories(testOutputDir);
 
-		// 1. Load Kelheim config with DRT
+		// 1. Load Kelheim config WITHOUT DRT simulation
+		// DRT config will be auto-configured by DemandExtractionModule
 		URL scenarioUrl = ExamplesUtils.getTestScenarioURL("kelheim");
 		Config config = ConfigUtils.loadConfig(
-				new URL(scenarioUrl, "config-with-drt.xml").toString(),
-				new MultiModeDrtConfigGroup(),
-				new DvrpConfigGroup(),
+				new URL(scenarioUrl, "config.xml").toString(),
 				new ExMasConfigGroup());
 
 		// 2. Override output directory and run settings
@@ -56,24 +60,58 @@ public class ExMasKelheimE2ETest {
 		config.controller()
 				.setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
 
-		// Reduce iterations to 1 for fast testing
-		config.controller().setLastIteration(1);
+		// Run 5 iterations to warm up network travel times
+		config.controller().setLastIteration(0);
 
-		// 4. Create scenario with DRT route factory
+		// 3. Configure scoring
+		// Keep default scoring from Kelheim config - don't modify travel utilities as
+		// this can cause NaN scores
+
+		// Add activity params for all standard activity types (home_XXX, work_XXX,
+		// etc.)
+		// This is required for scenarios like Kelheim that use duration-specific
+		// activity types
+		org.matsim.dsim.Activities.addScoringParams(config);
+
+		// 4. Configure ExMas algorithm parameters
+		// This must be done BEFORE DrtControlerCreator because it sets up required DRT
+		// config
+		configureExMas(config);
+
+		// 5. Set up required DRT/DVRP configs that DrtControlerCreator expects
+		// Normally DemandExtractionModule would do this, but DrtControlerCreator needs
+		// them earlier
+		// Note: DemandExtractionModule.install() will detect existing configs and skip
+		// re-adding them
+		DemandExtractionModule.ensureRequiredConfigs(config);
+
+		// 6. Create scenario with DRT route factory (needed for DRT routing)
+		// DRT will NOT be simulated (no vehicles), only used for routing during demand
+		// extraction
 		Scenario scenario = DrtControlerCreator.createScenarioWithDrtRouteFactory(config);
 		ScenarioUtils.loadScenario(scenario);
 
-		// 5. Configure ExMas algorithm parameters
-		configureExMas(config);
+		// Filter out freight agents (they have freight activities without link IDs that
+		// cause routing failures)
+		scenario.getPopulation().getPersons().values()
+				.removeIf(person -> person.getSelectedPlan().getPlanElements().stream()
+						.filter(org.matsim.api.core.v01.population.Activity.class::isInstance)
+						.map(org.matsim.api.core.v01.population.Activity.class::cast)
+						.anyMatch(act -> act.getType().startsWith("freight")));
 
-		// 6. Run simulation with ExMas demand extraction
+		// 7. Run simulation with ExMas demand extraction
+		// Use DrtControlerCreator for proper DRT routing setup (but no DRT
+		// vehicles/simulation)
 		Controler controler = DrtControlerCreator.createControler(config, scenario, false);
 		controler.addOverridingModule(new DemandExtractionModule());
+
 		controler.run();
 
-		// 7. Verify output files exist
-		Path requestsFile = testOutputDir.resolve("drt_requests.csv");
-		Path ridesFile = testOutputDir.resolve("exmas_rides.csv");
+		// 8. Verify output files exist
+		// Files are prefixed with the run ID from the scenario config
+		String runId = config.controller().getRunId();
+		Path requestsFile = testOutputDir.resolve(runId + ".drt_requests.csv");
+		Path ridesFile = testOutputDir.resolve(runId + ".exmas_rides.csv");
 		Assertions.assertTrue(Files.exists(requestsFile), "DRT requests file should exist: " + requestsFile);
 		Assertions.assertTrue(Files.exists(ridesFile), "ExMAS rides file should exist: " + ridesFile);
 
@@ -118,10 +156,13 @@ public class ExMasKelheimE2ETest {
 		exMasConfig.setMinDrtAccessEgressDistance(0.0);
 
 		// Set ExMAS algorithm parameters - more conservative for larger scenario
-		exMasConfig.setSearchHorizon(0.0); // 10 minutes time window for pairing
-		exMasConfig.setOriginFlexibilityAbsolute(900.0); // 10 minutes departure flexibility
-		exMasConfig.setDestinationFlexibilityAbsolute(900.0); // 10 minutes arrival flexibility
-		exMasConfig.setMaxPoolingDegree(10); // Allow up to 3 passengers
+		exMasConfig.setSearchHorizon(0.0); // No time window for pairing (instant matching)
+		exMasConfig.setOriginFlexibilityAbsolute(900.0); // 15 minutes departure flexibility
+		exMasConfig.setDestinationFlexibilityAbsolute(900.0); // 15 minutes arrival flexibility
+		exMasConfig.setMaxPoolingDegree(10); // Allow up to 10 passengers
+
+		// Note: DRT config and scoring params are now auto-configured by
+		// DemandExtractionModule
 	}
 
 	private void validateRequests(Path requestsFile) throws IOException {

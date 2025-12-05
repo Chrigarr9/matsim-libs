@@ -1,5 +1,7 @@
 package org.matsim.contrib.demand_extraction.demand;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Population;
@@ -28,6 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Singleton
 public class ChainIdentifier {
+	private static final Logger log = LogManager.getLogger(ChainIdentifier.class);
 
     private final ExMasConfigGroup exMasConfig;
     private final ModeRoutingCache modeRoutingCache;
@@ -50,6 +53,9 @@ public class ChainIdentifier {
      * Must be called AFTER ModeRoutingCache.cacheModes() so we know the best baseline mode for each trip.
      */
     public void identifyChains(Population population) {
+		log.info("Identifying trip chains for {} persons...", population.getPersons().size());
+		long startTime = System.currentTimeMillis();
+
         population.getPersons().values().parallelStream().forEach(person -> {
             Map<Integer, String> personGroupIds = new HashMap<>();
             
@@ -100,6 +106,11 @@ public class ChainIdentifier {
 
             tripToGroupId.put(person.getId(), personGroupIds);
         });
+
+		long elapsed = System.currentTimeMillis() - startTime;
+		double seconds = elapsed / 1000.0;
+		log.info("Chain identification complete: {} persons processed in {}s",
+				population.getPersons().size(), String.format("%.1f", seconds));
     }
 
     /**

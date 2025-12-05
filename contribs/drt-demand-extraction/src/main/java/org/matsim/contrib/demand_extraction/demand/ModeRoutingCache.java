@@ -6,7 +6,10 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.network.Network;
@@ -34,6 +37,7 @@ import com.google.inject.Singleton;
 
 @Singleton
 public class ModeRoutingCache {
+	private static final Logger log = LogManager.getLogger(ModeRoutingCache.class);
 
     private final Provider<TripRouter> tripRouterProvider;
     private final ExMasConfigGroup exMasConfig;
@@ -64,6 +68,14 @@ public class ModeRoutingCache {
     }
 
     public void cacheModes(Population population) {
+		log.info("Starting mode caching for {} persons...", population.getPersons().size());
+		long startTime = System.currentTimeMillis();
+
+		// Thread-safe progress tracking
+		AtomicInteger processedPersons = new AtomicInteger(0);
+		int totalPersons = population.getPersons().size();
+		int logInterval = Math.max(1, totalPersons / 10); // Log every 10%
+
         population.getPersons().values().parallelStream().forEach(person -> {
             TripRouter tripRouter = tripRouterProvider.get();
             Map<Integer, Map<String, ModeAttributes>> personCache = new ConcurrentHashMap<>();
@@ -174,7 +186,19 @@ public class ModeRoutingCache {
 			if (!personBestModes.isEmpty()) {
 				bestBaselineModes.put(person.getId(), personBestModes);
 			}
+
+			// Progress logging
+			int processed = processedPersons.incrementAndGet();
+			if (processed % logInterval == 0 || processed == totalPersons) {
+				double percent = (processed * 100.0) / totalPersons;
+				log.info("  Mode caching progress: {}/{} ({}%)", processed, totalPersons,
+						String.format("%.1f", percent));
+			}
         });
+
+		long elapsed = System.currentTimeMillis() - startTime;
+		double seconds = elapsed / 1000.0;
+		log.info("Mode caching complete: {} persons processed in {}s", totalPersons, String.format("%.1f", seconds));
     }
 
 

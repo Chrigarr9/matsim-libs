@@ -6,6 +6,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
@@ -24,6 +26,8 @@ import it.unimi.dsi.fastutil.ints.IntSet;
  * Python reference: extensions.py lines 13-194
  */
 public final class RideExtender {
+	private static final Logger log = LogManager.getLogger(RideExtender.class);
+
     private final MatsimNetworkCache network;
     private final ShareabilityGraph graph;
     private final BudgetValidator budgetValidator;
@@ -44,13 +48,29 @@ public final class RideExtender {
     }
 
     public List<Ride> extendRides(List<Ride> ridesToExtend, DrtRequest[] drtRequests, int nextRideIndex) {
+		int targetDegree = ridesToExtend.isEmpty() ? 0 : ridesToExtend.get(0).getDegree() + 1;
+		log.info("Extending {} rides from degree {} to {}...",
+				ridesToExtend.size(), targetDegree - 1, targetDegree);
+		long startTime = System.currentTimeMillis();
+
         List<Ride> extended = new ArrayList<>();
         int rideIndex = nextRideIndex;
 
+		int processed = 0;
+		int total = ridesToExtend.size();
+		int logInterval = Math.max(1, total / 10);
+		int candidatesFound = 0;
+		int extensionAttempts = 0;
+		int duplicatePersons = 0;
+		int missingPairs = 0;
+
         for (Ride ride : ridesToExtend) {
+			processed++;
             IntSet commonNeighbors = graph.findCommonNeighbors(ride.getRequestIndices());
 
             for (int candidateReq : commonNeighbors) {
+				candidatesFound++;
+
                 // Check that candidate request has different personId from all existing passengers
                 DrtRequest newRequest = requestMap.get(candidateReq);
                 boolean duplicatePerson = false;
@@ -61,11 +81,18 @@ public final class RideExtender {
                         break;
                     }
                 }
-                if (duplicatePerson) continue;
+				if (duplicatePerson) {
+					duplicatePersons++;
+					continue;
+				}
 
                 int[] pairRides = getPairRides(ride.getRequestIndices(), candidateReq);
-                if (pairRides == null) continue;
+				if (pairRides == null) {
+					missingPairs++;
+					continue;
+				}
 
+				extensionAttempts++;
                 Ride ext = tryExtend(ride, candidateReq, pairRides, rideIndex);
                 if (ext != null) {
                     // Validate budgets before adding
@@ -76,7 +103,22 @@ public final class RideExtender {
                     }
                 }
             }
-        }
+
+			// Progress logging
+			if (processed % logInterval == 0 || processed == total) {
+				double percent = (processed * 100.0) / total;
+				log.info("  Extension progress: {}/{} ({}%) - {} extended rides",
+						processed, total, String.format("%.1f", percent), extended.size());
+			}
+		}
+
+		long elapsed = System.currentTimeMillis() - startTime;
+		double seconds = elapsed / 1000.0;
+		log.info("Extension complete: {} rides extended to degree {} in {}s",
+				extended.size(), targetDegree, String.format("%.1f", seconds));
+		log.info("  Statistics: {} candidates, {} attempts, {} duplicate persons, {} missing pairs",
+				candidatesFound, extensionAttempts, duplicatePersons, missingPairs);
+
         return extended;
     }
 

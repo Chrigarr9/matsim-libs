@@ -32,14 +32,18 @@ import org.matsim.examples.ExamplesUtils;
 /**
  * End-to-end integration test for ExMas demand extraction.
  * 
- * Test scenario:
+ * Test approach:
  * - Uses the dvrp-grid network from MATSim examples (11x11 grid, 200m spacing)
  * - Creates test population with various person attributes (license, car
  * availability)
  * - Includes subtour structures (Home-Work-Home, Work-Lunch-Work)
- * - Runs one iteration to generate network travel times
+ * - Runs WITH DRT in the config for a simple 1-iteration test
+ * - Uses shutdown listener to generate ExMAS rides after simulation completes
  * - Verifies DRT requests are generated correctly with proper budgets and
  * grouping
+ * 
+ * Note: For a more realistic test without DRT in the simulation, see
+ * ExMasKelheimE2ETest.
  */
 public class ExMasDemandExtractionE2ETest {
 

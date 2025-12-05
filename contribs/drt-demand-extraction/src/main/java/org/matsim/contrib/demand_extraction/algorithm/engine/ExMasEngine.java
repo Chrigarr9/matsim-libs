@@ -50,51 +50,95 @@ public final class ExMasEngine {
      * @return list of all feasible rides (single, pairs, and extensions up to maxDegree)
      */
     public List<Ride> run(List<DrtRequest> drtRequests) {
+		log.info("======================================================================");
+		log.info("Starting ExMAS algorithm");
+		log.info("  Requests: {}", drtRequests.size());
+		log.info("  Horizon: {}s", horizon);
+		log.info("  Max degree: {}", maxDegree);
+		log.info("======================================================================");
+		long algorithmStartTime = System.currentTimeMillis();
+
         this.requests = drtRequests;
         this.allRides = new ArrayList<>();
         
         DrtRequest[] reqArray = drtRequests.toArray(new DrtRequest[0]);
 
 		// Phase 1: Generate single rides with budget validation
-		log.info("Generating single rides...");
+		log.info("");
+		log.info("PHASE 1: Single Ride Generation");
+		log.info("======================================================================");
 		SingleRideGenerator singleGen = new SingleRideGenerator(network, budgetValidator);
         List<Ride> singleRides = singleGen.generate(drtRequests);
-        allRides.addAll(singleRides);
-		log.info("  Single rides: {}", singleRides.size());
+		allRides.addAll(singleRides);
 
         // Phase 2: Generate pair rides with budget validation
-		log.info("Generating pair rides...");
+		log.info("");
+		log.info("PHASE 2: Pair Ride Generation");
+		log.info("======================================================================");
         PairGenerator pairGen = new PairGenerator(network, budgetValidator, horizon);
         List<Ride> pairRides = pairGen.generatePairs(reqArray);
-        allRides.addAll(pairRides);
-		log.info("  Pair rides: {}", pairRides.size());
+		allRides.addAll(pairRides);
 
         if (maxDegree <= 2) {
+			long totalElapsed = System.currentTimeMillis() - algorithmStartTime;
+			double totalSeconds = totalElapsed / 1000.0;
+			log.info("");
+			log.info("======================================================================");
+			log.info("ExMAS Algorithm Complete");
+			log.info("  Total rides: {}", allRides.size());
+			log.info("  Total time: {}s", String.format("%.1f", totalSeconds));
+			log.info("======================================================================");
+			
+			// Log network routing statistics
+			log.info("");
+			network.logRoutingStatistics();
+			
             return allRides;
         }
 
         // Phase 3: Build sharability graph from pairs
-		log.info("Building sharability graph...");
+		log.info("");
+		log.info("PHASE 3: Building Shareability Graph");
+		log.info("======================================================================");
+		long graphStartTime = System.currentTimeMillis();
         graph = buildGraph(pairRides);
-		log.info("  Graph: {} edges, {} nodes", graph.getEdgeCount(), graph.getNodeCount());
+		long graphElapsed = System.currentTimeMillis() - graphStartTime;
+		log.info("Graph built: {} edges, {} nodes in {}s",
+				graph.getEdgeCount(), graph.getNodeCount(), String.format("%.1f", graphElapsed / 1000.0));
 
         // Phase 4: Iteratively extend rides with budget validation
+		log.info("");
+		log.info("PHASE 4: Iterative Ride Extension");
+		log.info("======================================================================");
         List<Ride> currentDegreeRides = pairRides;
-        for (int degree = 2; degree < maxDegree; degree++) {
-			log.info("Extending to degree {}...", (degree + 1));
+		for (int degree = 2; degree < maxDegree; degree++) {
             RideExtender extender = new RideExtender(network, graph, budgetValidator,
                                                      requests, allRides);
             List<Ride> extended = extender.extendRides(currentDegreeRides, reqArray, allRides.size());
 
             if (extended.isEmpty()) {
-				log.info("  No more extensions possible.");
+				log.info("No extensions possible at degree {}. Stopping.", (degree + 1));
                 break;
             }
 
             allRides.addAll(extended);
-            currentDegreeRides = extended;
-			log.info("  Degree {} rides: {}", (degree + 1), extended.size());
+			currentDegreeRides = extended;
         }
+
+		long totalElapsed = System.currentTimeMillis() - algorithmStartTime;
+		double totalSeconds = totalElapsed / 1000.0;
+		log.info("");
+		log.info("======================================================================");
+		log.info("ExMAS Algorithm Complete");
+		log.info("  Total rides generated: {}", allRides.size());
+		log.info("  Single: {}, Pairs: {}, Higher: {}",
+				singleRides.size(), pairRides.size(), allRides.size() - singleRides.size() - pairRides.size());
+		log.info("  Total execution time: {}s", String.format("%.1f", totalSeconds));
+		log.info("======================================================================");
+		
+		// Log network routing statistics
+		log.info("");
+		network.logRoutingStatistics();
 
         return allRides;
     }

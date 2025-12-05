@@ -6,7 +6,6 @@ import java.util.List;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.network.Link;
-import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.PlanElement;
@@ -16,7 +15,6 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.contrib.drt.routing.DrtRoute;
-import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.core.config.Config;
 import org.matsim.core.population.PopulationUtils;
 import org.matsim.core.population.routes.RouteFactories;
@@ -46,9 +44,7 @@ public class BudgetValidator {
 	private final ScoringFunctionFactory scoringFunctionFactory;
 	private final ScoringParametersForPerson scoringParametersForPerson;
 	private final ExMasConfigGroup exMasConfig;
-	private final Network network;
 	private final double walkSpeed;
-	private final DrtConfigGroup drtConfig;
 	private final Config config;
 	private final Population population;
 	
@@ -57,16 +53,13 @@ public class BudgetValidator {
 			ScoringFunctionFactory scoringFunctionFactory,
 			ScoringParametersForPerson scoringParametersForPerson,
 			ExMasConfigGroup exMasConfig,
-			Network network,
 			Config config,
 			Population population) {
 		this.scoringFunctionFactory = scoringFunctionFactory;
 		this.scoringParametersForPerson = scoringParametersForPerson;
 		this.exMasConfig = exMasConfig;
-		this.network = network;
 		this.population = population;
 		this.config = config;
-		this.drtConfig = org.matsim.contrib.drt.run.DrtConfigGroup.getSingleModeDrtConfig(config);
 		
 		// Get configured walking speed (same logic as ModeRoutingCache)
 		double configuredSpeed = config.routing()
@@ -187,6 +180,14 @@ public class BudgetValidator {
 			double actualTravelTime, double actualDistance,
 			double actualWalkDistanceAccess, double actualWalkDistanceEgress) {
 		
+		// Validate that routing succeeded - if travel time is infinite/NaN, DRT routing
+		// failed
+		if (!Double.isFinite(actualTravelTime) || !Double.isFinite(actualDistance)) {
+			// Return very negative score to indicate this ride is not feasible
+			// TODO log a warning with whhat links are problematic
+			return Double.NEGATIVE_INFINITY;
+		}
+
 		// Create the real persons scoring function
 		Person person = population.getPersons().get(request.personId);
 		ScoringFunction scoringFunction = scoringFunctionFactory.createNewScoringFunction(person);

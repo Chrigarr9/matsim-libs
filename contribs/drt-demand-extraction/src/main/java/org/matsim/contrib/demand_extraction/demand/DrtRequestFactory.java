@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Coord;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
@@ -42,6 +44,7 @@ import com.google.inject.Singleton;
  */
 @Singleton
 public class DrtRequestFactory {
+	private static final Logger log = LogManager.getLogger(DrtRequestFactory.class);
 
 	private final ExMasConfigGroup exmasConfig;
 	private final ModeRoutingCache modeRoutingCache;
@@ -64,9 +67,16 @@ public class DrtRequestFactory {
 	}
 
 	public List<DrtRequest> buildRequests(Population population) {
+		log.info("Building DRT requests from {} persons...", population.getPersons().size());
+		long startTime = System.currentTimeMillis();
 		List<DrtRequest> requests = new ArrayList<>();
 
+		int processedPersons = 0;
+		int totalPersons = population.getPersons().size();
+		int logInterval = Math.max(1, totalPersons / 10);
+
 		for (Person person : population.getPersons().values()) {
+			processedPersons++;
 			Plan plan = person.getSelectedPlan();
 
 			// Get chain/group assignments (trip index -> group ID)
@@ -112,7 +122,19 @@ public class DrtRequestFactory {
 					requests.add(request);
 				}
 			}
+
+			// Progress logging
+			if (processedPersons % logInterval == 0 || processedPersons == totalPersons) {
+				double percent = (processedPersons * 100.0) / totalPersons;
+				log.info("  Request building progress: {}/{} ({}%) - {} requests so far",
+						processedPersons, totalPersons, String.format("%.1f", percent), requests.size());
+			}
 		}
+
+		long elapsed = System.currentTimeMillis() - startTime;
+		double seconds = elapsed / 1000.0;
+		log.info("Request building complete: {} requests from {} persons in {}s",
+				requests.size(), totalPersons, String.format("%.1f", seconds));
 
 		return requests;
 	}

@@ -8,7 +8,10 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.network.Link;
@@ -59,6 +62,8 @@ import com.google.inject.name.Names;
 @Singleton
 public class MatsimNetworkCache {
 	
+	private static final Logger log = LogManager.getLogger(MatsimNetworkCache.class);
+	
 	private final Network network;
 	private final LeastCostPathCalculator router;
 	private final TravelTime travelTime;
@@ -71,6 +76,10 @@ public class MatsimNetworkCache {
 
 	// Cache: (originLinkId, destLinkId, timeBin) -> TravelSegment
 	private final ConcurrentHashMap<CacheKey, TravelSegment> cache = new ConcurrentHashMap<>();
+	
+	// Track routing failures for summary logging (thread-safe)
+	private final AtomicInteger routingFailures = new AtomicInteger(0);
+	private final AtomicInteger totalRoutingAttempts = new AtomicInteger(0);
 	
 	@Inject
 	public MatsimNetworkCache(
@@ -241,6 +250,53 @@ public class MatsimNetworkCache {
 	}
 	
 	/**
+	 * Get routing statistics.
+	 * @return array [totalAttempts, failures, successRate]
+	 */
+	public int[] getRoutingStatistics() {
+		int total = totalRoutingAttempts.get();
+		int failures = routingFailures.get();
+		return new int[]{total, failures};
+	}
+	
+	/**
+	 * Log routing statistics summary.
+	 * Call this after demand extraction to get an overview of routing success/failure rates.
+	 */
+	public void logRoutingStatistics() {
+		int total = totalRoutingAttempts.get();
+		int failures = routingFailures.get();
+		
+		if (total == 0) {
+			log.info("Network cache: No routing attempts made");
+			return;
+		}
+		
+		double failureRate = (100.0 * failures) / total;
+		double successRate = 100.0 - failureRate;
+		
+		log.info(String.format("Network cache statistics:"));
+		log.info(String.format("  Total routing attempts: %,d", total));
+		log.info(String.format("  Successful routes: %,d (%.1f%%)", total - failures, successRate));
+		log.info(String.format("  Failed routes: %,d (%.1f%%)", failures, failureRate));
+		log.info(String.format("  Cache size: %,d entries", cache.size()));
+		
+		if (failureRate > 10.0) {
+			log.warn(String.format("High routing failure rate (%.1f%%). This may indicate network connectivity issues.", failureRate));
+			log.warn("Consider running NetworkUtils.cleanNetwork() or checking network mode assignments.");
+		}
+	}
+	
+	/**
+	 * Reset routing statistics counters.
+	 * Useful when reusing the cache across multiple iterations.
+	 */
+	public void resetStatistics() {
+		totalRoutingAttempts.set(0);
+		routingFailures.set(0);
+	}
+	
+	/**
 	 * Simple pair class for O-D connections.
 	 */
 	public static class Pair<A, B> {
@@ -257,11 +313,14 @@ public class MatsimNetworkCache {
 	}
 	
 	private TravelSegment computeSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
+		totalRoutingAttempts.incrementAndGet();
+		
 		Link originLink = network.getLinks().get(originLinkId);
 		Link destLink = network.getLinks().get(destLinkId);
 		
 		if (originLink == null || destLink == null) {
 			// Links don't exist in network
+			routingFailures.incrementAndGet();
 			return createInfinitySegment();
 		}
 		
@@ -287,7 +346,8 @@ public class MatsimNetworkCache {
 				dummyPerson,
 				dummyVehicle);
 		if (path == null || path.links.isEmpty()) {
-				// No path found
+				// No path found - track failure
+				routingFailures.incrementAndGet();
 				return createInfinitySegment();
 			}
 			
@@ -305,7 +365,8 @@ public class MatsimNetworkCache {
 			return new TravelSegment(tt, dist, utility);
 			
 		} catch (Exception e) {
-			// Routing failed
+			// Routing failed - track failure
+			routingFailures.incrementAndGet();
 			return createInfinitySegment();
 		}
 	}
