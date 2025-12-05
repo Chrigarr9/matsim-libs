@@ -1,10 +1,13 @@
 package org.matsim.contrib.demand_extraction.demand;
 
 import org.matsim.api.core.v01.TransportMode;
+import org.matsim.api.core.v01.population.Person;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.core.config.Config;
-import org.matsim.core.config.groups.ScoringConfigGroup;
+import org.matsim.core.scoring.functions.ModeUtilityParameters;
+import org.matsim.core.scoring.functions.ScoringParameters;
+import org.matsim.core.scoring.functions.ScoringParametersForPerson;
 
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
@@ -25,44 +28,32 @@ import com.google.inject.Singleton;
 public class BudgetToConstraintsCalculator {
 	
 	private final Config config;
-	private final ScoringConfigGroup scoringConfig;
 	private final ExMasConfigGroup exMasConfig;
 	private final DrtConfigGroup drtConfig;
+	private final ScoringParametersForPerson scoringParametersForPerson;
 	
-	// Scoring parameters for DRT mode
-	private final double marginalUtilityOfTraveling_s;
-	private final double marginalUtilityOfDistance_m;
-	private final double marginalUtilityOfMoney;
-	private final double monetaryDistanceCostRate;
-	private final double marginalUtilityOfWaiting_s;
-	
-	// DRT fare parameters
+	// DRT fare parameters (not person-specific)
 	private final double baseFare;
 	private final double timeFare_h;
 	private final double distanceFare_m;
 	private final double minFarePerTrip;
 	
 	@Inject
-
-	public BudgetToConstraintsCalculator(Config config, ExMasConfigGroup exMasConfig) {
+	public BudgetToConstraintsCalculator(
+			Config config,
+			ExMasConfigGroup exMasConfig,
+			ScoringParametersForPerson scoringParametersForPerson) {
 		this.config = config;
-		this.scoringConfig = config.scoring();
 		this.exMasConfig = exMasConfig;
 		this.drtConfig = DrtConfigGroup.getSingleModeDrtConfig(config);
+		this.scoringParametersForPerson = scoringParametersForPerson;
 		
-		// Get DRT mode scoring parameters
-		ScoringConfigGroup.ModeParams drtParams = scoringConfig.getModes().get(exMasConfig.getDrtMode());
-		if (drtParams == null) {
+		// Verify DRT mode is configured in scoring
+		if (!config.scoring().getModes().containsKey(exMasConfig.getDrtMode())) {
 			throw new IllegalStateException("No scoring parameters configured for DRT mode: " + exMasConfig.getDrtMode());
 		}
-		//C: do these need to be personalized per agent/person??
-		this.marginalUtilityOfTraveling_s = drtParams.getMarginalUtilityOfTraveling() / 3600.0; // per second
-		this.marginalUtilityOfDistance_m = drtParams.getMarginalUtilityOfDistance(); // per meter
-		this.marginalUtilityOfMoney = scoringConfig.getMarginalUtilityOfMoney();
-		this.monetaryDistanceCostRate = drtParams.getMonetaryDistanceRate();
-		this.marginalUtilityOfWaiting_s = scoringConfig.getMarginalUtlOfWaiting_utils_hr() / 3600.0; // per second
 		
-		// Get DRT fare parameters
+		// Get DRT fare parameters (these are not person-specific)
 		var drtFareParams = drtConfig.getDrtFareParams().orElse(null);
 		if (drtFareParams != null) {
 			this.baseFare = drtFareParams.getBaseFare();
@@ -79,33 +70,47 @@ public class BudgetToConstraintsCalculator {
 	}
 	
 	/**
-	 * Calculate maximum acceptable detour time from remaining budget.
+	 * Calculate maximum acceptable detour time from remaining budget using
+	 * person-specific parameters.
 	 * 
 	 * Detour increases:
 	 * - Travel time disutility: marginalUtilityOfTraveling_s * detourTime
-	 * - Distance disutility: marginalUtilityOfDistance_m * extraDistance (approximated)
+	 * - Distance disutility: marginalUtilityOfDistance_m * extraDistance
+	 * (approximated)
 	 * - Fare: distanceFare_m * extraDistance + timeFare_h * detourTime
 	 * 
-	 * @param budget remaining utility budget (utils)
+	 * @param budget           remaining utility budget (utils)
+	 * @param person           the person for whom to calculate (used for
+	 *                         person-specific scoring)
 	 * @param directTravelTime direct travel time (seconds)
-	 * @param directDistance direct distance (meters)
-	 * @return maximum detour time in seconds, or Double.POSITIVE_INFINITY if unconstrained
+	 * @param directDistance   direct distance (meters)
+	 * @return maximum detour time in seconds, or Double.POSITIVE_INFINITY if
+	 *         unconstrained
 	 */
-	public double budgetToMaxDetourTime(double budget, double directTravelTime, double directDistance) {
+	public double budgetToMaxDetourTime(double budget, Person person, double directTravelTime, double directDistance) {
 		if (budget <= 0) {
 			return 0.0; // No budget for detours
 		}
 		
+		// Get person-specific scoring parameters
+		ScoringParameters params = scoringParametersForPerson.getScoringParameters(person);
+		ModeUtilityParameters drtParams = params.modeParams.get(exMasConfig.getDrtMode());
+		if (drtParams == null) {
+			throw new IllegalStateException("No mode parameters for DRT mode: " + exMasConfig.getDrtMode());
+		}
+
+		// Person-specific parameters (per second)
+		double marginalUtilityOfTraveling_s = drtParams.marginalUtilityOfTraveling_s;
+		double marginalUtilityOfDistance_m = drtParams.marginalUtilityOfDistance_m;
+		double marginalUtilityOfMoney = params.marginalUtilityOfMoney;
+		double monetaryDistanceCostRate = drtParams.monetaryDistanceCostRate;
+
 		// Approximate: detour distance ≈ detour time * (directDistance / directTravelTime)
 		// Assume detour maintains similar speed as direct route
 		double speedMps = directDistance / directTravelTime; // meters per second
 		
 		// Total marginal disutility per second of detour:
-		// = travel time disutility + distance disutility + fare
-		// C: are there person specific scoring poarams in MATSim? Maybe not in the default but defuinetly in more advaed scoring systems.
-		// This means that we have to use the person specific Utilities. Maybe using the scoring function factory r similar?
-		// example: rich people do not care so much over hicg prices. Thats the whole point of Agent based simulations
-		// this also goes for all the other scoring instances we use.
+		// = travel time disutility + distance disutility + fare + monetary cost
 		double travelDisutilityPerSecond = marginalUtilityOfTraveling_s;
 		double distanceDisutilityPerSecond = marginalUtilityOfDistance_m * speedMps;
 		double fareDisutilityPerSecond = (distanceFare_m * speedMps + timeFare_h / 3600.0) * marginalUtilityOfMoney;
@@ -127,20 +132,27 @@ public class BudgetToConstraintsCalculator {
 	}
 	
 	/**
-	 * Calculate maximum acceptable waiting time (departure delay) from budget.
+	 * Calculate maximum acceptable waiting time (departure delay) from budget using
+	 * person-specific parameters.
 	 * 
 	 * Waiting time is scored using marginalUtilityOfWaiting parameter.
 	 * In MATSim DRT, stop duration (pickup/dropoff time) is included in the route's
 	 * travel time and thus scored as travel time, not waiting time.
 	 * 
 	 * @param budget remaining utility budget (utils)
+	 * @param person the person for whom to calculate (used for person-specific
+	 *               scoring)
 	 * @return maximum waiting time in seconds
 	 */
-	public double budgetToMaxWaitingTime(double budget) {
+	public double budgetToMaxWaitingTime(double budget, Person person) {
 		if (budget <= 0) {
 			return 0.0;
 		}
 		
+		// Get person-specific waiting time utility
+		ScoringParameters params = scoringParametersForPerson.getScoringParameters(person);
+		double marginalUtilityOfWaiting_s = params.marginalUtilityOfWaitingPt_s;
+
 		// Use marginalUtilityOfWaiting for waiting time (departure delay before pickup)
 		if (marginalUtilityOfWaiting_s >= 0) {
 			return Double.POSITIVE_INFINITY; // Positive utility for waiting (unusual)
@@ -150,18 +162,22 @@ public class BudgetToConstraintsCalculator {
 	}
 	
 	/**
-	 * Calculate maximum acceptable access/egress walk distance from budget.
+	 * Calculate maximum acceptable access/egress walk distance from budget using
+	 * person-specific parameters.
 	 * 
 	 * @param budget remaining utility budget (utils)
+	 * @param person the person for whom to calculate (used for person-specific
+	 *               scoring)
 	 * @return maximum walk distance in meters
 	 */
-	public double budgetToMaxWalkDistance(double budget) {
+	public double budgetToMaxWalkDistance(double budget, Person person) {
 		if (budget <= 0) {
 			return exMasConfig.getMinDrtAccessEgressDistance();
 		}
 		
-		// Get walk mode parameters
-		ScoringConfigGroup.ModeParams walkParams = scoringConfig.getModes().get(TransportMode.walk);
+		// Get person-specific walk parameters
+		ScoringParameters params = scoringParametersForPerson.getScoringParameters(person);
+		ModeUtilityParameters walkParams = params.modeParams.get(TransportMode.walk);
 		if (walkParams == null) {
 			// No walk configured, use minimum
 			return exMasConfig.getMinDrtAccessEgressDistance();
@@ -172,8 +188,8 @@ public class BudgetToConstraintsCalculator {
 			walkSpeed = 0.833333333; // 3 km/h default
 		}
 		
-		double walkMarginalUtilityTraveling_s = walkParams.getMarginalUtilityOfTraveling() / 3600.0;
-		double walkMarginalUtilityDistance_m = walkParams.getMarginalUtilityOfDistance();
+		double walkMarginalUtilityTraveling_s = walkParams.marginalUtilityOfTraveling_s;
+		double walkMarginalUtilityDistance_m = walkParams.marginalUtilityOfDistance_m;
 		
 		// Disutility per meter of walking:
 		// = time disutility + distance disutility

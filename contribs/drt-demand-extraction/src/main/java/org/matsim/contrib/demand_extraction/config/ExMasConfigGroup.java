@@ -28,6 +28,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// exists
 	private String drtRoutingMode = "car";
 
+	// Network modes allowed for DRT routing (filters links by allowedModes)
+	// If empty/null, all links are used (for ease of use)
+	// Example: Set.of("car") = only links where car is allowed
+	// Set.of("car", "truck") = links where car OR truck allowed
+	// Set.of() or null = all links (no filtering)
+	private Set<String> drtAllowedModes = Set.of("car");
+
 	// Modes that represent private vehicles (create subtour dependencies)
 	// Default: car and bike (modes that need to return to their origin)
 	private Set<String> privateVehicleModes = Set.of("car", "bike");
@@ -107,6 +114,14 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter("drtRoutingMode")
 	public void setDrtRoutingMode(String drtRoutingMode) {
 		this.drtRoutingMode = drtRoutingMode;
+	}
+
+	public Set<String> getDrtAllowedModes() {
+		return drtAllowedModes;
+	}
+
+	public void setDrtAllowedModes(Set<String> drtAllowedModes) {
+		this.drtAllowedModes = drtAllowedModes != null ? drtAllowedModes : Set.of();
 	}
 
 	public Set<String> getPrivateVehicleModes() {
@@ -247,6 +262,8 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
         map.put(DRT_MODE, "The mode name of the DRT service to be optimized. Default: 'drt'.");
 		map.put("drtRoutingMode",
 				"Routing mode to use for DRT when no DRT routing module exists. Typically 'car' for network-based routing. Default: 'car'");
+		map.put("drtAllowedModes",
+				"Network modes allowed for DRT routing (comma-separated). Filters links by allowedModes. Empty = all links allowed. Example: 'car' or 'car,truck'. Default: empty (all links)");
 		map.put("minDrtCostPerKm",
 				"Minimum DRT cost per kilometer for budget calculation (€/km). Represents best possible pricing. Default: 0.0");
 		map.put("minMaxDetourFactor",

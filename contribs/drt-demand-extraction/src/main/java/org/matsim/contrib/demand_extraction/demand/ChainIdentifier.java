@@ -49,20 +49,9 @@ public class ChainIdentifier {
      * Identifies subtour chains and determines grouping based on private vehicle usage.
      * Must be called AFTER ModeRoutingCache.cacheModes() so we know the best baseline mode for each trip.
      */
-    public void identifyChains(Population population, Map<Id<Person>,Map<Integer,Entry<String,Double>>> bestBaselineModes) {
+    public void identifyChains(Population population) {
         population.getPersons().values().parallelStream().forEach(person -> {
             Map<Integer, String> personGroupIds = new HashMap<>();
-            Map<Integer,Entry<String,Double>> personBestModes = bestBaselineModes.get(person.getId());
-            
-            if (personBestModes == null) {
-                // No routing cache available - treat all trips independently
-                List<TripStructureUtils.Trip> trips = TripStructureUtils.getTrips(person.getSelectedPlan());
-                for (int i = 0; i < trips.size(); i++) {
-                    personGroupIds.put(i, person.getId().toString() + "_trip_" + i);
-                }
-                tripToGroupId.put(person.getId(), personGroupIds);
-                return;
-            }
             
             List<TripStructureUtils.Trip> trips = TripStructureUtils.getTrips(person.getSelectedPlan());
 
@@ -82,7 +71,7 @@ public class ChainIdentifier {
             // Determine which subtours use private vehicles based on best baseline modes
             Map<TripStructureUtils.Subtour, Boolean> subtourUsesPrivateVehicle = new HashMap<>();
             for (TripStructureUtils.Subtour subtour : closedSubtours) {
-                boolean usesPrivateVehicle = subtourUsesPrivateVehicle(subtour, personBestModes, person);
+                boolean usesPrivateVehicle = subtourUsesPrivateVehicle(subtour, person);
                 subtourUsesPrivateVehicle.put(subtour, usesPrivateVehicle);
             }
 
@@ -110,7 +99,6 @@ public class ChainIdentifier {
             }
 
             tripToGroupId.put(person.getId(), personGroupIds);
-            tripToBestBaselineMode.put(person.getId(), personBestModes);
         });
     }
 
@@ -136,8 +124,7 @@ public class ChainIdentifier {
      * @param person The person making the trips
      * @return true if the best feasible mode combination for this subtour uses a private vehicle
      */
-    private boolean subtourUsesPrivateVehicle(TripStructureUtils.Subtour subtour, 
-                                               Map<Integer,Entry<String,Double>> personBestModes,
+    private boolean subtourUsesPrivateVehicle(TripStructureUtils.Subtour subtour,
                                                Person person) {
         List<TripStructureUtils.Trip> allTrips = TripStructureUtils.getTrips(person.getSelectedPlan());
         List<Integer> subtourTripIndices = new ArrayList<>();

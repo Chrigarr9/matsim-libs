@@ -27,8 +27,10 @@ import org.matsim.vehicles.VehicleType;
 import org.matsim.vehicles.VehicleUtils;
 
 import com.google.inject.Inject;
+import com.google.inject.Injector;
+import com.google.inject.Key;
 import com.google.inject.Singleton;
-import com.google.inject.name.Named;
+import com.google.inject.name.Names;
 
 
 /**
@@ -73,14 +75,44 @@ public class MatsimNetworkCache {
 	@Inject
 	public MatsimNetworkCache(
 			Network network,
-			LeastCostPathCalculator router,
-			@Named(TransportMode.car) TravelTime travelTime,
-			@Named(TransportMode.car) TravelDisutilityFactory travelDisutilityFactory,
-			ExMasConfigGroup config) {
+			ExMasConfigGroup config,
+			Injector injector) {
+		// Inject DRT-specific components (router, travel time, travel disutility)
+		// These may differ from car mode for:
+		// - Different toll/pricing structures (e.g., DRT exempt from congestion
+		// charges)
+		// - Access to dedicated lanes (e.g., bus lanes, HOV lanes)
+		// - Special routing permissions on restricted roads
+		// Falls back to car mode if DRT-specific components not bound
+
+		String drtMode = config.getDrtMode();
+		String drtRouterName = "direct" + capitalize(drtMode) + "Router";
+
+		// Get DRT-specific router (uses filtered network)
+		this.router = injector.getInstance(Key.get(LeastCostPathCalculator.class, Names.named(drtRouterName)));
+
+		// Try to get DRT-specific TravelTime, fall back to car
+		TravelTime drtTravelTime;
+		try {
+			drtTravelTime = injector.getInstance(Key.get(TravelTime.class, Names.named(drtMode)));
+		} catch (Exception e) {
+			// DRT-specific TravelTime not bound, use car
+			drtTravelTime = injector.getInstance(Key.get(TravelTime.class, Names.named(TransportMode.car)));
+		}
+
+		// Try to get DRT-specific TravelDisutilityFactory, fall back to car
+		TravelDisutilityFactory drtDisutilityFactory;
+		try {
+			drtDisutilityFactory = injector.getInstance(Key.get(TravelDisutilityFactory.class, Names.named(drtMode)));
+		} catch (Exception e) {
+			// DRT-specific TravelDisutility not bound, use car
+			drtDisutilityFactory = injector
+					.getInstance(Key.get(TravelDisutilityFactory.class, Names.named(TransportMode.car)));
+		}
+
 		this.network = network;
-		this.router = router;
-		this.travelTime = travelTime;
-		this.travelDisutility = travelDisutilityFactory.createTravelDisutility(travelTime);
+		this.travelTime = drtTravelTime;
+		this.travelDisutility = drtDisutilityFactory.createTravelDisutility(drtTravelTime);
 		this.timeBinSize = config.getNetworkTimeBinSize();
 
 		// Create dummy person and vehicle for generic routing
@@ -263,7 +295,7 @@ public class MatsimNetworkCache {
 			// path.links already includes all traversed links
 			// Router implementations handle link-to-link travel correctly
 			double tt = path.travelTime;
-			double dist = path.links.stream().mapToDouble(link -> link.getLength()).sum();
+			double dist = path.links.stream().mapToDouble(Link::getLength).sum();
 
 			// Network utility: negative of generalized cost (disutility)
 			// This allows sorting by "best" routes (higher utility = better)
@@ -313,5 +345,12 @@ public class MatsimNetworkCache {
 			result = 31 * result + timeBin;
 			return result;
 		}
+	}
+
+	private static String capitalize(String str) {
+		if (str == null || str.isEmpty()) {
+			return str;
+		}
+		return str.substring(0, 1).toUpperCase() + str.substring(1);
 	}
 }

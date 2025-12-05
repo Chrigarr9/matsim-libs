@@ -61,7 +61,7 @@ public class DemandExtractionListener implements IterationEndsListener {
             modeRoutingCache.cacheModes(population);
 
 			// 2. Identify Chains (hierarchical subtours with private vehicle detection)
-			chainIdentifier.identifyChains(population, modeRoutingCache.getBestBaselineModes());
+			chainIdentifier.identifyChains(population);
 
 			// 3. Calculate Budgets (trip-wise with linking for subtours using private
 			// vehicles)

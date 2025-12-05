@@ -175,11 +175,10 @@ public class DrtRequestFactory {
 		// max_absolute_detour is the smaller of:
 		// 1) Budget-derived detour (how much delay utility budget allows)
 		// 2) Config max factor (policy limit on detour)
-		// Note: This uses aggregate scoring parameters. Person-specific parameters
-		// (if available via subpopulation-specific scoring) would be used automatically
-		// by BudgetValidator's ScoringFunction during validation.
+		// Uses person-specific scoring parameters for accurate budget-to-constraint
+		// conversion
 		double budgetDerivedDetour = budgetToConstraintsCalculator.budgetToMaxDetourTime(
-				budget, drtAttrs.travelTime, drtAttrs.distance);
+				budget, person, drtAttrs.travelTime, drtAttrs.distance);
 		double configMaxDetour = drtAttrs.travelTime * (exmasConfig.getMaxDetourFactor() - 1.0);
 		double maxAbsoluteDetour = Math.min(budgetDerivedDetour, configMaxDetour);
 
@@ -195,26 +194,14 @@ public class DrtRequestFactory {
 		double destFlex = exmasConfig.getDestinationFlexibilityAbsolute()
 				+ (maxAbsoluteDetour * exmasConfig.getDestinationFlexibilityRelative());
 
-		// Time window calculation accounting for walk times:
-		// 1. Activity ends at requestTime (e.g., 10:00)
-		// 2. Person walks accessTime to pickup point (e.g., 1 min)
-		// 3. Earliest pickup = requestTime + accessTime (e.g., 10:01)
-		// 4. With flexibility: can depart originFlex earlier from activity
-		// 5. Latest arrival at destination = pickup + travel + detours + egress walk
-		//
+		// Time window calculation:
 		// earliestDeparture: earliest time DRT vehicle can pick up passenger
-		// latestArrival: latest time passenger can reach destination (activity start)
+		// = requestTime (activity end) - originFlex (can leave earlier)
+		// latestArrival: latest time passenger can arrive at destination
+		// = requestTime + directTravelTime + maxAbsoluteDetour + destFlex
 
-		// Earliest pickup time: person finishes activity, walks to pickup point
-		// Can leave activity early (originFlex) but must still walk
-		double earliestDep = requestTime - originFlex + accessTime;
-
-		// Latest pickup time: person can delay activity end
-		double latestDep = requestTime + originFlex + accessTime;
-
-		// Latest arrival at destination: from latest pickup + travel + egress
-		// Include destFlex for late arrival tolerance at destination activity
-		double latestArr = latestDep + inVehicleTravelTime + egressTime + destFlex;
+		double earliestDep = requestTime - originFlex;
+		double latestArr = requestTime + drtAttrs.travelTime + maxAbsoluteDetour + destFlex;
 
 		// Build final request with calculated budget and time windows
 		return DrtRequest.builder()
@@ -223,7 +210,8 @@ public class DrtRequestFactory {
 				.groupId(groupId)
 				.tripIndex(tripIdx)
 				.budget(budget)
-				.bestModeScore(bestBaselineScore)
+				.bestModeScore(bestBaselineMode.getValue())
+				.bestMode(bestBaselineMode.getKey())
 				.originLinkId(originLinkId)
 				.destinationLinkId(destinationLinkId)
 				.originX(originCoord.getX())

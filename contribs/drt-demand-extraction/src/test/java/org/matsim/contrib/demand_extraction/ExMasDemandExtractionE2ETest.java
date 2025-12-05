@@ -110,6 +110,9 @@ public class ExMasDemandExtractionE2ETest {
 		// This converts monetary costs to utility values
 		scoring.setMarginalUtilityOfMoney(1.0);
 		
+		scoring.setMarginalUtlOfWaitingPt_utils_hr(0.0);
+
+		
 		// Configure car mode monetary constant
 		// Daily monetary constant represents fixed costs (€/day)
 		ScoringConfigGroup.ModeParams carParams = scoring.getOrCreateModeParams(TransportMode.car);

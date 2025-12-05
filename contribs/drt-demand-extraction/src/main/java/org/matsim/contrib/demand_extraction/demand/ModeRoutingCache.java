@@ -1,11 +1,10 @@
 package org.matsim.contrib.demand_extraction.demand;
 
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.Map.Entry;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.matsim.api.core.v01.Id;
@@ -15,11 +14,9 @@ import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.PlanElement;
 import org.matsim.api.core.v01.population.Population;
-import org.matsim.api.core.v01.population.Route;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.core.config.Config;
 import org.matsim.core.population.PersonUtils;
-import org.matsim.core.population.routes.RouteFactories;
 import org.matsim.core.router.TripRouter;
 import org.matsim.core.router.TripStructureUtils;
 import org.matsim.core.scoring.ScoringFunction;
@@ -93,12 +90,12 @@ public class ModeRoutingCache {
 					String routingMode;
 					if (mode.equals(exMasConfig.getDrtMode())) {	
 						// For DRT: check if dedicated DRT routing module exists in TripRouter
-						// C : here bind a NetworkRouter, that only drives on roads where drt is allowed.
-						// Everythinh else is like car router direct link to link
-						if (tripRouter.getRoutingModule("directDrtRouter") != null) {
-							routingMode = mode; // Use DRT-specific routing
+						// Routing module name: "direct{DrtMode}Router" (e.g., "directDrtRouter")
+						String drtRouterName = "direct" + capitalize(mode) + "Router";
+						if (tripRouter.getRoutingModule(drtRouterName) != null) {
+							routingMode = drtRouterName; // Use DRT-specific network-filtered routing
 						} else {
-						routingMode = exMasConfig.getDrtRoutingMode(); // Fallback to configured routing (typically
+							routingMode = exMasConfig.getDrtRoutingMode(); // Fallback to configured routing (typically
 																			// "car")
 						}
 					} else {
@@ -236,14 +233,20 @@ public class ModeRoutingCache {
 
 		// MATSim's monetaryDistanceCostRate is the cost per meter (e.g., EUR/m)
 		// Total cost = distance (m) * rate (EUR/m)
-		// C: add all other trip costs here if needed (e.g., fixed costs, time-based costs)
 		double cost = distance * modeParams.monetaryDistanceCostRate;
 
-		// Add daily monetary constant if this is the first trip of the day for this
-		// mode
-		// Note: In this cache, we calculate each trip independently, so we don't track
-		// whether this is the first trip. The daily constant is properly handled in
-		// the scoring function during actual simulation.
+		// Add per-trip constant (not daily constant)
+		// The per-trip constant is applied to every trip regardless of whether it's the
+		// first trip
+		cost += modeParams.constant;
+
+		// TODO: Add daily monetary constant (dailyMonetaryConstant)
+		// This requires tracking which modes have been used today per person
+		// Should only be added once per mode per day
+		// Implementation would need:
+		// 1. Track per person which modes used today (Map<PersonId, Set<Mode>>)
+		// 2. Add dailyMonetaryConstant only for first trip of day per mode
+		// 3. Update tracking after adding the constant
 
 		return cost;
 	}
@@ -288,5 +291,12 @@ public class ModeRoutingCache {
 
 	public Map<Id<Person>, Map<Integer, Entry<String, Double>>> getBestBaselineModes() {
 		return bestBaselineModes;
+	}
+
+	private static String capitalize(String str) {
+		if (str == null || str.isEmpty()) {
+			return str;
+		}
+		return str.substring(0, 1).toUpperCase() + str.substring(1);
 	}
 }
