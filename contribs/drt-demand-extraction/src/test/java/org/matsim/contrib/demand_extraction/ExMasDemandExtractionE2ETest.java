@@ -5,7 +5,9 @@ import java.io.IOException;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 import org.junit.jupiter.api.Assertions;
@@ -237,8 +239,7 @@ public class ExMasDemandExtractionE2ETest {
 	
 	private void validateRides(Path ridesFile, ExMasConfigGroup exMasConfig) throws IOException {
 		int rideCount = 0;
-		int degree1Rides = 0; // Single passenger rides
-		int degree2Rides = 0; // Two passenger rides
+		Map<Integer, Integer> ridesByDegree = new HashMap<>();
 
 		try (BufferedReader reader = IOUtils.getBufferedReader(ridesFile.toString())) {
 			String header = reader.readLine();
@@ -260,8 +261,7 @@ public class ExMasDemandExtractionE2ETest {
 				Assertions.assertTrue(degree >= 1 && degree <= maxDegree,
 						"Degree should be between 1 and " + maxDegree + " (max pooling degree)");
 				
-				if (degree == 1) degree1Rides++;
-				if (degree == 2) degree2Rides++;
+				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
 				
 				double duration = Double.parseDouble(parts[4]);
 				Assertions.assertTrue(duration >= 0, "Duration should be non-negative");
@@ -275,12 +275,19 @@ public class ExMasDemandExtractionE2ETest {
 
 		// Validate we generated some rides
 		Assertions.assertTrue(rideCount > 0, "Should have generated at least one ride");
-		Assertions.assertTrue(degree1Rides > 0, "Should have generated at least one single-passenger ride");
+		Assertions.assertTrue(ridesByDegree.getOrDefault(1, 0) > 0, "Should have generated at least one single-passenger ride");
 		
 		System.out.println("\n=== Ride Generation Results ===");
 		System.out.println("Total rides: " + rideCount);
-		System.out.println("Single-passenger rides (degree 1): " + degree1Rides);
-		System.out.println("Shared rides (degree 2): " + degree2Rides);
+		System.out.println("Single-passenger rides (degree 1): " + ridesByDegree.getOrDefault(1, 0));
+		int sharedRides = rideCount - ridesByDegree.getOrDefault(1, 0);
+		System.out.println("Shared rides (degree 2+): " + sharedRides);
+		for (int degree = 2; degree <= exMasConfig.getMaxPoolingDegree(); degree++) {
+			int count = ridesByDegree.getOrDefault(degree, 0);
+			if (count > 0) {
+				System.out.println("  - Degree " + degree + ": " + count);
+			}
+		}
 		System.out.println("================================\n");
 	}
 }

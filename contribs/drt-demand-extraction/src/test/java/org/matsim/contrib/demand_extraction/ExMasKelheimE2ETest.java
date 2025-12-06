@@ -5,7 +5,9 @@ import java.io.IOException;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 import org.junit.jupiter.api.Assertions;
@@ -146,7 +148,7 @@ public class ExMasKelheimE2ETest {
 		// Set private vehicle modes
 		Set<String> privateVehicles = new HashSet<>();
 		privateVehicles.add(TransportMode.car);
-		privateVehicles.add("bike");
+		privateVehicles.add(TransportMode.bike);
 		exMasConfig.setPrivateVehicleModes(privateVehicles);
 
 		// Set DRT service quality parameters for budget calculation
@@ -157,8 +159,8 @@ public class ExMasKelheimE2ETest {
 
 		// Set ExMAS algorithm parameters - more conservative for larger scenario
 		exMasConfig.setSearchHorizon(0.0); // No time window for pairing (instant matching)
-		exMasConfig.setOriginFlexibilityAbsolute(900.0); // 15 minutes departure flexibility
-		exMasConfig.setDestinationFlexibilityAbsolute(900.0); // 15 minutes arrival flexibility
+		exMasConfig.setOriginFlexibilityAbsolute(0.0); // 0 minutes departure flexibility
+		exMasConfig.setDestinationFlexibilityAbsolute(0.0); // 15 minutes arrival flexibility
 		exMasConfig.setMaxPoolingDegree(10); // Allow up to 10 passengers
 
 		// Note: DRT config and scoring params are now auto-configured by
@@ -206,9 +208,7 @@ public class ExMasKelheimE2ETest {
 
 	private void validateRides(Path ridesFile, ExMasConfigGroup exMasConfig) throws IOException {
 		int rideCount = 0;
-		int degree1Rides = 0;
-		int degree2Rides = 0;
-		int degree3Rides = 0;
+		Map<Integer, Integer> ridesByDegree = new HashMap<>();
 
 		try (BufferedReader reader = IOUtils.getBufferedReader(ridesFile.toString())) {
 			String header = reader.readLine();
@@ -228,12 +228,7 @@ public class ExMasKelheimE2ETest {
 				Assertions.assertTrue(degree >= 1 && degree <= maxDegree,
 						"Degree should be between 1 and " + maxDegree);
 
-				if (degree == 1)
-					degree1Rides++;
-				if (degree == 2)
-					degree2Rides++;
-				if (degree == 3)
-					degree3Rides++;
+				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
 
 				double duration = Double.parseDouble(parts[4]);
 				Assertions.assertTrue(duration >= 0, "Duration should be non-negative");
@@ -254,13 +249,19 @@ public class ExMasKelheimE2ETest {
 
 		// Validate we generated rides
 		Assertions.assertTrue(rideCount > 0, "Should have generated at least one ride");
-		Assertions.assertTrue(degree1Rides > 0, "Should have generated single-passenger rides");
+		Assertions.assertTrue(ridesByDegree.getOrDefault(1, 0) > 0, "Should have generated single-passenger rides");
 
 		System.out.println("\n=== Ride Generation Results ===");
 		System.out.println("Total rides: " + rideCount);
-		System.out.println("Single-passenger rides (degree 1): " + degree1Rides);
-		System.out.println("Shared rides (degree 2): " + degree2Rides);
-		System.out.println("Shared rides (degree 3): " + degree3Rides);
+		System.out.println("Single-passenger rides (degree 1): " + ridesByDegree.getOrDefault(1, 0));
+		int sharedRides = rideCount - ridesByDegree.getOrDefault(1, 0);
+		System.out.println("Shared rides (degree 2+): " + sharedRides);
+		for (int degree = 2; degree <= exMasConfig.getMaxPoolingDegree(); degree++) {
+			int count = ridesByDegree.getOrDefault(degree, 0);
+			if (count > 0) {
+				System.out.println("  - Degree " + degree + ": " + count);
+			}
+		}
 		System.out.println("================================\n");
 	}
 }

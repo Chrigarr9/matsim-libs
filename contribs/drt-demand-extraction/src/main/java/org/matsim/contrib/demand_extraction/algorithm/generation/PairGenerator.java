@@ -2,7 +2,6 @@ package org.matsim.contrib.demand_extraction.algorithm.generation;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
@@ -35,35 +34,51 @@ public final class PairGenerator {
         this.horizon = horizon;
     }
 
+    /**
+     * Generate pairs with optional parallel processing.
+     * Set useParallel=true for faster generation (non-deterministic order in list but deterministic indices).
+     * Set useParallel=false for fully deterministic behavior.
+     */
     public List<Ride> generatePairs(DrtRequest[] requests) {
+		return generatePairs(requests, false); // Default to sequential for determinism
+	}
+
+	public List<Ride> generatePairs(DrtRequest[] requests, boolean useParallel) {
+		if (useParallel) {
+			return generatePairsParallel(requests);
+		} else {
+			return generatePairsSequential(requests);
+		}
+	}
+
+	/**
+	 * Sequential pair generation - fully deterministic results.
+	 */
+    private List<Ride> generatePairsSequential(DrtRequest[] requests) {
 		log.info("Generating pair rides from {} requests (horizon={}s)...", requests.length, horizon);
 		long startTime = System.currentTimeMillis();
 
 		TimeFilter filter = new TimeFilter(requests);
+		List<Ride> pairs = new ArrayList<>();
+		int rideIndex = requests.length; // Start after single rides
 
-		// Thread-safe collections for parallel processing
-		ConcurrentHashMap<Integer, Ride> pairsMap = new ConcurrentHashMap<>();
-		AtomicInteger rideIndex = new AtomicInteger(requests.length); // Start after single rides
-
-		// Statistics tracking (thread-safe)
-		AtomicInteger totalComparisons = new AtomicInteger(0);
-		AtomicInteger temporalFiltered = new AtomicInteger(0);
-		AtomicInteger samePerson = new AtomicInteger(0);
-		AtomicInteger fifoAttempts = new AtomicInteger(0);
-		AtomicInteger lifoAttempts = new AtomicInteger(0);
-		AtomicInteger fifoCreated = new AtomicInteger(0);
-		AtomicInteger lifoCreated = new AtomicInteger(0);
-		AtomicInteger processedRequests = new AtomicInteger(0);
+		// Statistics tracking
+		int totalComparisons = 0;
+		int temporalFiltered = 0;
+		int samePerson = 0;
+		int fifoAttempts = 0;
+		int lifoAttempts = 0;
+		int fifoCreated = 0;
+		int lifoCreated = 0;
 		int logInterval = Math.max(1, filter.size() / 10);
 
-		// Parallel processing of request pairs
-		IntStream.range(0, filter.size()).parallel().forEach(i -> {
-			// Progress logging (thread-safe)
-			int processed = processedRequests.incrementAndGet();
-			if (processed % logInterval == 0 && processed > 0) {
-				double percent = (processed * 100.0) / filter.size();
+		// Sequential processing to maintain deterministic ride indices
+		for (int i = 0; i < filter.size(); i++) {
+			// Progress logging
+			if ((i + 1) % logInterval == 0 && i > 0) {
+				double percent = ((i + 1) * 100.0) / filter.size();
 				log.info("  Pair generation progress: {}/{} ({}%) - {} pairs found",
-						processed, filter.size(), String.format("%.1f", percent), pairsMap.size());
+						(i + 1), filter.size(), String.format("%.1f", percent), pairs.size());
 			}
 
             DrtRequest reqI = filter.getRequest(i);
@@ -74,11 +89,11 @@ public final class PairGenerator {
 			List<Integer> validCandidates = new ArrayList<>();
 			for (int j : candidates) {
 				DrtRequest reqJ = filter.getRequest(j);
-				totalComparisons.incrementAndGet();
+				totalComparisons++;
 
 				// Quick filter: same person
 				if (reqI.getPaxId().equals(reqJ.getPaxId())) {
-					samePerson.incrementAndGet();
+					samePerson++;
 					continue;
 				}
 
@@ -86,7 +101,7 @@ public final class PairGenerator {
 				// Filter BEFORE any network calls (major performance win)
 				if (reqJ.getLatestDeparture() < reqI.getEarliestDeparture() ||
 						reqJ.getEarliestDeparture() > reqI.getLatestDeparture() + reqI.getTravelTime()) {
-					temporalFiltered.incrementAndGet();
+					temporalFiltered++;
 					continue;
 				}
 
@@ -98,48 +113,44 @@ public final class PairGenerator {
 				DrtRequest reqJ = filter.getRequest(j);
 
 				// Pre-fetch common segment (Oi -> Oj) used by both FIFO and LIFO
-				// Python does bulk merge_data() at lines 118-119, we do it per-pair
+				// Reusing this segment is a major optimization
 				TravelSegment oo = network.getSegment(reqI.originLinkId, reqJ.originLinkId, reqI.requestTime);
 				if (!oo.isReachable())
 					continue; // Both FIFO and LIFO need this
 
 				// Second temporal constraint with actual travel time (Python rides.py:120-122)
-				// Python: query '(latest_departure_i + travel_time_oo >= earliest_departure_j)'
 				if (reqI.getLatestDeparture() + oo.getTravelTime() < reqJ.getEarliestDeparture())
 					continue;
 				if (reqI.getEarliestDeparture() + oo.getTravelTime() > reqJ.getLatestDeparture())
 					continue;
 
                 // Try FIFO: Oi -> Oj -> Di -> Dj
-				fifoAttempts.incrementAndGet();
-				Ride fifo = tryFifoWithSegment(reqI, reqJ, oo, rideIndex.get());
+				fifoAttempts++;
+				Ride fifo = tryFifoWithSegment(reqI, reqJ, oo, rideIndex);
                 if (fifo != null) {
                     // Validate budgets before adding
                     Ride validated = budgetValidator.validateAndPopulateBudgets(fifo, requests);
                     if (validated != null) {
-						int idx = rideIndex.getAndIncrement();
-						pairsMap.put(idx, validated);
-						fifoCreated.incrementAndGet();
+						pairs.add(validated);
+						rideIndex++;
+						fifoCreated++;
                     }
                 }
 
                 // Try LIFO: Oi -> Oj -> Dj -> Di
-				lifoAttempts.incrementAndGet();
-				Ride lifo = tryLifoWithSegment(reqI, reqJ, oo, rideIndex.get());
+				lifoAttempts++;
+				Ride lifo = tryLifoWithSegment(reqI, reqJ, oo, rideIndex);
                 if (lifo != null) {
                     // Validate budgets before adding
                     Ride validated = budgetValidator.validateAndPopulateBudgets(lifo, requests);
                     if (validated != null) {
-						int idx = rideIndex.getAndIncrement();
-						pairsMap.put(idx, validated);
-						lifoCreated.incrementAndGet();
+						pairs.add(validated);
+						rideIndex++;
+						lifoCreated++;
 					}
 				}
 			}
-		});
-
-		// Convert map to list
-		List<Ride> pairs = new ArrayList<>(pairsMap.values());
+		}
 
 		long elapsed = System.currentTimeMillis() - startTime;
 		double seconds = elapsed / 1000.0;
@@ -147,12 +158,172 @@ public final class PairGenerator {
 		log.info("Pair generation complete: {} pairs from {} requests in {}s ({} pairs/s)",
 				pairs.size(), requests.length, String.format("%.1f", seconds), String.format("%.1f", pairsPerSecond));
 		log.info("  Filtering: {} comparisons, {} same person, {} temporal filtered",
+				totalComparisons, samePerson, temporalFiltered);
+		log.info("  Attempts: {} FIFO ({} created), {} LIFO ({} created)",
+				fifoAttempts, fifoCreated, lifoAttempts, lifoCreated);
+
+        return pairs;
+    }
+
+	/**
+	 * Parallel pair generation with deterministic indices.
+	 * 
+	 * Strategy: Pre-allocate index ranges for each request in a sequential phase,
+	 * then process requests in parallel using their reserved index ranges.
+	 * This ensures:
+	 * 1. Deterministic ride indices (same indices across runs)
+	 * 2. Thread-safe parallel processing
+	 * 3. Fast execution through parallelization
+	 * 
+	 * Note: List order may vary between runs, but ride indices are stable.
+	 */
+	private List<Ride> generatePairsParallel(DrtRequest[] requests) {
+		log.info("Generating pair rides from {} requests (horizon={}s) [PARALLEL MODE]...", requests.length, horizon);
+		long startTime = System.currentTimeMillis();
+
+		TimeFilter filter = new TimeFilter(requests);
+
+		// Phase 1: Count potential pairs per request (sequential but fast - no network calls)
+		int[] pairCountsPerRequest = new int[filter.size()];
+		int totalPotentialPairs = 0;
+
+		for (int i = 0; i < filter.size(); i++) {
+			DrtRequest reqI = filter.getRequest(i);
+			int[] candidates = filter.findCandidatesInHorizon(i, horizon);
+
+			int validCount = 0;
+			for (int j : candidates) {
+				DrtRequest reqJ = filter.getRequest(j);
+				
+				// Same quick filters as before
+				if (reqI.getPaxId().equals(reqJ.getPaxId())) continue;
+				if (reqJ.getLatestDeparture() < reqI.getEarliestDeparture() ||
+						reqJ.getEarliestDeparture() > reqI.getLatestDeparture() + reqI.getTravelTime()) {
+					continue;
+				}
+				
+				validCount++;
+			}
+			
+			// Reserve space for up to 2 rides per valid candidate (FIFO + LIFO)
+			pairCountsPerRequest[i] = validCount * 2;
+			totalPotentialPairs += pairCountsPerRequest[i];
+		}
+
+		// Phase 2: Pre-allocate index ranges (sequential - ensures determinism)
+		int[] indexStarts = new int[filter.size()];
+		int currentIndex = requests.length; // Start after single rides
+		for (int i = 0; i < filter.size(); i++) {
+			indexStarts[i] = currentIndex;
+			currentIndex += pairCountsPerRequest[i];
+		}
+
+		log.info("  Pre-allocated {} potential ride indices", totalPotentialPairs);
+
+		// Phase 3: Parallel processing with pre-allocated indices
+		AtomicInteger totalComparisons = new AtomicInteger(0);
+		AtomicInteger temporalFiltered = new AtomicInteger(0);
+		AtomicInteger samePerson = new AtomicInteger(0);
+		AtomicInteger fifoAttempts = new AtomicInteger(0);
+		AtomicInteger lifoAttempts = new AtomicInteger(0);
+		AtomicInteger fifoCreated = new AtomicInteger(0);
+		AtomicInteger lifoCreated = new AtomicInteger(0);
+		AtomicInteger processedRequests = new AtomicInteger(0);
+		int logInterval = Math.max(1, filter.size() / 10);
+
+		// Pre-allocate array for all rides (thread-safe indexed writes)
+		Ride[] allRides = new Ride[totalPotentialPairs];
+
+		IntStream.range(0, filter.size()).parallel().forEach(i -> {
+			// Progress logging
+			int processed = processedRequests.incrementAndGet();
+			if (processed % logInterval == 0) {
+				double percent = (processed * 100.0) / filter.size();
+				int createdSoFar = fifoCreated.get() + lifoCreated.get();
+				log.info("  Pair generation progress: {}/{} ({}%) - ~{} pairs created",
+						processed, filter.size(), String.format("%.1f", percent), createdSoFar);
+			}
+
+			DrtRequest reqI = filter.getRequest(i);
+			int[] candidates = filter.findCandidatesInHorizon(i, horizon);
+			int localRideIndex = indexStarts[i]; // This request's reserved index range
+
+			// Pre-filter candidates
+			List<Integer> validCandidates = new ArrayList<>();
+			for (int j : candidates) {
+				DrtRequest reqJ = filter.getRequest(j);
+				totalComparisons.incrementAndGet();
+
+				if (reqI.getPaxId().equals(reqJ.getPaxId())) {
+					samePerson.incrementAndGet();
+					continue;
+				}
+
+				if (reqJ.getLatestDeparture() < reqI.getEarliestDeparture() ||
+						reqJ.getEarliestDeparture() > reqI.getLatestDeparture() + reqI.getTravelTime()) {
+					temporalFiltered.incrementAndGet();
+					continue;
+				}
+
+				validCandidates.add(j);
+			}
+
+			// Process valid candidates with reserved indices
+			for (int j : validCandidates) {
+				DrtRequest reqJ = filter.getRequest(j);
+
+				TravelSegment oo = network.getSegment(reqI.originLinkId, reqJ.originLinkId, reqI.requestTime);
+				if (!oo.isReachable()) continue;
+
+				if (reqI.getLatestDeparture() + oo.getTravelTime() < reqJ.getEarliestDeparture()) continue;
+				if (reqI.getEarliestDeparture() + oo.getTravelTime() > reqJ.getLatestDeparture()) continue;
+
+				// Try FIFO with pre-allocated index
+				fifoAttempts.incrementAndGet();
+				Ride fifo = tryFifoWithSegment(reqI, reqJ, oo, localRideIndex);
+				if (fifo != null) {
+					Ride validated = budgetValidator.validateAndPopulateBudgets(fifo, requests);
+					if (validated != null) {
+						allRides[localRideIndex - requests.length] = validated; // Array write is thread-safe with pre-allocated indices
+						localRideIndex++;
+						fifoCreated.incrementAndGet();
+					}
+				}
+
+				// Try LIFO with pre-allocated index
+				lifoAttempts.incrementAndGet();
+				Ride lifo = tryLifoWithSegment(reqI, reqJ, oo, localRideIndex);
+				if (lifo != null) {
+					Ride validated = budgetValidator.validateAndPopulateBudgets(lifo, requests);
+					if (validated != null) {
+						allRides[localRideIndex - requests.length] = validated;
+						localRideIndex++;
+						lifoCreated.incrementAndGet();
+					}
+				}
+			}
+		});
+
+		// Phase 4: Collect non-null rides (sequential)
+		List<Ride> pairs = new ArrayList<>();
+		for (Ride ride : allRides) {
+			if (ride != null) {
+				pairs.add(ride);
+			}
+		}
+
+		long elapsed = System.currentTimeMillis() - startTime;
+		double seconds = elapsed / 1000.0;
+		double pairsPerSecond = pairs.size() / seconds;
+		log.info("Pair generation complete: {} pairs from {} requests in {}s ({} pairs/s) [PARALLEL]",
+				pairs.size(), requests.length, String.format("%.1f", seconds), String.format("%.1f", pairsPerSecond));
+		log.info("  Filtering: {} comparisons, {} same person, {} temporal filtered",
 				totalComparisons.get(), samePerson.get(), temporalFiltered.get());
 		log.info("  Attempts: {} FIFO ({} created), {} LIFO ({} created)",
 				fifoAttempts.get(), fifoCreated.get(), lifoAttempts.get(), lifoCreated.get());
 
-        return pairs;
-    }
+		return pairs;
+	}
 
 	/**
 	 * Optimized FIFO generation that reuses pre-fetched Oi->Oj segment.
@@ -233,17 +404,6 @@ public final class PairGenerator {
     }
 
 	/**
-	 * Legacy method - calls optimized version with fetched segment.
-	 * Kept for API compatibility.
-	 */
-	private Ride tryFifo(DrtRequest i, DrtRequest j, int index) {
-		TravelSegment oo = network.getSegment(i.originLinkId, j.originLinkId, i.requestTime);
-		if (!oo.isReachable())
-			return null;
-		return tryFifoWithSegment(i, j, oo, index);
-	}
-
-	/**
 	 * Optimized LIFO generation that reuses pre-fetched Oi->Oj segment.
 	 */
 	private Ride tryLifoWithSegment(DrtRequest i, DrtRequest j, TravelSegment oo, int index) {
@@ -320,17 +480,6 @@ public final class PairGenerator {
             .startTime(i.getRequestTime())
             .build();
     }
-
-	/**
-	 * Legacy method - calls optimized version with fetched segment.
-	 * Kept for API compatibility.
-	 */
-	private Ride tryLifo(DrtRequest i, DrtRequest j, int index) {
-		TravelSegment oo = network.getSegment(i.originLinkId, j.originLinkId, i.requestTime);
-		if (!oo.isReachable())
-			return null;
-		return tryLifoWithSegment(i, j, oo, index);
-	}
 
     private double[] optimizeDelays(double[] delays, double[] maxNeg, double[] maxPos) {
         // Check initial feasibility
