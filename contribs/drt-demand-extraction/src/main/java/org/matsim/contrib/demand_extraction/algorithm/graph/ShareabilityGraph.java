@@ -15,6 +15,9 @@ import java.util.Arrays;
  * - 1 byte: ride kind (byte: 0=FIFO, 1=LIFO)
  * Plus amortized adjacency index overhead
  *
+ * DETERMINISM: Neighbors are pre-sorted during construction to ensure
+ * deterministic iteration order in findCommonNeighbors().
+ *
  * Python reference:
  * - Graph built from degree-2 rides: nx.MultiDiGraph()
  * - Nodes: Request indices
@@ -35,6 +38,10 @@ public final class ShareabilityGraph {
     // Adjacency index: request_id -> [outgoing edge indices]
     private final Int2ObjectOpenHashMap<IntArrayList> outgoingEdges;
 
+    // Pre-sorted neighbors: request_id -> sorted int[] of neighbor IDs
+    // Built once during construction for deterministic iteration
+    private final Int2ObjectOpenHashMap<int[]> sortedNeighbors;
+
     // Kind constants
     public static final byte KIND_FIFO = 0;
     public static final byte KIND_LIFO = 1;
@@ -53,42 +60,57 @@ public final class ShareabilityGraph {
             outgoingEdges.computeIfAbsent(source, k -> new IntArrayList())
                         .add(i);
         }
+
+        // Pre-build sorted neighbors for deterministic iteration
+        this.sortedNeighbors = new Int2ObjectOpenHashMap<>();
+        for (Int2ObjectMap.Entry<IntArrayList> entry : outgoingEdges.int2ObjectEntrySet()) {
+            int source = entry.getIntKey();
+            IntArrayList edgeIndices = entry.getValue();
+
+            // Collect unique neighbors
+            IntOpenHashSet neighborSet = new IntOpenHashSet(edgeIndices.size());
+            for (int edgeIdx : edgeIndices) {
+                neighborSet.add(targetRequests[edgeIdx]);
+            }
+
+            // Convert to sorted array
+            int[] sorted = neighborSet.toIntArray();
+            Arrays.sort(sorted);
+            sortedNeighbors.put(source, sorted);
+        }
     }
 
     /**
      * Find requests that are common neighbors to all given requests.
-     * This is the core operation for ride extension.
+     * Returns a SORTED array for deterministic iteration.
      *
      * Python reference: extensions.py lines 14-37
-     * ```
-     * common_neighbours = None
-     * for req in ride['request_index']:
-     *     neighbors = set(self.graph.neighbors(req))
-     *     common_neighbours = neighbors if common_neighbours is None
-     *                         else common_neighbours & neighbors
-     * ```
      *
      * @param requests Array of request IDs
-     * @return Set of request IDs that can be paired with all input requests
+     * @return Sorted array of request IDs that can be paired with all input requests
      */
-    public IntSet findCommonNeighbors(int... requests) {
+    public int[] findCommonNeighborsSorted(int... requests) {
         if (requests.length == 0) {
-            return IntSets.EMPTY_SET;
+            return new int[0];
         }
 
-        // Get neighbors of first request
-        IntSet result = getNeighbors(requests[0]);
-        if (result.isEmpty()) {
-            return IntSets.EMPTY_SET;
+        // Get sorted neighbors of first request
+        int[] result = sortedNeighbors.get(requests[0]);
+        if (result == null || result.length == 0) {
+            return new int[0];
         }
+        // Copy since we'll modify
+        result = result.clone();
 
         // Intersect with neighbors of remaining requests
         for (int i = 1; i < requests.length; i++) {
-            IntSet neighbors = getNeighbors(requests[i]);
-            result.retainAll(neighbors);  // Set intersection
-
-            if (result.isEmpty()) {
-                return IntSets.EMPTY_SET;  // Early termination
+            int[] neighbors = sortedNeighbors.get(requests[i]);
+            if (neighbors == null || neighbors.length == 0) {
+                return new int[0];
+            }
+            result = intersectSorted(result, neighbors);
+            if (result.length == 0) {
+                return new int[0];  // Early termination
             }
         }
 
@@ -96,22 +118,39 @@ public final class ShareabilityGraph {
     }
 
     /**
-     * Get all outgoing neighbors for a request.
-     *
-     * @param request the request ID
-     * @return set of neighboring request IDs
+     * Intersect two sorted arrays efficiently.
      */
-    private IntSet getNeighbors(int request) {
-        IntArrayList edgeIndices = outgoingEdges.get(request);
-        if (edgeIndices == null) {
-            return IntSets.EMPTY_SET;
+    private int[] intersectSorted(int[] a, int[] b) {
+        int[] temp = new int[Math.min(a.length, b.length)];
+        int i = 0, j = 0, k = 0;
+        while (i < a.length && j < b.length) {
+            if (a[i] < b[j]) {
+                i++;
+            } else if (a[i] > b[j]) {
+                j++;
+            } else {
+                temp[k++] = a[i];
+                i++;
+                j++;
+            }
         }
+        return Arrays.copyOf(temp, k);
+    }
 
-        IntSet neighbors = new IntOpenHashSet(edgeIndices.size());
-        for (int edgeIdx : edgeIndices) {
-            neighbors.add(targetRequests[edgeIdx]);
-        }
-        return neighbors;
+    /**
+     * Find requests that are common neighbors to all given requests.
+     * This is the core operation for ride extension.
+     *
+     * @param requests Array of request IDs
+     * @return Set of request IDs that can be paired with all input requests
+     * @deprecated Use findCommonNeighborsSorted() for deterministic iteration
+     */
+    @Deprecated
+    public IntSet findCommonNeighbors(int... requests) {
+        int[] sorted = findCommonNeighborsSorted(requests);
+        IntOpenHashSet set = new IntOpenHashSet(sorted.length);
+        for (int v : sorted) set.add(v);
+        return set;
     }
 
     /**

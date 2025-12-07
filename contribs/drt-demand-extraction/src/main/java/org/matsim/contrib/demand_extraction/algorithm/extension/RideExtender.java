@@ -1,7 +1,6 @@
 package org.matsim.contrib.demand_extraction.algorithm.extension;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,7 +18,6 @@ import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
 import it.unimi.dsi.fastutil.ints.IntList;
-import it.unimi.dsi.fastutil.ints.IntSet;
 
 /**
  * Extends rides from degree N to N+1 using shareability graph.
@@ -76,13 +74,10 @@ public final class RideExtender {
 			}
 
 			Ride ride = ridesToExtend.get(i);
-			IntSet commonNeighbors = graph.findCommonNeighbors(ride.getRequestIndices());
+			// Graph returns pre-sorted neighbors for deterministic iteration
+			int[] neighbors = graph.findCommonNeighborsSorted(ride.getRequestIndices());
 
-			// Sort neighbors for deterministic processing order
-			int[] sortedNeighbors = commonNeighbors.toIntArray();
-			Arrays.sort(sortedNeighbors);
-
-			for (int candidateReq : sortedNeighbors) {
+			for (int candidateReq : neighbors) {
 				candidatesFound++;
 
 				// Check that candidate request has different personId from all existing passengers
