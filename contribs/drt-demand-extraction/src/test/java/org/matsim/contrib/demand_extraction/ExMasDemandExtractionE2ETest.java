@@ -209,15 +209,15 @@ public class ExMasDemandExtractionE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				if (parts.length != 9) {
-					System.err.println("ERROR: Expected 9 fields but got " + parts.length);
+				if (parts.length != 22) {
+					System.err.println("ERROR: Expected 22 fields but got " + parts.length);
 					System.err.println("Line: " + line);
 					System.err.println("Fields: " + java.util.Arrays.toString(parts));
 				}
-				Assertions.assertEquals(9, parts.length, "Each request should have 9 fields");
+				Assertions.assertEquals(22, parts.length, "Each request should have 22 fields");
 
-				String personId = parts[0];
-				double budget = Double.parseDouble(parts[3]);
+				String personId = parts[1];
+				double budget = Double.parseDouble(parts[5]);
 				personIds.add(personId);
 
 				// Budget can be positive (DRT better), negative (DRT worse), or zero (equal)
@@ -248,13 +248,13 @@ public class ExMasDemandExtractionE2ETest {
 			Assertions.assertTrue(header.contains("degree"), "Header should contain degree");
 			Assertions.assertTrue(header.contains("requestIndices"), "Header should contain requestIndices");
 			Assertions.assertTrue(header.contains("startTime"), "Header should contain startTime");
-			Assertions.assertTrue(header.contains("duration"), "Header should contain duration");
-			Assertions.assertTrue(header.contains("distance"), "Header should contain distance");
+			Assertions.assertTrue(header.contains("rideTravelTime"), "Header should contain rideTravelTime");
+			Assertions.assertTrue(header.contains("rideDistance"), "Header should contain rideDistance");
 
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				Assertions.assertTrue(parts.length >= 7, "Each ride should have at least 7 fields");
+				Assertions.assertEquals(18, parts.length, "Each ride should have 18 fields");
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();
@@ -263,10 +263,10 @@ public class ExMasDemandExtractionE2ETest {
 				
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
 				
-				double duration = Double.parseDouble(parts[4]);
+				double duration = Double.parseDouble(parts[16]);
 				Assertions.assertTrue(duration >= 0, "Duration should be non-negative");
 				
-				double distance = Double.parseDouble(parts[5]);
+				double distance = Double.parseDouble(parts[17]);
 				Assertions.assertTrue(distance >= 0, "Distance should be non-negative");
 
 				rideCount++;

@@ -39,6 +39,7 @@ public class DemandExtractionModule extends AbstractModule {
         // Bind demand extraction components
         bind(ModeRoutingCache.class).asEagerSingleton();
         bind(ChainIdentifier.class).asEagerSingleton();
+		bind(CommuteIdentifier.class).asEagerSingleton();
 		bind(DrtRequestFactory.class).asEagerSingleton();
         
         // Install ExMAS algorithm module (validators, network cache, etc.)
