@@ -76,6 +76,7 @@
 		<module>dvrp</module>
 		<module>ev</module>
 		<module>emissions</module>
+		<module>drt-demand-extraction</module>
 		<module>freight</module>
 		<module>freightreceiver</module>
 		<module>hybridsim</module>
