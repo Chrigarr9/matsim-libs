@@ -71,31 +71,32 @@ public class BudgetValidator {
 	/**
 	 * Validate ride against budget constraints for all passengers.
 	 * Returns new Ride with populated remainingBudgets field.
-	 * 
-	 * @param ride the ride to validate
-	 * @param requests array of all requests (indexed by request index)
+	 *
+	 * Uses direct object references from the Ride - no need to pass request array.
+	 *
+	 * @param ride the ride to validate (contains direct DrtRequest references)
 	 * @return new Ride with remainingBudgets populated, or null if any budget is negative
 	 */
-	public Ride validateAndPopulateBudgets(Ride ride, DrtRequest[] requests) {
-		double[] remainingBudgets = calculateRemainingBudgets(ride, requests);
-		
+	public Ride validateAndPopulateBudgets(Ride ride) {
+		double[] remainingBudgets = calculateRemainingBudgets(ride);
+
 		// Check if all budgets are non-negative
 		for (double budget : remainingBudgets) {
 			if (budget < 0) {
 				return null; // Ride is infeasible
 			}
 		}
-		
+
 		// Create new Ride with remainingBudgets populated
 		return Ride.builder()
 				.index(ride.getIndex())
 				.degree(ride.getDegree())
 				.kind(ride.getKind())
-				.requestIndices(ride.getRequestIndices())
+				.requests(ride.getRequests())
 				.originsOrdered(ride.getOriginsOrdered())
 				.destinationsOrdered(ride.getDestinationsOrdered())
-				.originsIndex(ride.getOriginsIndex())
-				.destinationsIndex(ride.getDestinationsIndex())
+				.originsOrderedRequests(ride.getOriginsOrderedRequests())
+				.destinationsOrderedRequests(ride.getDestinationsOrderedRequests())
 				.passengerTravelTimes(ride.getPassengerTravelTimes())
 				.passengerDistances(ride.getPassengerDistances())
 				.passengerNetworkUtilities(ride.getPassengerNetworkUtilities())
@@ -110,25 +111,25 @@ public class BudgetValidator {
 				.successors(ride.getSuccessors())
 				.build();
 	}
-	
+
 	/**
 	 * Calculate remaining budgets for all passengers in a ride.
-	 * 
-	 * @param ride the ride to evaluate
-	 * @param requests array of all requests (indexed by request index)
+	 *
+	 * Uses direct object references from the Ride.
+	 *
+	 * @param ride the ride to evaluate (contains direct DrtRequest references)
 	 * @return array of remaining budgets (utils), one per passenger
 	 */
-	public double[] calculateRemainingBudgets(Ride ride, DrtRequest[] requests) {
-		int[] requestIndices = ride.getRequestIndices();
+	public double[] calculateRemainingBudgets(Ride ride) {
+		DrtRequest[] requests = ride.getRequests();
 		double[] delays = ride.getDelays();
 		double[] travelTimes = ride.getPassengerTravelTimes();
 		double[] distances = ride.getPassengerDistances();
 		double[] remainingBudgets = new double[ride.getDegree()];
-		
+
 		for (int i = 0; i < ride.getDegree(); i++) {
-			int reqIdx = requestIndices[i];
-			DrtRequest request = requests[reqIdx];
-			
+			DrtRequest request = requests[i];
+
 			// Calculate actual DRT score using real MATSim scoring with access/egress
 			double actualDrtScore = calculateDrtScore(
 					request,
@@ -139,25 +140,23 @@ public class BudgetValidator {
 					// we will use actual walk distances
 					exMasConfig.getMinDrtAccessEgressDistance(),
 					exMasConfig.getMinDrtAccessEgressDistance());
-			
+
 			// Calculate remaining budget (positive = DRT is better than baseline)
 			remainingBudgets[i] = actualDrtScore - request.bestModeScore;
 		}
-		
+
 		return remainingBudgets;
 	}
-	
+
 	/**
-	 * Calculate initial budget for a request (direct travel, no delays).
-	 * This should be used during request creation to ensure consistent methodology.
-	 * 
+	 * Calculate budget for a single request (direct travel, no delays).
+	 * This is equivalent to calculating remaining budget for a single-ride
+	 * and can be used during request creation or single ride validation.
+	 *
 	 * @param request the DRT request with bestModeScore already populated
-	 * @param directTravelTime direct in-vehicle travel time (seconds)
-	 * @param directDistance direct travel distance (meters)
 	 * @return budget = actualDrtScore - bestModeScore (positive = DRT better than baseline)
 	 */
-	public double calculateInitialBudget(DrtRequest request) {
-		// route the trip to get direct travel time and distance
+	public double calculateBudget(DrtRequest request) {
 		double walkDistance = exMasConfig.getMinDrtAccessEgressDistance();
 		double actualDrtScore = calculateDrtScore(request, 0.0, request.getTravelTime(), request.getDistance(),
 				walkDistance, walkDistance);
@@ -258,16 +257,22 @@ public class BudgetValidator {
 		ScoringParameters scoringParams = scoringParametersForPerson.getScoringParameters(person);
 		double marginalUtilityOfWaitingPt_s = scoringParams.marginalUtilityOfWaitingPt_s;
 
-		// Calculate wait time based on delay
-		// delay is positive -> delay is wait time. User waits for departure
+		// Calculate wait time based on delay and detour
+		// detour = extra travel time beyond direct route
+		double detour = actualTravelTime - request.directTravelTime;
 		double waitTime = 0.0;
+
 		if (delay > 0) {
+			// Positive delay: user waits at origin before pickup
+			// Wait time equals the delay (how late the vehicle arrives)
 			waitTime = delay;
-		}
-		// delay negative -> user has to leave early, wait time is at destination, but
-		// reduced by detour
-		else if (delay < 0) {
-			waitTime = Math.abs(delay) - (actualTravelTime - request.directTravelTime);
+		} else if (delay < 0) {
+			// Negative delay: user leaves early and arrives early at destination
+			// The "early arrival" creates waiting time at the destination (before next activity)
+			// However, any detour during the ride reduces this waiting time
+			// (longer ride means less time waiting at destination)
+			// waitTime = |delay| - detour, but cannot be negative
+			waitTime = Math.max(0.0, Math.abs(delay) - detour);
 		}
 
 		// Apply person-specific waiting disutility

@@ -114,7 +114,7 @@ public final class ExMasEngine {
 		for (int degree = 2; degree < maxDegree; degree++) {
             RideExtender extender = new RideExtender(network, graph, budgetValidator,
                                                      requests, allRides);
-            List<Ride> extended = extender.extendRides(currentDegreeRides, reqArray, allRides.size());
+            List<Ride> extended = extender.extendRides(currentDegreeRides, allRides.size());
 
             if (extended.isEmpty()) {
 				log.info("No extensions possible at degree {}. Stopping.", (degree + 1));

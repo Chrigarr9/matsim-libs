@@ -16,8 +16,25 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
         SUBTOUR_SUM
     }
 
+    /**
+     * Filter mode for commute trips.
+     * - ALL: Include all trips regardless of commute status
+     * - COMMUTES_ONLY: Only include commute trips (home->work, work->home)
+     * - NON_COMMUTES: Exclude commute trips
+     */
+    public enum CommuteFilter {
+        ALL,
+        COMMUTES_ONLY,
+        NON_COMMUTES
+    }
+
     private BudgetCalculationMode budgetCalculationMode = BudgetCalculationMode.TRIP_LEVEL;
     private String drtMode = "drt";
+
+    // Commute identification settings
+    private String homeActivityType = "home";
+    private String workActivityType = "work";
+    private CommuteFilter commuteFilter = CommuteFilter.ALL;
 
 	// Base modes to evaluate for budget calculation (e.g., car, pt, walk, bike)
 	// Each mode will be routed using its own routing module
@@ -97,8 +114,39 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     public void setDrtMode(String drtMode) {
         this.drtMode = drtMode;
     }
-    
-	public Set<String> getBaseModes() {
+
+    // Commute configuration getters/setters
+    @StringGetter("homeActivityType")
+    public String getHomeActivityType() {
+        return homeActivityType;
+    }
+
+    @StringSetter("homeActivityType")
+    public void setHomeActivityType(String homeActivityType) {
+        this.homeActivityType = homeActivityType;
+    }
+
+    @StringGetter("workActivityType")
+    public String getWorkActivityType() {
+        return workActivityType;
+    }
+
+    @StringSetter("workActivityType")
+    public void setWorkActivityType(String workActivityType) {
+        this.workActivityType = workActivityType;
+    }
+
+    @StringGetter("commuteFilter")
+    public CommuteFilter getCommuteFilter() {
+        return commuteFilter;
+    }
+
+    @StringSetter("commuteFilter")
+    public void setCommuteFilter(CommuteFilter commuteFilter) {
+        this.commuteFilter = commuteFilter;
+    }
+
+    public Set<String> getBaseModes() {
         return baseModes;
     }
     
@@ -260,6 +308,9 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
         Map<String, String> map = super.getComments();
         map.put(BUDGET_CALCULATION_MODE, "Mode for calculating utility budget. Options: [TRIP_LEVEL, SUBTOUR_SUM]. Default: TRIP_LEVEL.");
         map.put(DRT_MODE, "The mode name of the DRT service to be optimized. Default: 'drt'.");
+        map.put("homeActivityType", "Activity type prefix for home activities (used for commute identification). Default: 'home'");
+        map.put("workActivityType", "Activity type prefix for work activities (used for commute identification). Default: 'work'");
+        map.put("commuteFilter", "Filter for commute trips. Options: [ALL, COMMUTES_ONLY, NON_COMMUTES]. Default: ALL");
 		map.put("drtRoutingMode",
 				"Routing mode to use for DRT when no DRT routing module exists. Typically 'car' for network-based routing. Default: 'car'");
 		map.put("drtAllowedModes",

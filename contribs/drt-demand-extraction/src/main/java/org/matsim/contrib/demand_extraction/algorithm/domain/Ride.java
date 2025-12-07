@@ -1,9 +1,11 @@
 package org.matsim.contrib.demand_extraction.algorithm.domain;
 
 import java.util.Arrays;
+import java.util.stream.Collectors;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
+import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
 /**
  * Immutable representation of a shared ride.
@@ -12,6 +14,9 @@ import org.matsim.api.core.v01.network.Link;
  * Python reference: src/exmas_commuters/core/exmas/rides.py
  * DataFrame columns: request_index, degree, kind, origins_ordered, destinations_ordered,
  *                    passenger_travel_time, passenger_distance, delay, etc.
+ *
+ * Uses direct object references to DrtRequest objects for efficient access.
+ * Indices are derived from request objects when needed (e.g., for CSV output or graph operations).
  */
 public final class Ride {
     private final int index;
@@ -19,11 +24,11 @@ public final class Ride {
     private final RideKind kind;
 
     // Request information (arrays of length = degree)
-    private final int[] requestIndices;
-	private final Id<Link>[] originsOrdered; // Pickup sequence (Link IDs)
-	private final Id<Link>[] destinationsOrdered; // Dropoff sequence (Link IDs)
-    private final int[] originsIndex;        // Request indices in pickup order (matches requestIndices for FIFO)
-    private final int[] destinationsIndex;   // Request indices in dropoff order (reversed for LIFO, reordered for MIXED)
+    private final DrtRequest[] requests;           // Direct references to requests
+    private final Id<Link>[] originsOrdered;       // Pickup sequence (Link IDs)
+    private final Id<Link>[] destinationsOrdered;  // Dropoff sequence (Link IDs)
+    private final DrtRequest[] originsOrderedRequests;      // Requests in pickup order
+    private final DrtRequest[] destinationsOrderedRequests; // Requests in dropoff order
 
     // Travel metrics per passenger (length = degree)
     private final double[] passengerTravelTimes;
@@ -56,11 +61,11 @@ public final class Ride {
         this.kind = builder.kind;
 
         // Copy arrays (defensive)
-        this.requestIndices = builder.requestIndices.clone();
+        this.requests = builder.requests.clone();
         this.originsOrdered = builder.originsOrdered.clone();
         this.destinationsOrdered = builder.destinationsOrdered.clone();
-        this.originsIndex = builder.originsIndex.clone();
-        this.destinationsIndex = builder.destinationsIndex.clone();
+        this.originsOrderedRequests = builder.originsOrderedRequests.clone();
+        this.destinationsOrderedRequests = builder.destinationsOrderedRequests.clone();
         this.passengerTravelTimes = builder.passengerTravelTimes.clone();
         this.passengerDistances = builder.passengerDistances.clone();
         this.passengerNetworkUtilities = builder.passengerNetworkUtilities.clone();
@@ -96,18 +101,55 @@ public final class Ride {
     public int getDegree() { return degree; }
     public RideKind getKind() { return kind; }
 
-    // Array getters return defensive copies to maintain immutability
-    public int[] getRequestIndices() { return requestIndices.clone(); }
+    // Direct request access
+    public DrtRequest[] getRequests() { return requests.clone(); }
 
-	public Id<Link>[] getOriginsOrdered() {
-		return originsOrdered.clone();
-	}
+    public DrtRequest getRequest(int passengerIndex) {
+        return requests[passengerIndex];
+    }
 
-	public Id<Link>[] getDestinationsOrdered() {
-		return destinationsOrdered.clone();
-	}
-    public int[] getOriginsIndex() { return originsIndex.clone(); }
-    public int[] getDestinationsIndex() { return destinationsIndex.clone(); }
+    // Derived indices for backward compatibility, graph operations, and CSV output
+    public int[] getRequestIndices() {
+        int[] indices = new int[requests.length];
+        for (int i = 0; i < requests.length; i++) {
+            indices[i] = requests[i].index;
+        }
+        return indices;
+    }
+
+    public Id<Link>[] getOriginsOrdered() {
+        return originsOrdered.clone();
+    }
+
+    public Id<Link>[] getDestinationsOrdered() {
+        return destinationsOrdered.clone();
+    }
+
+    public DrtRequest[] getOriginsOrderedRequests() {
+        return originsOrderedRequests.clone();
+    }
+
+    public DrtRequest[] getDestinationsOrderedRequests() {
+        return destinationsOrderedRequests.clone();
+    }
+
+    // Derived indices for origins/destinations ordering
+    public int[] getOriginsIndex() {
+        int[] indices = new int[originsOrderedRequests.length];
+        for (int i = 0; i < originsOrderedRequests.length; i++) {
+            indices[i] = originsOrderedRequests[i].index;
+        }
+        return indices;
+    }
+
+    public int[] getDestinationsIndex() {
+        int[] indices = new int[destinationsOrderedRequests.length];
+        for (int i = 0; i < destinationsOrderedRequests.length; i++) {
+            indices[i] = destinationsOrderedRequests[i].index;
+        }
+        return indices;
+    }
+
     public double[] getPassengerTravelTimes() { return passengerTravelTimes.clone(); }
     public double[] getPassengerDistances() { return passengerDistances.clone(); }
     public double[] getPassengerNetworkUtilities() { return passengerNetworkUtilities.clone(); }
@@ -136,11 +178,11 @@ public final class Ride {
         private int index;
         private int degree;
         private RideKind kind;
-        private int[] requestIndices;
-		private Id<Link>[] originsOrdered;
-		private Id<Link>[] destinationsOrdered;
-        private int[] originsIndex;
-        private int[] destinationsIndex;
+        private DrtRequest[] requests;
+        private Id<Link>[] originsOrdered;
+        private Id<Link>[] destinationsOrdered;
+        private DrtRequest[] originsOrderedRequests;
+        private DrtRequest[] destinationsOrderedRequests;
         private double[] passengerTravelTimes;
         private double[] passengerDistances;
         private double[] passengerNetworkUtilities;
@@ -171,28 +213,28 @@ public final class Ride {
             return this;
         }
 
-        public Builder requestIndices(int[] requestIndices) {
-            this.requestIndices = requestIndices;
+        public Builder requests(DrtRequest[] requests) {
+            this.requests = requests;
             return this;
         }
 
-		public Builder originsOrdered(Id<Link>[] originsOrdered) {
+        public Builder originsOrdered(Id<Link>[] originsOrdered) {
             this.originsOrdered = originsOrdered;
             return this;
         }
 
-		public Builder destinationsOrdered(Id<Link>[] destinationsOrdered) {
+        public Builder destinationsOrdered(Id<Link>[] destinationsOrdered) {
             this.destinationsOrdered = destinationsOrdered;
             return this;
         }
 
-        public Builder originsIndex(int[] originsIndex) {
-            this.originsIndex = originsIndex;
+        public Builder originsOrderedRequests(DrtRequest[] originsOrderedRequests) {
+            this.originsOrderedRequests = originsOrderedRequests;
             return this;
         }
 
-        public Builder destinationsIndex(int[] destinationsIndex) {
-            this.destinationsIndex = destinationsIndex;
+        public Builder destinationsOrderedRequests(DrtRequest[] destinationsOrderedRequests) {
+            this.destinationsOrderedRequests = destinationsOrderedRequests;
             return this;
         }
 
@@ -215,7 +257,7 @@ public final class Ride {
             this.delays = delays;
             return this;
         }
-        
+
         public Builder remainingBudgets(double[] remainingBudgets) {
             this.remainingBudgets = remainingBudgets;
             return this;
@@ -264,10 +306,10 @@ public final class Ride {
             if (kind == null) {
                 throw new IllegalArgumentException("RideKind cannot be null");
             }
-            if (requestIndices == null || requestIndices.length != degree) {
+            if (requests == null || requests.length != degree) {
                 throw new IllegalArgumentException(
-                    String.format("requestIndices length (%d) must equal degree (%d)",
-                        requestIndices != null ? requestIndices.length : 0, degree)
+                    String.format("requests length (%d) must equal degree (%d)",
+                        requests != null ? requests.length : 0, degree)
                 );
             }
             if (originsOrdered == null || originsOrdered.length != degree) {
@@ -278,6 +320,16 @@ public final class Ride {
             if (destinationsOrdered == null || destinationsOrdered.length != degree) {
                 throw new IllegalArgumentException(
                     String.format("destinationsOrdered length must equal degree (%d)", degree)
+                );
+            }
+            if (originsOrderedRequests == null || originsOrderedRequests.length != degree) {
+                throw new IllegalArgumentException(
+                    String.format("originsOrderedRequests length must equal degree (%d)", degree)
+                );
+            }
+            if (destinationsOrderedRequests == null || destinationsOrderedRequests.length != degree) {
+                throw new IllegalArgumentException(
+                    String.format("destinationsOrderedRequests length must equal degree (%d)", degree)
                 );
             }
             if (passengerTravelTimes == null || passengerTravelTimes.length != degree) {
@@ -300,8 +352,11 @@ public final class Ride {
 
     @Override
     public String toString() {
-        return String.format("Ride[index=%d, degree=%d, kind=%s, requests=%s, startTime=%.1f, duration=%.1f]",
-            index, degree, kind, Arrays.toString(requestIndices), startTime, rideTravelTime);
+        String requestIds = Arrays.stream(requests)
+            .map(r -> String.valueOf(r.index))
+            .collect(Collectors.joining(","));
+        return String.format("Ride[index=%d, degree=%d, kind=%s, requests=[%s], startTime=%.1f, duration=%.1f]",
+            index, degree, kind, requestIds, startTime, rideTravelTime);
     }
 
     @Override

@@ -19,7 +19,11 @@ public class DrtRequest {
     public final Id<Person> personId;
     public final String groupId; // Subtour ID or Trip ID (for linked trips)
     public final int tripIndex; // Trip index within person's plan
-    
+
+    // Commute flag - marks trips that are part of a home-work-home pattern
+    // When true, this trip is either home->work or work->home (not intermediate work trips)
+    public final boolean isCommute;
+
     // Budget information
     public final double budget; // Utility difference: drtScore - bestModeScore
     public final double bestModeScore; // Score of best baseline mode (for budget validation)
@@ -48,9 +52,10 @@ public class DrtRequest {
         this.personId = builder.personId;
         this.groupId = builder.groupId;
         this.tripIndex = builder.tripIndex;
+        this.isCommute = builder.isCommute;
         this.budget = builder.budget;
         this.bestModeScore = builder.bestModeScore;
-		this.bestMode = builder.bestMode;
+        this.bestMode = builder.bestMode;
         this.originLinkId = builder.originLinkId;
         this.destinationLinkId = builder.destinationLinkId;
         this.originX = builder.originX;
@@ -136,9 +141,10 @@ public class DrtRequest {
         private Id<Person> personId;
         private String groupId;
         private int tripIndex;
+        private boolean isCommute;
         private double budget;
         private double bestModeScore;
-		private String bestMode;
+        private String bestMode;
         private Id<Link> originLinkId;
         private Id<Link> destinationLinkId;
         private double originX;
@@ -150,11 +156,12 @@ public class DrtRequest {
         private double latestArrival;
         private double directTravelTime;
         private double directDistance;
-        
+
         public Builder index(int index) { this.index = index; return this; }
         public Builder personId(Id<Person> personId) { this.personId = personId; return this; }
         public Builder groupId(String groupId) { this.groupId = groupId; return this; }
         public Builder tripIndex(int tripIndex) { this.tripIndex = tripIndex; return this; }
+        public Builder isCommute(boolean isCommute) { this.isCommute = isCommute; return this; }
         public Builder budget(double budget) { this.budget = budget; return this; }
         public Builder bestModeScore(double bestModeScore) { this.bestModeScore = bestModeScore; return this; }
 		public Builder bestMode(String bestMode) {this.bestMode = bestMode; return this;}

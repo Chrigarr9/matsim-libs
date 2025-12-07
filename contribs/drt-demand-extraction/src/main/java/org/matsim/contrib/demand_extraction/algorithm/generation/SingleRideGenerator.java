@@ -16,33 +16,34 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
 /**
  * Generates degree-1 (single passenger) rides from requests.
- * Validates that DRT utility meets or exceeds baseline mode utility (positive
- * budget).
+ * Validates that DRT utility meets or exceeds baseline mode utility (positive budget).
+ *
+ * Uses direct object references to DrtRequest objects in the generated Rides.
+ *
  * Python reference: src/exmas_commuters/core/exmas/rides.py lines 12-41
  */
 public final class SingleRideGenerator {
 	private static final Logger log = LogManager.getLogger(SingleRideGenerator.class);
 
-    private final MatsimNetworkCache networkCache;
+	private final MatsimNetworkCache networkCache;
 	private final BudgetValidator budgetValidator;
-    
-	public SingleRideGenerator(MatsimNetworkCache networkCache, BudgetValidator budgetValidator) {
-        this.networkCache = networkCache;
-		this.budgetValidator = budgetValidator;
-    }
 
-    public List<Ride> generate(List<DrtRequest> requests) {
+	public SingleRideGenerator(MatsimNetworkCache networkCache, BudgetValidator budgetValidator) {
+		this.networkCache = networkCache;
+		this.budgetValidator = budgetValidator;
+	}
+
+	public List<Ride> generate(List<DrtRequest> requests) {
 		log.info("Generating single rides from {} requests...", requests.size());
 		long startTime = System.currentTimeMillis();
 
-        List<Ride> rides = new ArrayList<>(requests.size());
-		DrtRequest[] reqArray = requests.toArray(new DrtRequest[0]);
+		List<Ride> rides = new ArrayList<>(requests.size());
 
 		int processed = 0;
 		int total = requests.size();
 		int logInterval = Math.max(1, total / 10);
 
-        for (DrtRequest req : requests) {
+		for (DrtRequest req : requests) {
 			processed++;
 			TravelSegment segment = networkCache.getSegment(req.originLinkId, req.destinationLinkId, req.requestTime);
 
@@ -51,28 +52,28 @@ public final class SingleRideGenerator {
 			@SuppressWarnings("unchecked")
 			Id<Link>[] destinations = (Id<Link>[]) new Id[] { req.destinationLinkId };
 
-			// Build candidate ride (without budget populated yet)
+			// Build candidate ride with direct request references (without budget populated yet)
 			Ride candidateRide = Ride.builder()
-                .index(req.index)
-                .degree(1)
-                .kind(RideKind.SINGLE)
-                .requestIndices(new int[]{req.index})
-					.originsOrdered(origins)
-					.destinationsOrdered(destinations)
-                .originsIndex(new int[]{req.index})
-                .destinationsIndex(new int[]{req.index})
-					.passengerTravelTimes(new double[] { segment.getTravelTime() })
-					.passengerDistances(new double[] { segment.getDistance() })
-					.passengerNetworkUtilities(new double[] { segment.getNetworkUtility() })
-                .delays(new double[]{0.0})
-					.connectionTravelTimes(new double[] { segment.getTravelTime() })
-					.connectionDistances(new double[] { segment.getDistance() })
-					.connectionNetworkUtilities(new double[] { segment.getNetworkUtility() })
-                .startTime(req.getRequestTime())
-					.build();
+				.index(req.index)
+				.degree(1)
+				.kind(RideKind.SINGLE)
+				.requests(new DrtRequest[] { req })
+				.originsOrdered(origins)
+				.destinationsOrdered(destinations)
+				.originsOrderedRequests(new DrtRequest[] { req })
+				.destinationsOrderedRequests(new DrtRequest[] { req })
+				.passengerTravelTimes(new double[] { segment.getTravelTime() })
+				.passengerDistances(new double[] { segment.getDistance() })
+				.passengerNetworkUtilities(new double[] { segment.getNetworkUtility() })
+				.delays(new double[] { 0.0 })
+				.connectionTravelTimes(new double[] { segment.getTravelTime() })
+				.connectionDistances(new double[] { segment.getDistance() })
+				.connectionNetworkUtilities(new double[] { segment.getNetworkUtility() })
+				.startTime(req.getRequestTime())
+				.build();
 
 			// Validate budget: ensure DRT utility meets or exceeds baseline mode
-			Ride validatedRide = budgetValidator.validateAndPopulateBudgets(candidateRide, reqArray);
+			Ride validatedRide = budgetValidator.validateAndPopulateBudgets(candidateRide);
 			if (validatedRide != null) {
 				rides.add(validatedRide);
 			}
@@ -92,6 +93,6 @@ public final class SingleRideGenerator {
 		log.info("Single ride generation complete: {} valid rides ({} rejected) in {}s",
 				rides.size(), rejected, String.format("%.1f", seconds));
 
-        return rides;
-    }
+		return rides;
+	}
 }

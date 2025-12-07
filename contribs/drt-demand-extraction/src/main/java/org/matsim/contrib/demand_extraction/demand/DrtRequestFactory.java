@@ -49,18 +49,20 @@ public class DrtRequestFactory {
 	private final ExMasConfigGroup exmasConfig;
 	private final ModeRoutingCache modeRoutingCache;
 	private final ChainIdentifier chainIdentifier;
+	private final CommuteIdentifier commuteIdentifier;
 	private final Network network;
 	private final BudgetToConstraintsCalculator budgetToConstraintsCalculator;
 	private final BudgetValidator budgetValidator;
 
 	@Inject
 	public DrtRequestFactory(ExMasConfigGroup config, ModeRoutingCache modeRoutingCache,
-			ChainIdentifier chainIdentifier,
+			ChainIdentifier chainIdentifier, CommuteIdentifier commuteIdentifier,
 			Network network, BudgetToConstraintsCalculator budgetToConstraintsCalculator,
 			BudgetValidator budgetValidator) {
 		this.exmasConfig = config;
 		this.modeRoutingCache = modeRoutingCache;
 		this.chainIdentifier = chainIdentifier;
+		this.commuteIdentifier = commuteIdentifier;
 		this.network = network;
 		this.budgetToConstraintsCalculator = budgetToConstraintsCalculator;
 		this.budgetValidator = budgetValidator;
@@ -69,7 +71,15 @@ public class DrtRequestFactory {
 	public List<DrtRequest> buildRequests(Population population) {
 		log.info("Building DRT requests from {} persons...", population.getPersons().size());
 		long startTime = System.currentTimeMillis();
+
+		// Identify commute trips before building requests
+		commuteIdentifier.identifyCommutes(population);
+
+		ExMasConfigGroup.CommuteFilter commuteFilter = exmasConfig.getCommuteFilter();
+		log.info("Commute filter: {}", commuteFilter);
+
 		List<DrtRequest> requests = new ArrayList<>();
+		int filteredByCommute = 0;
 
 		int processedPersons = 0;
 		int totalPersons = population.getPersons().size();
@@ -91,7 +101,6 @@ public class DrtRequestFactory {
 			List<Trip> trips = TripStructureUtils.getTrips(plan);
 			Map<Id<Person>, Map<Integer, Entry<String, Double>>> bestBaselineModes = modeRoutingCache
 					.getBestBaselineModes();
-									// Check if DRT is available for this trip
 
 			if (tripToGroupId == null || tripModeAttributes == null) {
 				// No routing data available for this person
@@ -103,7 +112,7 @@ public class DrtRequestFactory {
 			for (int tripIdx = 0; tripIdx < trips.size(); tripIdx++) {
 				Trip trip = trips.get(tripIdx);
 				Entry<String, Double> bestBaselineMode = bestBaselineModes.get(person.getId()).get(tripIdx);
-				
+
 				Map<String, ModeAttributes> modeAttrs = tripModeAttributes.get(tripIdx);
 				String drtMode = exmasConfig.getDrtMode();
 
@@ -112,11 +121,23 @@ public class DrtRequestFactory {
 					continue;
 				}
 
+				// Check commute status and apply filter
+				boolean isCommute = commuteIdentifier.isCommute(person.getId(), tripIdx);
+
+				if (commuteFilter == ExMasConfigGroup.CommuteFilter.COMMUTES_ONLY && !isCommute) {
+					filteredByCommute++;
+					continue;
+				}
+				if (commuteFilter == ExMasConfigGroup.CommuteFilter.NON_COMMUTES && isCommute) {
+					filteredByCommute++;
+					continue;
+				}
+
 				// Get group ID for this trip
 				String groupId = tripToGroupId.getOrDefault(tripIdx, person.getId().toString() + "_trip_" + tripIdx);
 
 				DrtRequest request = buildRequest(
-						requests.size(), person, trip, tripIdx, groupId, bestBaselineMode, modeAttrs);
+						requests.size(), person, trip, tripIdx, groupId, isCommute, bestBaselineMode, modeAttrs);
 
 				if (request != null) {
 					requests.add(request);
@@ -133,8 +154,8 @@ public class DrtRequestFactory {
 
 		long elapsed = System.currentTimeMillis() - startTime;
 		double seconds = elapsed / 1000.0;
-		log.info("Request building complete: {} requests from {} persons in {}s",
-				requests.size(), totalPersons, String.format("%.1f", seconds));
+		log.info("Request building complete: {} requests from {} persons in {}s (filtered {} by commute filter)",
+				requests.size(), totalPersons, String.format("%.1f", seconds), filteredByCommute);
 
 		return requests;
 	}
@@ -146,7 +167,7 @@ public class DrtRequestFactory {
 	 */
 	private DrtRequest buildRequest(
 			int requestIndex, Person person, Trip trip, int tripIdx,
-			String groupId,	Entry<String, Double> bestBaselineMode, Map<String, ModeAttributes> modeAttrs) {
+			String groupId, boolean isCommute, Entry<String, Double> bestBaselineMode, Map<String, ModeAttributes> modeAttrs) {
 
 		String drtMode = exmasConfig.getDrtMode();
 		ModeAttributes drtAttrs = modeAttrs.get(drtMode);
@@ -170,6 +191,7 @@ public class DrtRequestFactory {
 				.personId(person.getId())
 				.groupId(groupId)
 				.tripIndex(tripIdx)
+				.isCommute(isCommute)
 				.budget(0.0) // Will be calculated
 				.bestModeScore(bestBaselineMode.getValue())
 				.bestMode(bestBaselineMode.getKey())
@@ -182,7 +204,6 @@ public class DrtRequestFactory {
 				.requestTime(requestTime)
 				.directTravelTime(drtAttrs.travelTime)
 				.directDistance(drtAttrs.distance)
-
 				// Temporary placeholders for time windows (will be recalculated with actual
 				// budget)
 				.earliestDeparture(requestTime)
@@ -190,8 +211,7 @@ public class DrtRequestFactory {
 				.build();
 
 		// Calculate budget using BudgetValidator for consistency
-		double budget = budgetValidator.calculateInitialBudget(
-				tempRequest);
+		double budget = budgetValidator.calculateBudget(tempRequest);
 
 		// Calculate temporal window with flexible origin/destination components
 		// max_absolute_detour is the smaller of:
@@ -231,6 +251,7 @@ public class DrtRequestFactory {
 				.personId(person.getId())
 				.groupId(groupId)
 				.tripIndex(tripIdx)
+				.isCommute(isCommute)
 				.budget(budget)
 				.bestModeScore(bestBaselineMode.getValue())
 				.bestMode(bestBaselineMode.getKey())
