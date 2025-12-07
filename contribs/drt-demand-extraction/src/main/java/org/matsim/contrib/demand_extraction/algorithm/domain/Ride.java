@@ -12,21 +12,16 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  * Corresponds to a row in the Python rides DataFrame.
  *
  * Python reference: src/exmas_commuters/core/exmas/rides.py
- * DataFrame columns: request_index, degree, kind, origins_ordered, destinations_ordered,
- *                    passenger_travel_time, passenger_distance, delay, etc.
  *
- * Uses direct object references to DrtRequest objects for efficient access.
- * Indices are derived from request objects when needed (e.g., for CSV output or graph operations).
+ * Uses direct DrtRequest references. Link IDs are derived from requests when needed.
  */
 public final class Ride {
     private final int index;
     private final int degree;
     private final RideKind kind;
 
-    // Request information (arrays of length = degree)
-    private final DrtRequest[] requests;           // Direct references to requests
-    private final Id<Link>[] originsOrdered;       // Pickup sequence (Link IDs)
-    private final Id<Link>[] destinationsOrdered;  // Dropoff sequence (Link IDs)
+    // Request arrays (length = degree)
+    private final DrtRequest[] requests;                    // Requests in index order
     private final DrtRequest[] originsOrderedRequests;      // Requests in pickup order
     private final DrtRequest[] destinationsOrderedRequests; // Requests in dropoff order
 
@@ -62,8 +57,6 @@ public final class Ride {
 
         // Copy arrays (defensive)
         this.requests = builder.requests.clone();
-        this.originsOrdered = builder.originsOrdered.clone();
-        this.destinationsOrdered = builder.destinationsOrdered.clone();
         this.originsOrderedRequests = builder.originsOrderedRequests.clone();
         this.destinationsOrderedRequests = builder.destinationsOrderedRequests.clone();
         this.passengerTravelTimes = builder.passengerTravelTimes.clone();
@@ -108,7 +101,7 @@ public final class Ride {
         return requests[passengerIndex];
     }
 
-    // Derived indices for backward compatibility, graph operations, and CSV output
+    // Derived indices for graph operations and CSV output
     public int[] getRequestIndices() {
         int[] indices = new int[requests.length];
         for (int i = 0; i < requests.length; i++) {
@@ -117,12 +110,23 @@ public final class Ride {
         return indices;
     }
 
+    // Derive Link IDs from request arrays
+    @SuppressWarnings("unchecked")
     public Id<Link>[] getOriginsOrdered() {
-        return originsOrdered.clone();
+        Id<Link>[] links = (Id<Link>[]) new Id[originsOrderedRequests.length];
+        for (int i = 0; i < originsOrderedRequests.length; i++) {
+            links[i] = originsOrderedRequests[i].originLinkId;
+        }
+        return links;
     }
 
+    @SuppressWarnings("unchecked")
     public Id<Link>[] getDestinationsOrdered() {
-        return destinationsOrdered.clone();
+        Id<Link>[] links = (Id<Link>[]) new Id[destinationsOrderedRequests.length];
+        for (int i = 0; i < destinationsOrderedRequests.length; i++) {
+            links[i] = destinationsOrderedRequests[i].destinationLinkId;
+        }
+        return links;
     }
 
     public DrtRequest[] getOriginsOrderedRequests() {
@@ -179,8 +183,6 @@ public final class Ride {
         private int degree;
         private RideKind kind;
         private DrtRequest[] requests;
-        private Id<Link>[] originsOrdered;
-        private Id<Link>[] destinationsOrdered;
         private DrtRequest[] originsOrderedRequests;
         private DrtRequest[] destinationsOrderedRequests;
         private double[] passengerTravelTimes;
@@ -215,16 +217,6 @@ public final class Ride {
 
         public Builder requests(DrtRequest[] requests) {
             this.requests = requests;
-            return this;
-        }
-
-        public Builder originsOrdered(Id<Link>[] originsOrdered) {
-            this.originsOrdered = originsOrdered;
-            return this;
-        }
-
-        public Builder destinationsOrdered(Id<Link>[] destinationsOrdered) {
-            this.destinationsOrdered = destinationsOrdered;
             return this;
         }
 
@@ -310,16 +302,6 @@ public final class Ride {
                 throw new IllegalArgumentException(
                     String.format("requests length (%d) must equal degree (%d)",
                         requests != null ? requests.length : 0, degree)
-                );
-            }
-            if (originsOrdered == null || originsOrdered.length != degree) {
-                throw new IllegalArgumentException(
-                    String.format("originsOrdered length must equal degree (%d)", degree)
-                );
-            }
-            if (destinationsOrdered == null || destinationsOrdered.length != degree) {
-                throw new IllegalArgumentException(
-                    String.format("destinationsOrdered length must equal degree (%d)", degree)
                 );
             }
             if (originsOrderedRequests == null || originsOrderedRequests.length != degree) {

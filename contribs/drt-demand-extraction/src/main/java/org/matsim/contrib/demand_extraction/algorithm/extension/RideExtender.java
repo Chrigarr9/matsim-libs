@@ -5,8 +5,6 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.IntStream;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -26,7 +24,7 @@ import it.unimi.dsi.fastutil.ints.IntSet;
 /**
  * Extends rides from degree N to N+1 using shareability graph.
  *
- * Uses deterministic parallel processing to ensure reproducible results.
+ * Simple sequential processing for deterministic results.
  * Works with direct DrtRequest references stored in Rides.
  *
  * Python reference: extensions.py lines 13-194
@@ -53,8 +51,7 @@ public final class RideExtender {
 	}
 
 	/**
-	 * Extend rides using deterministic parallel processing.
-	 * Results are reproducible across runs with the same input.
+	 * Extend rides sequentially for deterministic results.
 	 */
 	public List<Ride> extendRides(List<Ride> ridesToExtend, int nextRideIndex) {
 		int targetDegree = ridesToExtend.isEmpty() ? 0 : ridesToExtend.get(0).getDegree() + 1;
@@ -62,54 +59,31 @@ public final class RideExtender {
 				ridesToExtend.size(), targetDegree - 1, targetDegree);
 		long startTime = System.currentTimeMillis();
 
+		List<Ride> extended = new ArrayList<>();
+		int candidatesFound = 0;
+		int extensionAttempts = 0;
+		int duplicatePersons = 0;
+		int missingPairs = 0;
+
 		int total = ridesToExtend.size();
-
-		// Phase 1: Count extensions per ride for index allocation (sequential, fast)
-		int[] extensionCounts = new int[total];
-		int totalPotentialExtensions = 0;
-
-		for (int i = 0; i < total; i++) {
-			Ride ride = ridesToExtend.get(i);
-			IntSet commonNeighbors = graph.findCommonNeighbors(ride.getRequestIndices());
-			extensionCounts[i] = commonNeighbors.size();
-			totalPotentialExtensions += commonNeighbors.size();
-		}
-
-		// Phase 2: Pre-allocate index ranges
-		int[] indexStarts = new int[total];
-		int currentIndex = nextRideIndex;
-		for (int i = 0; i < total; i++) {
-			indexStarts[i] = currentIndex;
-			currentIndex += extensionCounts[i];
-		}
-
-		log.info("  Pre-allocated {} potential extension indices", totalPotentialExtensions);
-
-		// Phase 3: Parallel processing with pre-allocated indices
-		AtomicInteger processedRequests = new AtomicInteger(0);
-		AtomicInteger candidatesFound = new AtomicInteger(0);
-		AtomicInteger extensionAttempts = new AtomicInteger(0);
-		AtomicInteger duplicatePersons = new AtomicInteger(0);
-		AtomicInteger missingPairs = new AtomicInteger(0);
-		AtomicInteger validExtensions = new AtomicInteger(0);
 		int logInterval = Math.max(1, total / 10);
 
-		Ride[] allExtensions = new Ride[totalPotentialExtensions];
-
-		IntStream.range(0, total).parallel().forEach(i -> {
-			int processed = processedRequests.incrementAndGet();
-			if (processed % logInterval == 0) {
-				double percent = (processed * 100.0) / total;
-				log.info("  Extension progress: {}/{} ({}%) - ~{} extended rides",
-						processed, total, String.format("%.1f", percent), validExtensions.get());
+		for (int i = 0; i < total; i++) {
+			if (i > 0 && i % logInterval == 0) {
+				double percent = (i * 100.0) / total;
+				log.info("  Extension progress: {}/{} ({}%) - {} extended rides",
+						i, total, String.format("%.1f", percent), extended.size());
 			}
 
 			Ride ride = ridesToExtend.get(i);
 			IntSet commonNeighbors = graph.findCommonNeighbors(ride.getRequestIndices());
-			int localRideIndex = indexStarts[i];
 
-			for (int candidateReq : commonNeighbors) {
-				candidatesFound.incrementAndGet();
+			// Sort neighbors for deterministic processing order
+			int[] sortedNeighbors = commonNeighbors.toIntArray();
+			Arrays.sort(sortedNeighbors);
+
+			for (int candidateReq : sortedNeighbors) {
+				candidatesFound++;
 
 				// Check that candidate request has different personId from all existing passengers
 				DrtRequest newRequest = requestMap.get(candidateReq);
@@ -121,44 +95,34 @@ public final class RideExtender {
 					}
 				}
 				if (duplicatePerson) {
-					duplicatePersons.incrementAndGet();
+					duplicatePersons++;
 					continue;
 				}
 
 				int[] pairRides = getPairRides(ride.getRequestIndices(), candidateReq);
 				if (pairRides == null) {
-					missingPairs.incrementAndGet();
+					missingPairs++;
 					continue;
 				}
 
-				extensionAttempts.incrementAndGet();
-				Ride ext = tryExtend(ride, newRequest, pairRides, localRideIndex);
+				extensionAttempts++;
+				Ride ext = tryExtend(ride, newRequest, pairRides, nextRideIndex);
 				if (ext != null) {
 					Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
 					if (validated != null) {
-						allExtensions[localRideIndex - nextRideIndex] = validated;
-						localRideIndex++;
-						validExtensions.incrementAndGet();
+						extended.add(validated);
+						nextRideIndex++;
 					}
 				}
 			}
-		});
-
-		// Phase 4: Collect non-null extensions and sort for deterministic order
-		List<Ride> extended = new ArrayList<>();
-		for (Ride ride : allExtensions) {
-			if (ride != null) {
-				extended.add(ride);
-			}
 		}
-		extended.sort((r1, r2) -> Integer.compare(r1.getIndex(), r2.getIndex()));
 
 		long elapsed = System.currentTimeMillis() - startTime;
 		double seconds = elapsed / 1000.0;
 		log.info("Extension complete: {} rides extended to degree {} in {}s",
 				extended.size(), targetDegree, String.format("%.1f", seconds));
 		log.info("  Statistics: {} candidates, {} attempts, {} duplicate persons, {} missing pairs",
-				candidatesFound.get(), extensionAttempts.get(), duplicatePersons.get(), missingPairs.get());
+				candidatesFound, extensionAttempts, duplicatePersons, missingPairs);
 
 		return extended;
 	}
@@ -174,12 +138,10 @@ public final class RideExtender {
 	}
 
 	private Ride tryExtend(Ride base, DrtRequest newRequest, int[] pairRides, int index) {
-		Id<Link> newOriginLink = newRequest.originLinkId;
-		Id<Link> newDestLink = newRequest.destinationLinkId;
 		int degree = base.getDegree();
 		DrtRequest[] destOrderedRequests = base.getDestinationsOrderedRequests();
 
-		// Determine insertion position
+		// Determine insertion position based on pair ride kinds
 		int fifoCount = 0;
 		int lifoCount = 0;
 		int minLifoPos = Integer.MAX_VALUE;
@@ -216,21 +178,21 @@ public final class RideExtender {
 			return null;
 		}
 
-		// Build new arrays with direct object references
+		// Build new request arrays
 		DrtRequest[] requests = appendRequest(base.getRequests(), newRequest);
-		Id<Link>[] originsOrdered = appendLink(base.getOriginsOrdered(), newOriginLink);
 		DrtRequest[] originsOrderedRequests = appendRequest(base.getOriginsOrderedRequests(), newRequest);
-		Id<Link>[] destinationsOrdered = insertLink(base.getDestinationsOrdered(), insertPos, newDestLink);
 		DrtRequest[] destinationsOrderedRequests = insertRequest(base.getDestinationsOrderedRequests(), insertPos, newRequest);
 
-		// Build connection sequence
-		Id<Link>[] sequence = concatLink(originsOrdered, destinationsOrdered);
-		double[] connTT = new double[sequence.length - 1];
-		double[] connDist = new double[sequence.length - 1];
-		double[] connUtil = new double[sequence.length - 1];
+		// Build connection sequence from request arrays (derive Link IDs)
+		int seqLen = (degree + 1) * 2;
+		Id<Link>[] sequence = buildSequence(originsOrderedRequests, destinationsOrderedRequests);
+
+		double[] connTT = new double[seqLen - 1];
+		double[] connDist = new double[seqLen - 1];
+		double[] connUtil = new double[seqLen - 1];
 
 		double startTime = requests[0].getRequestTime();
-		for (int i = 0; i < sequence.length - 1; i++) {
+		for (int i = 0; i < seqLen - 1; i++) {
 			TravelSegment seg = network.getSegment(sequence[i], sequence[i + 1], startTime);
 			if (!seg.isReachable()) return null;
 			connTT[i] = seg.getTravelTime();
@@ -246,7 +208,7 @@ public final class RideExtender {
 		for (int i = 0; i < degree + 1; i++) {
 			DrtRequest req = requests[i];
 
-			// Origin position is always i (origins are always in sequential order)
+			// Origin position is always i
 			int origIdx = i;
 
 			// Find where this request appears in the destinations ordering
@@ -254,7 +216,6 @@ public final class RideExtender {
 			if (destPosInDestArray < 0) {
 				throw new IllegalStateException("Request " + req.index + " not found in destinationsOrderedRequests");
 			}
-			// Convert to position in full sequence (origins are 0..degree, destinations are degree+1..2*degree+1)
 			int destIdx = degree + 1 + destPosInDestArray;
 
 			for (int j = origIdx; j < destIdx; j++) {
@@ -275,7 +236,6 @@ public final class RideExtender {
 		double[] delays = new double[degree + 1];
 		for (int i = 0; i < degree + 1; i++) {
 			double arrivalAtOrigin = startTime;
-			// Sum all connection times before passenger i's origin
 			for (int j = 0; j < i; j++) {
 				arrivalAtOrigin += connTT[j];
 			}
@@ -291,11 +251,9 @@ public final class RideExtender {
 			double detour = pttActual[i] - req.getTravelTime();
 
 			double posAdj = req.getPositiveDelayRelComponent() > 0.0
-					? Math.max(0.0, req.getPositiveDelayRelComponent() - detour)
-					: 0.0;
+					? Math.max(0.0, req.getPositiveDelayRelComponent() - detour) : 0.0;
 			double negAdj = req.getNegativeDelayRelComponent() > 0.0
-					? Math.max(0.0, req.getNegativeDelayRelComponent() - detour)
-					: 0.0;
+					? Math.max(0.0, req.getNegativeDelayRelComponent() - detour) : 0.0;
 
 			effMaxPos[i] = (req.getMaxPositiveDelay() - detour) - posAdj;
 			effMaxNeg[i] = req.getMaxNegativeDelay() - negAdj;
@@ -310,8 +268,6 @@ public final class RideExtender {
 				.degree(degree + 1)
 				.kind(kind)
 				.requests(requests)
-				.originsOrdered(originsOrdered)
-				.destinationsOrdered(destinationsOrdered)
 				.originsOrderedRequests(originsOrderedRequests)
 				.destinationsOrderedRequests(destinationsOrderedRequests)
 				.passengerTravelTimes(pttActual)
@@ -323,6 +279,18 @@ public final class RideExtender {
 				.connectionNetworkUtilities(connUtil)
 				.startTime(startTime)
 				.build();
+	}
+
+	@SuppressWarnings("unchecked")
+	private Id<Link>[] buildSequence(DrtRequest[] origins, DrtRequest[] destinations) {
+		Id<Link>[] seq = (Id<Link>[]) new Id[origins.length + destinations.length];
+		for (int i = 0; i < origins.length; i++) {
+			seq[i] = origins[i].originLinkId;
+		}
+		for (int i = 0; i < destinations.length; i++) {
+			seq[origins.length + i] = destinations[i].destinationLinkId;
+		}
+		return seq;
 	}
 
 	private double[] optimizeDelays(double[] delays, double[] maxNeg, double[] maxPos) {
@@ -373,31 +341,6 @@ public final class RideExtender {
 		System.arraycopy(arr, 0, res, 0, pos);
 		res[pos] = val;
 		System.arraycopy(arr, pos, res, pos + 1, arr.length - pos);
-		return res;
-	}
-
-	@SuppressWarnings("unchecked")
-	private Id<Link>[] appendLink(Id<Link>[] arr, Id<Link> val) {
-		Id<Link>[] res = (Id<Link>[]) new Id[arr.length + 1];
-		System.arraycopy(arr, 0, res, 0, arr.length);
-		res[arr.length] = val;
-		return res;
-	}
-
-	@SuppressWarnings("unchecked")
-	private Id<Link>[] insertLink(Id<Link>[] arr, int pos, Id<Link> val) {
-		Id<Link>[] res = (Id<Link>[]) new Id[arr.length + 1];
-		System.arraycopy(arr, 0, res, 0, pos);
-		res[pos] = val;
-		System.arraycopy(arr, pos, res, pos + 1, arr.length - pos);
-		return res;
-	}
-
-	@SuppressWarnings("unchecked")
-	private Id<Link>[] concatLink(Id<Link>[] a, Id<Link>[] b) {
-		Id<Link>[] res = (Id<Link>[]) new Id[a.length + b.length];
-		System.arraycopy(a, 0, res, 0, a.length);
-		System.arraycopy(b, 0, res, a.length, b.length);
 		return res;
 	}
 }

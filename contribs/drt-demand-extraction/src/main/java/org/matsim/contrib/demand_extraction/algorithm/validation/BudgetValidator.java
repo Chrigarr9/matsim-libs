@@ -93,8 +93,6 @@ public class BudgetValidator {
 				.degree(ride.getDegree())
 				.kind(ride.getKind())
 				.requests(ride.getRequests())
-				.originsOrdered(ride.getOriginsOrdered())
-				.destinationsOrdered(ride.getDestinationsOrdered())
 				.originsOrderedRequests(ride.getOriginsOrderedRequests())
 				.destinationsOrderedRequests(ride.getDestinationsOrderedRequests())
 				.passengerTravelTimes(ride.getPassengerTravelTimes())

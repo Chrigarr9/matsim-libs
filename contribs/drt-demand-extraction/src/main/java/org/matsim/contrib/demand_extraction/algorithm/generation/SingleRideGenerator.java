@@ -5,8 +5,6 @@ import java.util.List;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.matsim.api.core.v01.Id;
-import org.matsim.api.core.v01.network.Link;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
@@ -17,8 +15,6 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 /**
  * Generates degree-1 (single passenger) rides from requests.
  * Validates that DRT utility meets or exceeds baseline mode utility (positive budget).
- *
- * Uses direct object references to DrtRequest objects in the generated Rides.
  *
  * Python reference: src/exmas_commuters/core/exmas/rides.py lines 12-41
  */
@@ -47,19 +43,12 @@ public final class SingleRideGenerator {
 			processed++;
 			TravelSegment segment = networkCache.getSegment(req.originLinkId, req.destinationLinkId, req.requestTime);
 
-			@SuppressWarnings("unchecked")
-			Id<Link>[] origins = (Id<Link>[]) new Id[] { req.originLinkId };
-			@SuppressWarnings("unchecked")
-			Id<Link>[] destinations = (Id<Link>[]) new Id[] { req.destinationLinkId };
-
-			// Build candidate ride with direct request references (without budget populated yet)
+			// Build candidate ride with direct request references
 			Ride candidateRide = Ride.builder()
 				.index(req.index)
 				.degree(1)
 				.kind(RideKind.SINGLE)
 				.requests(new DrtRequest[] { req })
-				.originsOrdered(origins)
-				.destinationsOrdered(destinations)
 				.originsOrderedRequests(new DrtRequest[] { req })
 				.destinationsOrderedRequests(new DrtRequest[] { req })
 				.passengerTravelTimes(new double[] { segment.getTravelTime() })
