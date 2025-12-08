@@ -1,9 +1,14 @@
 package org.matsim.contrib.demand_extraction.algorithm.extension;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -22,7 +27,7 @@ import it.unimi.dsi.fastutil.ints.IntList;
 /**
  * Extends rides from degree N to N+1 using shareability graph.
  *
- * Simple sequential processing for deterministic results.
+ * Uses parallel processing with deterministic output ordering.
  * Works with direct DrtRequest references stored in Rides.
  *
  * Python reference: extensions.py lines 13-194
@@ -49,77 +54,119 @@ public final class RideExtender {
 	}
 
 	/**
-	 * Extend rides sequentially for deterministic results.
+	 * Intermediate candidate holding validated extension before index assignment.
+	 */
+	private record ExtensionCandidate(
+			int baseRideIndex, int newRequestIndex, Ride validatedRide) {
+
+		static final Comparator<ExtensionCandidate> COMPARATOR = Comparator
+				.comparingInt((ExtensionCandidate c) -> c.baseRideIndex)
+				.thenComparingInt(c -> c.newRequestIndex);
+	}
+
+	/**
+	 * Extend rides with parallel processing and deterministic output.
 	 */
 	public List<Ride> extendRides(List<Ride> ridesToExtend, int nextRideIndex) {
 		int targetDegree = ridesToExtend.isEmpty() ? 0 : ridesToExtend.get(0).getDegree() + 1;
-		log.info("Extending {} rides from degree {} to {}...",
+		log.info("Extending {} rides from degree {} to {} [parallel]...",
 				ridesToExtend.size(), targetDegree - 1, targetDegree);
 		long startTime = System.currentTimeMillis();
 
-		List<Ride> extended = new ArrayList<>();
-		int candidatesFound = 0;
-		int extensionAttempts = 0;
-		int duplicatePersons = 0;
-		int missingPairs = 0;
-
 		int total = ridesToExtend.size();
+		AtomicInteger processedRides = new AtomicInteger(0);
 		int logInterval = Math.max(1, total / 10);
 
-		for (int i = 0; i < total; i++) {
-			if (i > 0 && i % logInterval == 0) {
-				double percent = (i * 100.0) / total;
-				log.info("  Extension progress: {}/{} ({}%) - {} extended rides",
-						i, total, String.format("%.1f", percent), extended.size());
-			}
-
-			Ride ride = ridesToExtend.get(i);
-			// Graph returns pre-sorted neighbors for deterministic iteration
-			int[] neighbors = graph.findCommonNeighborsSorted(ride.getRequestIndices());
-
-			for (int candidateReq : neighbors) {
-				candidatesFound++;
-
-				// Check that candidate request has different personId from all existing passengers
-				DrtRequest newRequest = requestMap.get(candidateReq);
-				boolean duplicatePerson = false;
-				for (DrtRequest existingRequest : ride.getRequests()) {
-					if (newRequest.getPaxId().equals(existingRequest.getPaxId())) {
-						duplicatePerson = true;
-						break;
+		// Phase 1: Parallel processing - collect validated extensions
+		List<ExtensionCandidate> candidates = IntStream.range(0, total)
+				.parallel()
+				.mapToObj(i -> {
+					int processed = processedRides.incrementAndGet();
+					if (processed % logInterval == 0) {
+						double percent = (processed * 100.0) / total;
+						log.info("  Extension progress: {}/{} ({}%)",
+								processed, total, String.format("%.1f", percent));
 					}
-				}
-				if (duplicatePerson) {
-					duplicatePersons++;
-					continue;
-				}
+					return generateExtensionsForRide(ridesToExtend.get(i));
+				})
+				.flatMap(List::stream)
+				.collect(Collectors.toList());
 
-				int[] pairRides = getPairRides(ride.getRequestIndices(), candidateReq);
-				if (pairRides == null) {
-					missingPairs++;
-					continue;
-				}
+		// Phase 2: Sort by (baseRideIndex, newRequestIndex) for deterministic order
+		candidates.sort(ExtensionCandidate.COMPARATOR);
 
-				extensionAttempts++;
-				Ride ext = tryExtend(ride, newRequest, pairRides, nextRideIndex);
-				if (ext != null) {
-					Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
-					if (validated != null) {
-						extended.add(validated);
-						nextRideIndex++;
-					}
-				}
-			}
+		// Phase 3: Reassign indices sequentially
+		List<Ride> extended = new ArrayList<>();
+		for (ExtensionCandidate c : candidates) {
+			Ride reindexed = rebuildWithIndex(c.validatedRide, nextRideIndex++);
+			extended.add(reindexed);
 		}
 
 		long elapsed = System.currentTimeMillis() - startTime;
 		double seconds = elapsed / 1000.0;
 		log.info("Extension complete: {} rides extended to degree {} in {}s",
 				extended.size(), targetDegree, String.format("%.1f", seconds));
-		log.info("  Statistics: {} candidates, {} attempts, {} duplicate persons, {} missing pairs",
-				candidatesFound, extensionAttempts, duplicatePersons, missingPairs);
 
 		return extended;
+	}
+
+	/**
+	 * Generate all valid extensions for a single base ride.
+	 */
+	private List<ExtensionCandidate> generateExtensionsForRide(Ride ride) {
+		List<ExtensionCandidate> results = new ArrayList<>();
+		int[] neighbors = graph.findCommonNeighborsSorted(ride.getRequestIndices());
+
+		for (int candidateReq : neighbors) {
+			DrtRequest newRequest = requestMap.get(candidateReq);
+
+			// Check for duplicate person
+			boolean duplicatePerson = false;
+			for (DrtRequest existingRequest : ride.getRequests()) {
+				if (newRequest.getPaxId().equals(existingRequest.getPaxId())) {
+					duplicatePerson = true;
+					break;
+				}
+			}
+			if (duplicatePerson) continue;
+
+			int[] pairRides = getPairRides(ride.getRequestIndices(), candidateReq);
+			if (pairRides == null) continue;
+
+			// Use temp index (will be reassigned later)
+			Ride ext = tryExtend(ride, newRequest, pairRides, 0);
+			if (ext != null) {
+				Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
+				if (validated != null) {
+					results.add(new ExtensionCandidate(ride.getIndex(), candidateReq, validated));
+				}
+			}
+		}
+
+		return results;
+	}
+
+	/**
+	 * Rebuild ride with new index.
+	 */
+	private Ride rebuildWithIndex(Ride ride, int newIndex) {
+		return Ride.builder()
+				.index(newIndex)
+				.degree(ride.getDegree())
+				.kind(ride.getKind())
+				.requests(ride.getRequests())
+				.originsOrderedRequests(ride.getOriginsOrderedRequests())
+				.destinationsOrderedRequests(ride.getDestinationsOrderedRequests())
+				.passengerTravelTimes(ride.getPassengerTravelTimes())
+				.passengerDistances(ride.getPassengerDistances())
+				.passengerNetworkUtilities(ride.getPassengerNetworkUtilities())
+				.delays(ride.getDelays())
+				.remainingBudgets(ride.getRemainingBudgets())
+				.connectionTravelTimes(ride.getConnectionTravelTimes())
+				.connectionDistances(ride.getConnectionDistances())
+				.connectionNetworkUtilities(ride.getConnectionNetworkUtilities())
+				.startTime(ride.getStartTime())
+				.build();
 	}
 
 	private int[] getPairRides(int[] requests, int candidate) {
