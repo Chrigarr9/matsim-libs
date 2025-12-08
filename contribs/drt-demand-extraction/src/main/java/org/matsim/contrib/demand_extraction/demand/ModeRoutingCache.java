@@ -17,6 +17,7 @@ import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.PlanElement;
 import org.matsim.api.core.v01.population.Population;
+import org.matsim.contrib.demand_extraction.algorithm.util.StringUtils;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.core.config.Config;
 import org.matsim.core.population.PersonUtils;
@@ -108,7 +109,7 @@ public class ModeRoutingCache {
 					if (mode.equals(exMasConfig.getDrtMode())) {	
 						// For DRT: check if dedicated DRT routing module exists in TripRouter
 						// Routing module name: "direct{DrtMode}Router" (e.g., "directDrtRouter")
-						String drtRouterName = "direct" + capitalize(mode) + "Router";
+						String drtRouterName = "direct" + StringUtils.capitalize(mode) + "Router";
 						if (tripRouter.getRoutingModule(drtRouterName) != null) {
 							routingMode = drtRouterName; // Use DRT-specific network-filtered routing
 						} else {
@@ -398,12 +399,5 @@ public class ModeRoutingCache {
 			// Routing failed - return NaN
 			return Double.NaN;
 		}
-	}
-
-	private static String capitalize(String str) {
-		if (str == null || str.isEmpty()) {
-			return str;
-		}
-		return str.substring(0, 1).toUpperCase() + str.substring(1);
 	}
 }

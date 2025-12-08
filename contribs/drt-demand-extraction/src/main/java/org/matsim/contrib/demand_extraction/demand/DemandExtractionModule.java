@@ -13,6 +13,8 @@ import org.matsim.core.config.groups.QSimConfigGroup;
 import org.matsim.core.config.groups.ScoringConfigGroup;
 import org.matsim.core.controler.AbstractModule;
 
+import ch.sbb.matsim.config.SwissRailRaptorConfigGroup;
+
 public class DemandExtractionModule extends AbstractModule {
 	private static final Logger log = LogManager.getLogger(DemandExtractionModule.class);
 
@@ -63,6 +65,7 @@ public class DemandExtractionModule extends AbstractModule {
 		ensureQSimConfigCorrect(config);
 		ensureDrtScoringParamsExist(config, exMasConfig.getDrtMode());
 		ensureTravelTimeCalculatorCorrect(config);
+		ensurePtRouterConfigCorrect(config, exMasConfig);
 	}
 
 	/**
@@ -77,6 +80,43 @@ public class DemandExtractionModule extends AbstractModule {
 		if (!config.travelTimeCalculator().getSeparateModes()) {
 			log.info("Setting travelTimeCalculator.separateModes to true (required for mode-specific travel times)");
 			config.travelTimeCalculator().setSeparateModes(true);
+		}
+	}
+
+	/**
+	 * Configures SwissRailRaptor (PT router) based on ExMas settings.
+	 *
+	 * When ptOptimizeDepartureTime is true, enables range query mode which allows
+	 * the PT router to find connections within a time window around the requested
+	 * departure time. This reduces waiting times by allowing agents to leave
+	 * earlier or later to catch better PT connections.
+	 *
+	 * Range query parameters:
+	 * - maxEarlierDeparture: How much earlier can agent leave (default: 10 min = 600s)
+	 * - maxLaterDeparture: How much later can agent leave (default: 15 min = 900s)
+	 */
+	private static void ensurePtRouterConfigCorrect(Config config, ExMasConfigGroup exMasConfig) {
+		if (!exMasConfig.isPtOptimizeDepartureTime()) {
+			return; // Don't modify PT router config if optimization is disabled
+		}
+
+		// Get or create SwissRailRaptorConfigGroup
+		SwissRailRaptorConfigGroup raptorConfig = ConfigUtils.addOrGetModule(config, SwissRailRaptorConfigGroup.class);
+
+		if (!raptorConfig.isUseRangeQuery()) {
+			log.info("Enabling SwissRailRaptor range query for flexible PT departure times");
+			raptorConfig.setUseRangeQuery(true);
+
+			// Add default range query settings if none exist
+			if (raptorConfig.getRangeQuerySettings(null) == null) {
+				SwissRailRaptorConfigGroup.RangeQuerySettingsParameterSet rangeSettings =
+						new SwissRailRaptorConfigGroup.RangeQuerySettingsParameterSet();
+				// Default: 10 min earlier, 15 min later (same as SwissRailRaptor defaults)
+				rangeSettings.setMaxEarlierDeparture(600);
+				rangeSettings.setMaxLaterDeparture(900);
+				raptorConfig.addRangeQuerySettings(rangeSettings);
+				log.info("  Added range query settings: maxEarlierDeparture=600s, maxLaterDeparture=900s");
+			}
 		}
 	}
 

@@ -18,9 +18,11 @@ import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
+import org.matsim.contrib.demand_extraction.algorithm.util.StringUtils;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.core.population.PopulationUtils;
 import org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutility;
+import org.matsim.core.router.costcalculators.TravelDisutilityFactory;
 import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.LeastCostPathCalculator.Path;
 import org.matsim.core.router.util.TravelDisutility;
@@ -95,7 +97,7 @@ public class MatsimNetworkCache {
 		// Falls back to car mode if DRT-specific components not bound
 
 		String drtMode = config.getDrtMode();
-		String drtRouterName = "direct" + capitalize(drtMode) + "Router";
+		String drtRouterName = "direct" + StringUtils.capitalize(drtMode) + "Router";
 
 		// Get DRT-specific router (uses filtered network)
 		this.router = injector.getInstance(Key.get(LeastCostPathCalculator.class, Names.named(drtRouterName)));
@@ -109,15 +111,34 @@ public class MatsimNetworkCache {
 			drtTravelTime = injector.getInstance(Key.get(TravelTime.class, Names.named(TransportMode.car)));
 		}
 
-		// IMPORTANT: Use OnlyTimeDependentTravelDisutility for DETERMINISTIC routing
-		// The default TravelDisutilityFactory may include randomization for route choice,
-		// which is undesirable for demand extraction where we need reproducible results.
-		// OnlyTimeDependentTravelDisutility uses only travel time, without any randomization.
-		// This ensures the same O-D pair at the same time always produces the same route.
+		// Choose TravelDisutility based on config setting:
+		// - Deterministic (useDeterministicNetworkRouting=true): Uses OnlyTimeDependentTravelDisutility
+		//   - Guarantees reproducible results (same O-D pair always produces same route)
+		//   - But ignores tolls and other monetary costs on the network
+		// - Full (useDeterministicNetworkRouting=false): Uses mode-specific TravelDisutility
+		//   - Captures tolls, road pricing, and other cost factors
+		//   - May have slight variation if RandomizingTimeDistanceTravelDisutilityFactory is used
+		TravelDisutility disutility;
+		if (config.isUseDeterministicNetworkRouting()) {
+			log.info("Using deterministic network routing (time-only, ignores tolls)");
+			disutility = new OnlyTimeDependentTravelDisutility(drtTravelTime);
+		} else {
+			// Use mode-specific TravelDisutility (captures tolls)
+			TravelDisutilityFactory drtDisutilityFactory;
+			try {
+				drtDisutilityFactory = injector.getInstance(Key.get(TravelDisutilityFactory.class, Names.named(drtMode)));
+			} catch (Exception e) {
+				// DRT-specific TravelDisutility not bound, use car
+				drtDisutilityFactory = injector.getInstance(Key.get(TravelDisutilityFactory.class, Names.named(TransportMode.car)));
+			}
+			disutility = drtDisutilityFactory.createTravelDisutility(drtTravelTime);
+			log.info("Using full network routing (includes tolls and costs, TravelDisutility type: {})",
+					disutility.getClass().getSimpleName());
+		}
 
 		this.network = network;
 		this.travelTime = drtTravelTime;
-		this.travelDisutility = new OnlyTimeDependentTravelDisutility(drtTravelTime);
+		this.travelDisutility = disutility;
 		this.timeBinSize = config.getNetworkTimeBinSize();
 
 		// Create dummy person and vehicle for generic routing
@@ -408,12 +429,5 @@ public class MatsimNetworkCache {
 			result = 31 * result + timeBin;
 			return result;
 		}
-	}
-
-	private static String capitalize(String str) {
-		if (str == null || str.isEmpty()) {
-			return str;
-		}
-		return str.substring(0, 1).toUpperCase() + str.substring(1);
 	}
 }

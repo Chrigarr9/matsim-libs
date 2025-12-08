@@ -185,7 +185,7 @@ public class BudgetToConstraintsCalculator {
 		
 		double walkSpeed = config.routing().getOrCreateModeRoutingParams(TransportMode.walk).getTeleportedModeSpeed();
 		if (walkSpeed == 0.0) {
-			walkSpeed = 0.833333333; // 3 km/h default
+			walkSpeed = ExMasConfigGroup.DEFAULT_WALK_SPEED;
 		}
 		
 		double walkMarginalUtilityTraveling_s = walkParams.marginalUtilityOfTraveling_s;

@@ -91,6 +91,20 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private double searchHorizon = 600.0; // Time horizon for pairing requests (seconds, 10 minutes)
 	private int maxPoolingDegree = Integer.MAX_VALUE; // Maximum number of passengers per ride
 
+	// Network routing settings
+	// If true, uses OnlyTimeDependentTravelDisutility for deterministic routing (ignores tolls)
+	// If false, uses mode-specific TravelDisutility which may include tolls and other costs
+	private boolean useDeterministicNetworkRouting = false;
+
+	// PT routing settings
+	// If true, allows the PT router to optimize departure time to reduce waiting
+	// This means agents can leave earlier/later to catch better PT connections
+	private boolean ptOptimizeDepartureTime = true;
+
+	// Default walk speed for access/egress calculations (m/s)
+	// 0.833333333 m/s = 3 km/h (typical walking speed)
+	public static final double DEFAULT_WALK_SPEED = 0.833333333;
+
     public ExMasConfigGroup() {
         super(GROUP_NAME);
     }
@@ -303,6 +317,26 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.maxPoolingDegree = maxPoolingDegree;
 	}
 
+	@StringGetter("useDeterministicNetworkRouting")
+	public boolean isUseDeterministicNetworkRouting() {
+		return useDeterministicNetworkRouting;
+	}
+
+	@StringSetter("useDeterministicNetworkRouting")
+	public void setUseDeterministicNetworkRouting(boolean useDeterministicNetworkRouting) {
+		this.useDeterministicNetworkRouting = useDeterministicNetworkRouting;
+	}
+
+	@StringGetter("ptOptimizeDepartureTime")
+	public boolean isPtOptimizeDepartureTime() {
+		return ptOptimizeDepartureTime;
+	}
+
+	@StringSetter("ptOptimizeDepartureTime")
+	public void setPtOptimizeDepartureTime(boolean ptOptimizeDepartureTime) {
+		this.ptOptimizeDepartureTime = ptOptimizeDepartureTime;
+	}
+
     @Override
     public Map<String, String> getComments() {
         Map<String, String> map = super.getComments();
@@ -341,6 +375,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Time horizon for pairing requests in ExMAS algorithm (seconds). Requests within this window can be paired. Default: 600 (10 min)");
 		map.put("maxPoolingDegree",
 				"Maximum number of passengers per shared ride. Default: 2");
+		map.put("useDeterministicNetworkRouting",
+				"If true, uses time-only travel disutility (deterministic but ignores tolls). " +
+				"If false, uses mode-specific travel disutility (includes tolls but may have slight variation). Default: false");
+		map.put("ptOptimizeDepartureTime",
+				"If true, PT router can optimize departure time to reduce waiting times. " +
+				"Agent can leave earlier/later to catch better connections. Default: true");
         return map;
     }
 }

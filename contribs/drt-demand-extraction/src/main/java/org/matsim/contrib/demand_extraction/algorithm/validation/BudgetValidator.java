@@ -1,14 +1,10 @@
 package org.matsim.contrib.demand_extraction.algorithm.validation;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
-import org.matsim.api.core.v01.population.PlanElement;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.api.core.v01.population.Route;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
@@ -17,13 +13,11 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.contrib.drt.routing.DrtRoute;
 import org.matsim.core.config.Config;
 import org.matsim.core.population.PopulationUtils;
-import org.matsim.core.population.routes.RouteFactories;
 import org.matsim.core.population.routes.RouteUtils;
 import org.matsim.core.scoring.ScoringFunction;
 import org.matsim.core.scoring.ScoringFunctionFactory;
 import org.matsim.core.scoring.functions.ScoringParameters;
 import org.matsim.core.scoring.functions.ScoringParametersForPerson;
-import org.matsim.facilities.Facility;
 
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
@@ -65,7 +59,7 @@ public class BudgetValidator {
 		double configuredSpeed = config.routing()
 				.getOrCreateModeRoutingParams(TransportMode.walk)
 				.getTeleportedModeSpeed();
-		this.walkSpeed = (configuredSpeed > 0) ? configuredSpeed : 0.833333333; // 3 km/h default
+		this.walkSpeed = (configuredSpeed > 0) ? configuredSpeed : ExMasConfigGroup.DEFAULT_WALK_SPEED;
 	}
 	
 	/**
@@ -316,51 +310,18 @@ public class BudgetValidator {
 			double directDistance,
 			double actualRideTime,
 			double actualDistance) {
-		
+
 		DrtRoute route = new DrtRoute(originLinkId, destinationLinkId);
-		
+
 		// 1. Set direct ride time (used for fare calculation)
 		route.setDirectRideTime(directRideTime);
-		
+
 		// 2. Set actual distance
 		route.setDistance(directDistance);
 
 		// 5. Override travelTime with actual ride time for scoring
 		route.setTravelTime(actualRideTime);
-		
-		return route;
-	}
 
-	private List<? extends PlanElement> adjustDrtTripElements(List<? extends PlanElement> tripElements,
-			RouteFactories routingFactories,
-			Facility fromFacility, Facility toFacility) {
-		boolean containsDrtLeg = false;
-		for (PlanElement element : tripElements) {
-			if (element instanceof Leg leg && exMasConfig.getDrtMode().equals(leg.getMode())) {
-				containsDrtLeg = true;
-			}
-			if (element instanceof Leg leg && TransportMode.walk.equals(leg.getMode())) {
-				double walkDist = exMasConfig.getMinDrtAccessEgressDistance();
-				double walkSpeed = config.routing().getOrCreateModeRoutingParams(TransportMode.walk)
-						.getTeleportedModeSpeed();
-				if (walkSpeed == 0.0) {
-					// Fallback to default walk speed if not configured (0.833 m/s = 3 km/h)
-					walkSpeed = 0.833333333;
-				}
-				double walkTime = walkDist / walkSpeed;
-				Route route = routingFactories.createRoute(Route.class, fromFacility.getLinkId(),
-						toFacility.getLinkId());
-				route.setTravelTime(walkTime);
-				route.setDistance(walkDist);
-				leg.setDepartureTime(leg.getDepartureTime().orElse(0.0) + leg.getTravelTime().orElse(0.0)
-						- route.getTravelTime().orElse(0));
-				leg.setRoute(route);
-				leg.setTravelTime(walkTime);
-			}
-		}
-		if (!containsDrtLeg) {
-			return new ArrayList<>();
-		}
-		return tripElements;
+		return route;
 	}
 }
