@@ -30,6 +30,7 @@ public final class Ride {
     private final double[] passengerDistances;
     private final double[] passengerNetworkUtilities;
     private final double[] delays;
+	private final double[] detours; // Detour time: passengerTravelTime - directTravelTime (seconds)
     private final double[] remainingBudgets;  // Budget remaining after scoring (utils)
 
     // Connection segments (length = degree*2 - 1 for most rides)
@@ -63,6 +64,7 @@ public final class Ride {
         this.passengerDistances = builder.passengerDistances.clone();
         this.passengerNetworkUtilities = builder.passengerNetworkUtilities.clone();
         this.delays = builder.delays.clone();
+		this.detours = builder.detours.clone();
         this.remainingBudgets = builder.remainingBudgets != null ? builder.remainingBudgets.clone() : null;
         this.connectionTravelTimes = builder.connectionTravelTimes.clone();
         this.connectionDistances = builder.connectionDistances.clone();
@@ -158,6 +160,10 @@ public final class Ride {
     public double[] getPassengerDistances() { return passengerDistances.clone(); }
     public double[] getPassengerNetworkUtilities() { return passengerNetworkUtilities.clone(); }
     public double[] getDelays() { return delays.clone(); }
+
+	public double[] getDetours() {
+		return detours.clone();
+	}
     public double[] getRemainingBudgets() { return remainingBudgets != null ? remainingBudgets.clone() : null; }
     public double[] getConnectionTravelTimes() { return connectionTravelTimes.clone(); }
     public double[] getConnectionDistances() { return connectionDistances.clone(); }
@@ -189,6 +195,7 @@ public final class Ride {
         private double[] passengerDistances;
         private double[] passengerNetworkUtilities;
         private double[] delays;
+		private double[] detours;
         private double[] remainingBudgets;
         private double[] connectionTravelTimes;
         private double[] connectionDistances;
@@ -249,6 +256,11 @@ public final class Ride {
             this.delays = delays;
             return this;
         }
+
+		public Builder detours(double[] detours) {
+			this.detours = detours;
+			return this;
+		}
 
         public Builder remainingBudgets(double[] remainingBudgets) {
             this.remainingBudgets = remainingBudgets;
@@ -324,6 +336,10 @@ public final class Ride {
                     String.format("delays length must equal degree (%d)", degree)
                 );
             }
+			if (detours == null || detours.length != degree) {
+				throw new IllegalArgumentException(
+						String.format("detours length must equal degree (%d)", degree));
+			}
             if (connectionTravelTimes == null || connectionTravelTimes.length == 0) {
                 throw new IllegalArgumentException("connectionTravelTimes cannot be null or empty");
             }

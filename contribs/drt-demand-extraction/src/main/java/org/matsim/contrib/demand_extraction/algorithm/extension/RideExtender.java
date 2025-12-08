@@ -161,6 +161,7 @@ public final class RideExtender {
 				.passengerDistances(ride.getPassengerDistances())
 				.passengerNetworkUtilities(ride.getPassengerNetworkUtilities())
 				.delays(ride.getDelays())
+				.detours(ride.getDetours())
 				.remainingBudgets(ride.getRemainingBudgets())
 				.connectionTravelTimes(ride.getConnectionTravelTimes())
 				.connectionDistances(ride.getConnectionDistances())
@@ -284,13 +285,15 @@ public final class RideExtender {
 			delays[i] = arrivalAtOrigin - requests[i].getRequestTime();
 		}
 
-		// Calculate effective delays
+		// Calculate effective delays and detours
 		double[] effMaxNeg = new double[degree + 1];
 		double[] effMaxPos = new double[degree + 1];
+		double[] detours = new double[degree + 1];
 
 		for (int i = 0; i < degree + 1; i++) {
 			DrtRequest req = requests[i];
 			double detour = pttActual[i] - req.getTravelTime();
+			detours[i] = detour;
 
 			double posAdj = req.getPositiveDelayRelComponent() > 0.0
 					? Math.max(0.0, req.getPositiveDelayRelComponent() - detour) : 0.0;
@@ -316,6 +319,7 @@ public final class RideExtender {
 				.passengerDistances(pDist)
 				.passengerNetworkUtilities(pUtil)
 				.delays(adjDelays)
+				.detours(detours)
 				.connectionTravelTimes(connTT)
 				.connectionDistances(connDist)
 				.connectionNetworkUtilities(connUtil)

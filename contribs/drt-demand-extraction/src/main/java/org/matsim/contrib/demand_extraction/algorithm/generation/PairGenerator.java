@@ -53,7 +53,7 @@ public final class PairGenerator {
 			DrtRequest reqI, DrtRequest reqJ, RideKind kind,
 			DrtRequest[] originsOrderedRequests, DrtRequest[] destinationsOrderedRequests,
 			double[] passengerTravelTimes, double[] passengerDistances,
-			double[] passengerNetworkUtilities, double[] delays,
+			double[] passengerNetworkUtilities, double[] delays, double[] detours,
 			double[] connectionTravelTimes, double[] connectionDistances,
 			double[] connectionNetworkUtilities, double startTime) {
 
@@ -180,6 +180,7 @@ public final class PairGenerator {
 				.passengerDistances(c.passengerDistances)
 				.passengerNetworkUtilities(c.passengerNetworkUtilities)
 				.delays(c.delays)
+				.detours(c.detours)
 				.connectionTravelTimes(c.connectionTravelTimes)
 				.connectionDistances(c.connectionDistances)
 				.connectionNetworkUtilities(c.connectionNetworkUtilities)
@@ -225,6 +226,7 @@ public final class PairGenerator {
 				new double[] { oo.getDistance() + od.getDistance(), od.getDistance() + dd.getDistance() },
 				new double[] { oo.getNetworkUtility() + od.getNetworkUtility(), od.getNetworkUtility() + dd.getNetworkUtility() },
 				adjusted,
+				new double[] { detourI, detourJ },
 				new double[] { oo.getTravelTime(), od.getTravelTime(), dd.getTravelTime() },
 				new double[] { oo.getDistance(), od.getDistance(), dd.getDistance() },
 				new double[] { oo.getNetworkUtility(), od.getNetworkUtility(), dd.getNetworkUtility() },
@@ -269,6 +271,7 @@ public final class PairGenerator {
 				new double[] { oo.getDistance() + oj.getDistance() + jd.getDistance(), oj.getDistance() },
 				new double[] { oo.getNetworkUtility() + oj.getNetworkUtility() + jd.getNetworkUtility(), oj.getNetworkUtility() },
 				adjusted,
+				new double[] { detourI, detourJ },
 				new double[] { oo.getTravelTime(), oj.getTravelTime(), jd.getTravelTime() },
 				new double[] { oo.getDistance(), oj.getDistance(), jd.getDistance() },
 				new double[] { oo.getNetworkUtility(), oj.getNetworkUtility(), jd.getNetworkUtility() },

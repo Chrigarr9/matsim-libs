@@ -4,7 +4,6 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
-import java.util.stream.Collectors;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
@@ -117,16 +116,16 @@ public final class ExMasCsvWriter {
 				String pttimes = formatDoubleArray(ride.getPassengerTravelTimes());
 				String pdists = formatDoubleArray(ride.getPassengerDistances());
 				String delays = formatDoubleArray(ride.getDelays());
+				String detours = formatDoubleArray(ride.getDetours());
 				String budgets = ride.getRemainingBudgets() != null
 						? formatDoubleArray(ride.getRemainingBudgets())
 						: "[]";
-
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f",
 						ride.getIndex(), ride.getDegree(), ride.getKind(),
 						reqIndices, personIds, groupIds, requestTimes, isCommutes,
 						origins, destinations,
-						pttimes, pdists, delays, budgets,
+						pttimes, pdists, delays, detours, budgets,
 						ride.getStartTime(), ride.getEndTime(),
 						ride.getRideTravelTime(), ride.getRideDistance()));
 				writer.newLine();

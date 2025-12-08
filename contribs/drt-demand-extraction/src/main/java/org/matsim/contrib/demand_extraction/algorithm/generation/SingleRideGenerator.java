@@ -44,6 +44,7 @@ public final class SingleRideGenerator {
 			TravelSegment segment = networkCache.getSegment(req.originLinkId, req.destinationLinkId, req.requestTime);
 
 			// Build candidate ride with direct request references
+			// For single rides: detour = 0 (passengerTravelTime = directTravelTime)
 			Ride candidateRide = Ride.builder()
 				.index(req.index)
 				.degree(1)
@@ -55,6 +56,7 @@ public final class SingleRideGenerator {
 				.passengerDistances(new double[] { segment.getDistance() })
 				.passengerNetworkUtilities(new double[] { segment.getNetworkUtility() })
 				.delays(new double[] { 0.0 })
+					.detours(new double[] { 0.0 })
 				.connectionTravelTimes(new double[] { segment.getTravelTime() })
 				.connectionDistances(new double[] { segment.getDistance() })
 				.connectionNetworkUtilities(new double[] { segment.getNetworkUtility() })

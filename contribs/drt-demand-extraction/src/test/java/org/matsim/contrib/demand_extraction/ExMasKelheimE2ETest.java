@@ -181,10 +181,10 @@ public class ExMasKelheimE2ETest {
 
 		// Set ExMAS algorithm parameters - more conservative for larger scenario
 		exMasConfig.setSearchHorizon(0.0); // No time window for pairing (instant matching)
-		exMasConfig.setMaxDetourFactor(1.5);
+		exMasConfig.setMaxDetourFactor(1.0);
 		exMasConfig.setOriginFlexibilityAbsolute(0.0); // 0 minutes departure flexibility
 		exMasConfig.setDestinationFlexibilityAbsolute(0.0); // 15 minutes arrival flexibility
-		exMasConfig.setMaxPoolingDegree(2); // Allow up to 10 passengers
+		exMasConfig.setMaxPoolingDegree(10); // Allow up to 10 passengers
 
 		// Note: DRT config and scoring params are now auto-configured by
 		// DemandExtractionModule
