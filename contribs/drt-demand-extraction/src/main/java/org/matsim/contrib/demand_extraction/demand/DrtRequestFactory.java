@@ -85,7 +85,12 @@ public class DrtRequestFactory {
 		int totalPersons = population.getPersons().size();
 		int logInterval = Math.max(1, totalPersons / 10);
 
-		for (Person person : population.getPersons().values()) {
+		// Sort persons by ID to ensure deterministic processing order
+		// (parallel caching in ModeRoutingCache can complete in any order, but we want consistent output)
+		List<Person> sortedPersons = new ArrayList<>(population.getPersons().values());
+		sortedPersons.sort(java.util.Comparator.comparing(p -> p.getId().toString()));
+
+		for (Person person : sortedPersons) {
 			processedPersons++;
 			Plan plan = person.getSelectedPlan();
 
@@ -106,12 +111,19 @@ public class DrtRequestFactory {
 				// No routing data available for this person
 				continue;
 			}
+			
+			// Get person's baseline modes (may be null if no modes cached for this person)
+			Map<Integer, Entry<String, Double>> personBaselineModes = bestBaselineModes.get(person.getId());
+			if (personBaselineModes == null) {
+				// No baseline modes cached for this person
+				continue;
+			}
 
 			// Calculate trip-wise budgets
 			// All trips are evaluated individually, but trips in the same group are linked
 			for (int tripIdx = 0; tripIdx < trips.size(); tripIdx++) {
 				Trip trip = trips.get(tripIdx);
-				Entry<String, Double> bestBaselineMode = bestBaselineModes.get(person.getId()).get(tripIdx);
+				Entry<String, Double> bestBaselineMode = personBaselineModes.get(tripIdx);
 
 				Map<String, ModeAttributes> modeAttrs = tripModeAttributes.get(tripIdx);
 				String drtMode = exmasConfig.getDrtMode();

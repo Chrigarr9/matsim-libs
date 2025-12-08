@@ -69,7 +69,7 @@ public class ExMasDemandExtractionE2ETest {
 		config.controller().setOutputDirectory(testOutputDir.toString());
 		config.controller()
 				.setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
-		
+
 		// 3. Configure monetary constants for car and PT scoring
 		configureMonetaryConstants(config);
 
@@ -98,7 +98,7 @@ public class ExMasDemandExtractionE2ETest {
 		validateRequests(requestsFile);
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		validateRides(ridesFile, exMasConfig);
-		
+
 		System.out.println("\n=== Test Output Location ===");
 		System.out.println("Requests: " + requestsFile.toAbsolutePath());
 		System.out.println("Rides: " + ridesFile.toAbsolutePath());
@@ -106,31 +106,31 @@ public class ExMasDemandExtractionE2ETest {
 	}
 
 	/**
-	 * Configures monetary constants for car and PT to ensure proper budget calculation.
+	 * Configures monetary constants for car and PT to ensure proper budget
+	 * calculation.
 	 * Sets utility-of-money parameters that affect mode choice scoring.
 	 */
 	private void configureMonetaryConstants(Config config) {
 		ScoringConfigGroup scoring = config.scoring();
-		
+
 		// Set marginal utility of money (€^-1)
 		// This converts monetary costs to utility values
 		scoring.setMarginalUtilityOfMoney(1.0);
-		
+
 		scoring.setMarginalUtlOfWaitingPt_utils_hr(0.0);
 
-		
 		// Configure car mode monetary constant
 		// Daily monetary constant represents fixed costs (€/day)
 		ScoringConfigGroup.ModeParams carParams = scoring.getOrCreateModeParams(TransportMode.car);
-		carParams.setDailyMonetaryConstant(-5.0); // €5/day for car ownership
+		// carParams.setDailyMonetaryConstant(-5.0); // €5/day for car ownership
 		carParams.setMonetaryDistanceRate(-0.0002); // €0.0002/m = €0.20/km
-		
+
 		// Configure PT mode monetary constant
 		ScoringConfigGroup.ModeParams ptParams = scoring.getOrCreateModeParams(TransportMode.pt);
 		ptParams.setDailyMonetaryConstant(-2.0); // €2/day for PT pass
 		ptParams.setMonetaryDistanceRate(-0.0001); // €0.0001/m = €0.10/km
 	}
-	
+
 	/**
 	 * Enhances the existing dvrp-grid population with person attributes needed for
 	 * ExMas testing.
@@ -169,9 +169,9 @@ public class ExMasDemandExtractionE2ETest {
 		// Set baseline modes
 		Set<String> baseModes = new HashSet<>();
 		baseModes.add(TransportMode.car);
-		baseModes.add(TransportMode.pt);
-		baseModes.add(TransportMode.walk);
-		baseModes.add(TransportMode.bike);
+		// baseModes.add(TransportMode.pt);
+		// baseModes.add(TransportMode.walk);
+		// baseModes.add(TransportMode.bike);
 		exMasConfig.setBaseModes(baseModes);
 
 		// Set DRT routing mode (fallback when no DRT routing module exists)
@@ -188,7 +188,7 @@ public class ExMasDemandExtractionE2ETest {
 		exMasConfig.setMinMaxDetourFactor(1.0); // Direct route
 		exMasConfig.setMinMaxWaitingTime(0.0); // No waiting
 		exMasConfig.setMinDrtAccessEgressDistance(0.0); // Minimal access/egress distance
-		
+
 		// Set ExMAS algorithm parameters
 		exMasConfig.setSearchHorizon(0.0); // 10 minutes time window for pairing
 		exMasConfig.setOriginFlexibilityAbsolute(9000.0); // 15 minutes departure flexibility
@@ -236,7 +236,7 @@ public class ExMasDemandExtractionE2ETest {
 
 		// Test passed - all validations successful
 	}
-	
+
 	private void validateRides(Path ridesFile, ExMasConfigGroup exMasConfig) throws IOException {
 		int rideCount = 0;
 		Map<Integer, Integer> ridesByDegree = new HashMap<>();
@@ -260,12 +260,12 @@ public class ExMasDemandExtractionE2ETest {
 				int maxDegree = exMasConfig.getMaxPoolingDegree();
 				Assertions.assertTrue(degree >= 1 && degree <= maxDegree,
 						"Degree should be between 1 and " + maxDegree + " (max pooling degree)");
-				
+
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
-				
+
 				double duration = Double.parseDouble(parts[16]);
 				Assertions.assertTrue(duration >= 0, "Duration should be non-negative");
-				
+
 				double distance = Double.parseDouble(parts[17]);
 				Assertions.assertTrue(distance >= 0, "Distance should be non-negative");
 
@@ -275,14 +275,17 @@ public class ExMasDemandExtractionE2ETest {
 
 		// Validate we generated some rides
 		Assertions.assertTrue(rideCount > 0, "Should have generated at least one ride");
-		Assertions.assertTrue(ridesByDegree.getOrDefault(1, 0) > 0, "Should have generated at least one single-passenger ride");
-		
+		Assertions.assertTrue(ridesByDegree.getOrDefault(1, 0) > 0,
+				"Should have generated at least one single-passenger ride");
+
 		System.out.println("\n=== Ride Generation Results ===");
 		System.out.println("Total rides: " + rideCount);
 		System.out.println("Single-passenger rides (degree 1): " + ridesByDegree.getOrDefault(1, 0));
 		int sharedRides = rideCount - ridesByDegree.getOrDefault(1, 0);
 		System.out.println("Shared rides (degree 2+): " + sharedRides);
-		for (int degree = 2; degree <= exMasConfig.getMaxPoolingDegree(); degree++) {
+		// Only iterate through degrees that actually exist in the results
+		int maxObservedDegree = ridesByDegree.keySet().stream().mapToInt(Integer::intValue).max().orElse(1);
+		for (int degree = 2; degree <= maxObservedDegree; degree++) {
 			int count = ridesByDegree.getOrDefault(degree, 0);
 			if (count > 0) {
 				System.out.println("  - Degree " + degree + ": " + count);

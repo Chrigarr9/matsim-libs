@@ -19,6 +19,7 @@ import org.matsim.contrib.demand_extraction.demand.DemandExtractionModule;
 import org.matsim.contrib.drt.run.DrtControlerCreator;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
+import org.matsim.core.config.groups.ScoringConfigGroup;
 import org.matsim.core.controler.Controler;
 import org.matsim.core.controler.OutputDirectoryHierarchy;
 import org.matsim.core.scenario.ScenarioUtils;
@@ -68,6 +69,27 @@ public class ExMasKelheimE2ETest {
 		// 3. Configure scoring
 		// Keep default scoring from Kelheim config - don't modify travel utilities as
 		// this can cause NaN scores
+
+		// Set all daily monetary constants to zero for testing
+		// This eliminates fixed daily costs (e.g., car ownership, PT pass) from budget calculation
+		config.scoring().getModes().values().forEach(modeParams -> {
+			modeParams.setDailyMonetaryConstant(0.0);
+		});
+
+		// Configure DRT scoring parameters (will be auto-created by DemandExtractionModule if not present)
+		// Set marginalUtilityOfTraveling to -0.5 to match car's travel time utility
+		ExMasConfigGroup exMasConfigPreview = (ExMasConfigGroup) config.getModules().get(ExMasConfigGroup.GROUP_NAME);
+		String drtMode = exMasConfigPreview != null ? exMasConfigPreview.getDrtMode() : "drt";
+		
+		if (!config.scoring().getModes().containsKey(drtMode)) {
+			ScoringConfigGroup.ModeParams drtParams = new ScoringConfigGroup.ModeParams(drtMode);
+			drtParams.setMarginalUtilityOfTraveling(-0.5); // Match car's travel time disutility
+			drtParams.setConstant(0.0);
+			drtParams.setMonetaryDistanceRate(0.0);
+			config.scoring().addModeParams(drtParams);
+		} else {
+			config.scoring().getModes().get(drtMode).setMarginalUtilityOfTraveling(-0.5);
+		}
 
 		// Add activity params for all standard activity types (home_XXX, work_XXX,
 		// etc.)
@@ -152,16 +174,17 @@ public class ExMasKelheimE2ETest {
 		exMasConfig.setPrivateVehicleModes(privateVehicles);
 
 		// Set DRT service quality parameters for budget calculation
-		exMasConfig.setMinDrtCostPerKm(0.0);
+		exMasConfig.setMinDrtCostPerKm(0.2);
 		exMasConfig.setMinMaxDetourFactor(1.0);
 		exMasConfig.setMinMaxWaitingTime(0.0);
 		exMasConfig.setMinDrtAccessEgressDistance(0.0);
 
 		// Set ExMAS algorithm parameters - more conservative for larger scenario
 		exMasConfig.setSearchHorizon(0.0); // No time window for pairing (instant matching)
+		exMasConfig.setMaxDetourFactor(1.5);
 		exMasConfig.setOriginFlexibilityAbsolute(0.0); // 0 minutes departure flexibility
 		exMasConfig.setDestinationFlexibilityAbsolute(0.0); // 15 minutes arrival flexibility
-		exMasConfig.setMaxPoolingDegree(10); // Allow up to 10 passengers
+		exMasConfig.setMaxPoolingDegree(2); // Allow up to 10 passengers
 
 		// Note: DRT config and scoring params are now auto-configured by
 		// DemandExtractionModule

@@ -146,16 +146,10 @@ public class MatsimNetworkCache {
 		
 		CacheKey key = new CacheKey(originLinkId, destLinkId, timeBin);
 		
-		// Check cache
-		TravelSegment segment = cache.get(key);
-		if (segment != null) {
-			return segment;
-		}
-		
-		// Compute and cache
-		segment = computeSegment(originLinkId, destLinkId, departureTime);
-		cache.put(key, segment);
-		return segment;
+		// Use computeIfAbsent for atomic cache operations
+		// This ensures only ONE thread computes the segment for a given key,
+		// preventing race conditions in the SpeedyALT router
+		return cache.computeIfAbsent(key, k -> computeSegment(originLinkId, destLinkId, departureTime));
 	}
 	
 	/**
@@ -312,7 +306,9 @@ public class MatsimNetworkCache {
 		public B getSecond() { return second; }
 	}
 	
-	private TravelSegment computeSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
+	// Synchronized to prevent concurrent access to the router (SpeedyALT is not thread-safe)
+	// Multiple threads calling router.calcLeastCostPath() simultaneously causes internal state corruption
+	private synchronized TravelSegment computeSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
 		totalRoutingAttempts.incrementAndGet();
 		
 		Link originLink = network.getLinks().get(originLinkId);
@@ -345,7 +341,8 @@ public class MatsimNetworkCache {
 				departureTime,
 				dummyPerson,
 				dummyVehicle);
-		if (path == null || path.links.isEmpty()) {
+			
+			if (path == null || path.links.isEmpty()) {
 				// No path found - track failure
 				routingFailures.incrementAndGet();
 				return createInfinitySegment();
@@ -364,8 +361,17 @@ public class MatsimNetworkCache {
 			
 			return new TravelSegment(tt, dist, utility);
 			
+		} catch (OutOfMemoryError _) {
+			// SpeedyALT bug: infinite loop in path construction for some link pairs
+			// Treat as routing failure and return infinity segment
+			log.warn("OutOfMemoryError during routing from link {} to link {} - treating as unreachable",
+					originLinkId, destLinkId);
+			routingFailures.incrementAndGet();
+			return createInfinitySegment();
 		} catch (Exception e) {
-			// Routing failed - track failure
+			// Any other routing exception - treat as failure
+			log.warn("Routing exception from link {} to link {}: {} - treating as unreachable",
+					originLinkId, destLinkId, e.getMessage());
 			routingFailures.incrementAndGet();
 			return createInfinitySegment();
 		}

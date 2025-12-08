@@ -71,6 +71,24 @@ public final class ExMasEngine {
         List<Ride> singleRides = singleGen.generate(drtRequests);
 		allRides.addAll(singleRides);
 
+		// Check if we should stop before generating pairs
+		if (maxDegree < 2) {
+			long totalElapsed = System.currentTimeMillis() - algorithmStartTime;
+			double totalSeconds = totalElapsed / 1000.0;
+			log.info("");
+			log.info("======================================================================");
+			log.info("ExMAS Algorithm Complete (maxDegree < 2, skipping pair generation)");
+			log.info("  Total rides: {}", allRides.size());
+			log.info("  Total time: {}s", String.format("%.1f", totalSeconds));
+			log.info("======================================================================");
+			
+			// Log network routing statistics
+			log.info("");
+			network.logRoutingStatistics();
+			
+			return allRides;
+		}
+
         // Phase 2: Generate pair rides with budget validation
 		log.info("");
 		log.info("PHASE 2: Pair Ride Generation");
@@ -139,6 +157,41 @@ public final class ExMasEngine {
 		// Log network routing statistics
 		log.info("");
 		network.logRoutingStatistics();
+
+		// Sort rides for deterministic output (parallel processing can create non-deterministic order)
+		// Sort by: degree (ascending), then by first request index (ascending)
+		allRides.sort(java.util.Comparator
+				.comparingInt(Ride::getDegree)
+				.thenComparingInt(r -> {
+					int[] indices = r.getRequestIndices();
+					return indices.length > 0 ? indices[0] : Integer.MAX_VALUE;
+				}));
+
+		// Re-assign indices sequentially after sorting
+		for (int i = 0; i < allRides.size(); i++) {
+			Ride oldRide = allRides.get(i);
+			Ride newRide = Ride.builder()
+					.index(i)  // New sequential index
+					.degree(oldRide.getDegree())
+					.kind(oldRide.getKind())
+					.requests(oldRide.getRequests())
+					.originsOrderedRequests(oldRide.getOriginsOrderedRequests())
+					.destinationsOrderedRequests(oldRide.getDestinationsOrderedRequests())
+					.passengerTravelTimes(oldRide.getPassengerTravelTimes())
+					.passengerDistances(oldRide.getPassengerDistances())
+					.passengerNetworkUtilities(oldRide.getPassengerNetworkUtilities())
+					.delays(oldRide.getDelays())
+					.remainingBudgets(oldRide.getRemainingBudgets())
+					.connectionTravelTimes(oldRide.getConnectionTravelTimes())
+					.connectionDistances(oldRide.getConnectionDistances())
+					.connectionNetworkUtilities(oldRide.getConnectionNetworkUtilities())
+					.startTime(oldRide.getStartTime())
+					.shapleyValues(oldRide.getShapleyValues())
+					.predecessors(oldRide.getPredecessors())
+					.successors(oldRide.getSuccessors())
+					.build();
+			allRides.set(i, newRide);
+		}
 
         return allRides;
     }
