@@ -53,6 +53,10 @@ public class ModeRoutingCache {
 	// Maps: Person ID -> Trip Index -> Best Baseline Mode (excludes DRT)
 	private final Map<Id<Person>, Map<Integer, Entry<String, Double>>> bestBaselineModes = new ConcurrentHashMap<>();
 
+	// PT Accessibility metrics: Person ID -> Trip Index -> [carTravelTime, ptTravelTime]
+	// Car travel time is ALWAYS calculated regardless of car availability (for PT accessibility comparison)
+	private final Map<Id<Person>, Map<Integer, double[]>> ptAccessibilityMetrics = new ConcurrentHashMap<>();
+
     @Inject
     public ModeRoutingCache(Provider<TripRouter> tripRouterProvider, ExMasConfigGroup exMasConfig,
             ScoringFunctionFactory scoringFunctionFactory,
@@ -80,6 +84,7 @@ public class ModeRoutingCache {
             TripRouter tripRouter = tripRouterProvider.get();
             Map<Integer, Map<String, ModeAttributes>> personCache = new ConcurrentHashMap<>();
 			Map<Integer, Entry<String, Double>> personBestModes = new ConcurrentHashMap<>();
+			Map<Integer, double[]> personPtAccessibility = new ConcurrentHashMap<>();
             List<TripStructureUtils.Trip> trips = TripStructureUtils.getTrips(person.getSelectedPlan());
 
             // Get scoring params for person (needed for opportunity cost)
@@ -179,12 +184,40 @@ public class ModeRoutingCache {
 					personCache.put(tripIndex, modeCache);
 				}
 
+				// Calculate PT accessibility metrics (car vs PT travel time)
+				// IMPORTANT: Car travel time is ALWAYS calculated regardless of car availability
+				// This allows comparing PT accessibility even for agents without car access
+				double carTravelTime = Double.NaN;
+				double ptTravelTime = Double.NaN;
+
+				// Get car travel time (may already be in modeCache, otherwise route it now)
+				if (modeCache.containsKey(TransportMode.car)) {
+					carTravelTime = modeCache.get(TransportMode.car).travelTime;
+				} else {
+					// Person doesn't have car available - route it anyway for PT accessibility
+					carTravelTime = routeModeForAccessibility(tripRouter, trip, person, TransportMode.car);
+				}
+
+				// Get PT travel time (may already be in modeCache, otherwise route it now)
+				if (modeCache.containsKey(TransportMode.pt)) {
+					ptTravelTime = modeCache.get(TransportMode.pt).travelTime;
+				} else if (exMasConfig.getBaseModes().contains(TransportMode.pt)) {
+					// PT is configured but not available - route it anyway
+					ptTravelTime = routeModeForAccessibility(tripRouter, trip, person, TransportMode.pt);
+				}
+
+				// Store PT accessibility metrics: [carTravelTime, ptTravelTime]
+				personPtAccessibility.put(tripIndex, new double[] { carTravelTime, ptTravelTime });
+
                 tripIndex++;
 			}
 
             cache.put(person.getId(), personCache);
 			if (!personBestModes.isEmpty()) {
 				bestBaselineModes.put(person.getId(), personBestModes);
+			}
+			if (!personPtAccessibility.isEmpty()) {
+				ptAccessibilityMetrics.put(person.getId(), personPtAccessibility);
 			}
 
 			// Progress logging
@@ -315,6 +348,56 @@ public class ModeRoutingCache {
 
 	public Map<Id<Person>, Map<Integer, Entry<String, Double>>> getBestBaselineModes() {
 		return bestBaselineModes;
+	}
+
+	/**
+	 * Get PT accessibility metrics for all persons.
+	 * Returns Map: Person ID -> Trip Index -> [carTravelTime, ptTravelTime]
+	 * Car travel time is ALWAYS calculated regardless of car availability.
+	 */
+	public Map<Id<Person>, Map<Integer, double[]>> getPtAccessibilityMetrics() {
+		return ptAccessibilityMetrics;
+	}
+
+	/**
+	 * Route a mode purely to get travel time for accessibility comparison.
+	 * This is called for modes the person doesn't have available (e.g., car for non-car-owners).
+	 *
+	 * @param tripRouter the trip router
+	 * @param trip       the trip to route
+	 * @param person     the person (for routing context)
+	 * @param mode       the mode to route
+	 * @return travel time in seconds, or Double.NaN if routing fails
+	 */
+	private double routeModeForAccessibility(TripRouter tripRouter, TripStructureUtils.Trip trip,
+			Person person, String mode) {
+		try {
+			Facility fromFacility = FacilitiesUtils.toFacility(trip.getOriginActivity(), facilities);
+			Facility toFacility = FacilitiesUtils.toFacility(trip.getDestinationActivity(), facilities);
+
+			List<? extends PlanElement> tripElements = tripRouter.calcRoute(
+					mode,
+					fromFacility,
+					toFacility,
+					trip.getOriginActivity().getEndTime().orElse(0.0),
+					person,
+					trip.getTripAttributes());
+
+			if (tripElements == null || tripElements.isEmpty()) {
+				return Double.NaN;
+			}
+
+			double travelTime = 0.0;
+			for (PlanElement pe : tripElements) {
+				if (pe instanceof Leg leg) {
+					travelTime += leg.getTravelTime().orElse(0.0);
+				}
+			}
+			return travelTime;
+		} catch (Exception e) {
+			// Routing failed - return NaN
+			return Double.NaN;
+		}
 	}
 
 	private static String capitalize(String str) {

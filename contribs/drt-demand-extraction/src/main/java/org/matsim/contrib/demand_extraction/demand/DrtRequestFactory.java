@@ -106,6 +106,8 @@ public class DrtRequestFactory {
 			List<Trip> trips = TripStructureUtils.getTrips(plan);
 			Map<Id<Person>, Map<Integer, Entry<String, Double>>> bestBaselineModes = modeRoutingCache
 					.getBestBaselineModes();
+			Map<Id<Person>, Map<Integer, double[]>> ptAccessibilityMetrics = modeRoutingCache
+					.getPtAccessibilityMetrics();
 
 			if (tripToGroupId == null || tripModeAttributes == null) {
 				// No routing data available for this person
@@ -148,8 +150,12 @@ public class DrtRequestFactory {
 				// Get group ID for this trip
 				String groupId = tripToGroupId.getOrDefault(tripIdx, person.getId().toString() + "_trip_" + tripIdx);
 
+				// Get PT accessibility metrics for this trip
+				Map<Integer, double[]> personPtMetrics = ptAccessibilityMetrics.get(person.getId());
+				double[] ptMetrics = (personPtMetrics != null) ? personPtMetrics.get(tripIdx) : null;
+
 				DrtRequest request = buildRequest(
-						requests.size(), person, trip, tripIdx, groupId, isCommute, bestBaselineMode, modeAttrs);
+						requests.size(), person, trip, tripIdx, groupId, isCommute, bestBaselineMode, modeAttrs, ptMetrics);
 
 				if (request != null) {
 					requests.add(request);
@@ -176,10 +182,13 @@ public class DrtRequestFactory {
 	 * Build a DRT request from trip data.
 	 * Extracted method to encapsulate request building logic.
 	 * Uses BudgetValidator for consistent budget calculation methodology.
+	 *
+	 * @param ptMetrics PT accessibility metrics: [carTravelTime, ptTravelTime], or null if unavailable
 	 */
 	private DrtRequest buildRequest(
 			int requestIndex, Person person, Trip trip, int tripIdx,
-			String groupId, boolean isCommute, Entry<String, Double> bestBaselineMode, Map<String, ModeAttributes> modeAttrs) {
+			String groupId, boolean isCommute, Entry<String, Double> bestBaselineMode,
+			Map<String, ModeAttributes> modeAttrs, double[] ptMetrics) {
 
 		String drtMode = exmasConfig.getDrtMode();
 		ModeAttributes drtAttrs = modeAttrs.get(drtMode);
@@ -257,6 +266,20 @@ public class DrtRequestFactory {
 		double earliestDep = requestTime - originFlex;
 		double latestArr = requestTime + drtAttrs.travelTime + maxAbsoluteDetour + destFlex;
 
+		// Calculate PT accessibility metrics
+		// ptMetrics[0] = carTravelTime, ptMetrics[1] = ptTravelTime
+		double carTravelTime = (ptMetrics != null && ptMetrics.length > 0) ? ptMetrics[0] : Double.NaN;
+		double ptTravelTime = (ptMetrics != null && ptMetrics.length > 1) ? ptMetrics[1] : Double.NaN;
+
+		// PT accessibility = carTravelTime / ptTravelTime
+		// Higher value = PT more competitive (if car takes 30min and PT takes 30min, ratio = 1.0)
+		// If PT is faster than car, ratio > 1.0 (PT is better)
+		// If car is faster, ratio < 1.0 (car is better)
+		double ptAccessibility = Double.NaN;
+		if (Double.isFinite(carTravelTime) && Double.isFinite(ptTravelTime) && ptTravelTime > 0) {
+			ptAccessibility = carTravelTime / ptTravelTime;
+		}
+
 		// Build final request with calculated budget and time windows
 		return DrtRequest.builder()
 				.index(requestIndex)
@@ -278,6 +301,9 @@ public class DrtRequestFactory {
 				.latestArrival(latestArr)
 				.directTravelTime(drtAttrs.travelTime)
 				.directDistance(drtAttrs.distance)
+				.carTravelTime(carTravelTime)
+				.ptTravelTime(ptTravelTime)
+				.ptAccessibility(ptAccessibility)
 				.build();
 	}
 

@@ -47,6 +47,12 @@ public class DrtRequest {
     public final double directTravelTime; // Direct travel time without sharing (seconds)
     public final double directDistance; // Direct distance without sharing (meters)
 
+    // PT Accessibility metrics - calculated for ALL agents regardless of car availability
+    // These allow comparing the PT accessibility of each trip
+    public final double carTravelTime; // Car travel time for this trip (seconds) - always calculated
+    public final double ptTravelTime; // PT travel time for this trip (seconds)
+    public final double ptAccessibility; // Ratio: carTravelTime / ptTravelTime (higher = PT more competitive)
+
     private DrtRequest(Builder builder) {
         this.index = builder.index;
         this.personId = builder.personId;
@@ -67,6 +73,9 @@ public class DrtRequest {
         this.latestArrival = builder.latestArrival;
         this.directTravelTime = builder.directTravelTime;
         this.directDistance = builder.directDistance;
+        this.carTravelTime = builder.carTravelTime;
+        this.ptTravelTime = builder.ptTravelTime;
+        this.ptAccessibility = builder.ptAccessibility;
     }
     
     public static Builder builder() {
@@ -156,6 +165,9 @@ public class DrtRequest {
         private double latestArrival;
         private double directTravelTime;
         private double directDistance;
+        private double carTravelTime;
+        private double ptTravelTime;
+        private double ptAccessibility;
 
         public Builder index(int index) { this.index = index; return this; }
         public Builder personId(Id<Person> personId) { this.personId = personId; return this; }
@@ -176,7 +188,10 @@ public class DrtRequest {
         public Builder latestArrival(double latestArrival) { this.latestArrival = latestArrival; return this; }
         public Builder directTravelTime(double directTravelTime) { this.directTravelTime = directTravelTime; return this; }
         public Builder directDistance(double directDistance) { this.directDistance = directDistance; return this; }
-        
+        public Builder carTravelTime(double carTravelTime) { this.carTravelTime = carTravelTime; return this; }
+        public Builder ptTravelTime(double ptTravelTime) { this.ptTravelTime = ptTravelTime; return this; }
+        public Builder ptAccessibility(double ptAccessibility) { this.ptAccessibility = ptAccessibility; return this; }
+
         public DrtRequest build() {
             if (directTravelTime < 0) {
                 throw new IllegalArgumentException("Direct travel time cannot be negative: " + directTravelTime);

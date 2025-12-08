@@ -62,6 +62,22 @@ public class DemandExtractionModule extends AbstractModule {
 		ensureDvrpConfigExists(config);
 		ensureQSimConfigCorrect(config);
 		ensureDrtScoringParamsExist(config, exMasConfig.getDrtMode());
+		ensureTravelTimeCalculatorCorrect(config);
+	}
+
+	/**
+	 * Ensures TravelTimeCalculator is configured with mode-specific travel times.
+	 * This fixes the VSP config consistency warning:
+	 * "travelTimeCalculator is not analyzing different modes separately"
+	 *
+	 * Mode-specific travel times are important for accurate routing, especially when
+	 * comparing modes like car vs bike that have very different speeds on the network.
+	 */
+	private static void ensureTravelTimeCalculatorCorrect(Config config) {
+		if (!config.travelTimeCalculator().getSeparateModes()) {
+			log.info("Setting travelTimeCalculator.separateModes to true (required for mode-specific travel times)");
+			config.travelTimeCalculator().setSeparateModes(true);
+		}
 	}
 
 	/**

@@ -42,12 +42,13 @@ public final class ExMasCsvWriter {
 			writer.write("index,personId,groupId,tripIndex,isCommute,budget,requestTime," +
 					"originLinkId,destinationLinkId,originX,originY,destinationX,destinationY," +
 					"directTravelTime,directDistance,earliestDeparture,latestArrival," +
-					"maxTravelTime,maxPositiveDelay,maxNegativeDelay,bestModeScore,bestMode");
+					"maxTravelTime,maxPositiveDelay,maxNegativeDelay,bestModeScore,bestMode," +
+					"carTravelTime,ptTravelTime,ptAccessibility");
 			writer.newLine();
 
 			for (DrtRequest req : requests) {
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%s,%s,%d,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s",
+						"%d,%s,%s,%d,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f",
 						req.index, req.personId, req.groupId, req.tripIndex, req.isCommute,
 						req.budget, req.requestTime,
 						req.originLinkId, req.destinationLinkId,
@@ -55,7 +56,8 @@ public final class ExMasCsvWriter {
 						req.directTravelTime, req.directDistance,
 						req.earliestDeparture, req.latestArrival,
 						req.getMaxTravelTime(), req.getMaxPositiveDelay(), req.getMaxNegativeDelay(),
-						req.bestModeScore, req.bestMode != null ? req.bestMode : ""));
+						req.bestModeScore, req.bestMode != null ? req.bestMode : "",
+						req.carTravelTime, req.ptTravelTime, req.ptAccessibility));
 				writer.newLine();
 			}
 		} catch (IOException e) {

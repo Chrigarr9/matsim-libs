@@ -20,7 +20,7 @@ import org.matsim.api.core.v01.population.Person;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.core.population.PopulationUtils;
-import org.matsim.core.router.costcalculators.TravelDisutilityFactory;
+import org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutility;
 import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.LeastCostPathCalculator.Path;
 import org.matsim.core.router.util.TravelDisutility;
@@ -109,19 +109,15 @@ public class MatsimNetworkCache {
 			drtTravelTime = injector.getInstance(Key.get(TravelTime.class, Names.named(TransportMode.car)));
 		}
 
-		// Try to get DRT-specific TravelDisutilityFactory, fall back to car
-		TravelDisutilityFactory drtDisutilityFactory;
-		try {
-			drtDisutilityFactory = injector.getInstance(Key.get(TravelDisutilityFactory.class, Names.named(drtMode)));
-		} catch (Exception e) {
-			// DRT-specific TravelDisutility not bound, use car
-			drtDisutilityFactory = injector
-					.getInstance(Key.get(TravelDisutilityFactory.class, Names.named(TransportMode.car)));
-		}
+		// IMPORTANT: Use OnlyTimeDependentTravelDisutility for DETERMINISTIC routing
+		// The default TravelDisutilityFactory may include randomization for route choice,
+		// which is undesirable for demand extraction where we need reproducible results.
+		// OnlyTimeDependentTravelDisutility uses only travel time, without any randomization.
+		// This ensures the same O-D pair at the same time always produces the same route.
 
 		this.network = network;
 		this.travelTime = drtTravelTime;
-		this.travelDisutility = drtDisutilityFactory.createTravelDisutility(drtTravelTime);
+		this.travelDisutility = new OnlyTimeDependentTravelDisutility(drtTravelTime);
 		this.timeBinSize = config.getNetworkTimeBinSize();
 
 		// Create dummy person and vehicle for generic routing

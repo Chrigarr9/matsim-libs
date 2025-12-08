@@ -205,16 +205,17 @@ public class ExMasDemandExtractionE2ETest {
 			Assertions.assertTrue(header.contains("personId"), "Header should contain personId");
 			Assertions.assertTrue(header.contains("groupId"), "Header should contain groupId");
 			Assertions.assertTrue(header.contains("budget"), "Header should contain budget");
+			Assertions.assertTrue(header.contains("ptAccessibility"), "Header should contain ptAccessibility");
 
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				if (parts.length != 22) {
-					System.err.println("ERROR: Expected 22 fields but got " + parts.length);
+				if (parts.length != 25) {
+					System.err.println("ERROR: Expected 25 fields but got " + parts.length);
 					System.err.println("Line: " + line);
 					System.err.println("Fields: " + java.util.Arrays.toString(parts));
 				}
-				Assertions.assertEquals(22, parts.length, "Each request should have 22 fields");
+				Assertions.assertEquals(25, parts.length, "Each request should have 25 fields (includes PT accessibility)");
 
 				String personId = parts[1];
 				double budget = Double.parseDouble(parts[5]);
