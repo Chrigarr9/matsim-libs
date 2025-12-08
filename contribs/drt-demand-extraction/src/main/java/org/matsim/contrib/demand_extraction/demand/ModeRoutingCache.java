@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
+
+import org.matsim.core.scoring.functions.ModeUtilityParameters;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -313,34 +315,56 @@ public class ModeRoutingCache {
             List<? extends PlanElement> newRoute, ScoringParameters params) {
         ScoringFunction sf = scoringFunctionFactory.createNewScoringFunction(person);
 
+		// Track which modes are used in this trip to correct for daily constants
+		Set<String> modesInTrip = new HashSet<>();
+
 		// Score only the legs (travel time, distance, monetary cost)
 		// We don't score activities because we're comparing alternatives for the same
-		// trip,
-		// which have the same origin and destination activities.
+		// trip, which have the same origin and destination activities.
         for (PlanElement pe : newRoute) {
 			if (pe instanceof Leg leg) {
 				sf.handleLeg(leg);
+				modesInTrip.add(leg.getMode());
             }
         }
 
-		// Note: Opportunity cost of time is NOT included in this simplified
-		// calculation.
+		sf.finish();
+		double score = sf.getScore();
+
+		// IMPORTANT: Correct for daily constants that were incorrectly added.
+		//
+		// MATSim's CharyparNagelLegScoring adds dailyUtilityConstant and dailyMoneyConstant
+		// the first time a mode is used. Since we create a NEW ScoringFunction for each trip,
+		// these daily constants are added every time, which is incorrect.
+		//
+		// For demand extraction comparing individual trips:
+		// - Daily constants are day-level decisions, not trip-level
+		// - They don't affect the marginal utility of DRT vs other modes for THIS trip
+		// - Including them would over-count (person may make multiple trips per day)
+		//
+		// We subtract them to get the correct trip-level utility.
+		for (String mode : modesInTrip) {
+			ModeUtilityParameters modeParams = params.modeParams.get(mode);
+			if (modeParams != null) {
+				// Subtract daily utility constant
+				score -= modeParams.dailyUtilityConstant;
+				// Subtract daily money constant (converted to utility)
+				score -= modeParams.dailyMoneyConstant * params.marginalUtilityOfMoney;
+			}
+		}
+
+		// Note: Opportunity cost of time is NOT included in this simplified calculation.
 		// For budget calculation, we're comparing travel utilities between modes.
 		// Since all modes connect the same O-D pair at the same departure time,
 		// the opportunity cost difference would be:
-		// opportunityCost = (newTravelTime - baselineTravelTime) *
-		// marginalUtilityOfPerforming
+		// opportunityCost = (newTravelTime - baselineTravelTime) * marginalUtilityOfPerforming
 		//
 		// This is implicitly captured in the travel time disutility of the legs.
 		// A full implementation would need to account for:
 		// - Fixed vs flexible activity durations
 		// - Impact on subsequent activities in the daily schedule
-		//
-		// TODO: Consider adding opportunity cost if activity schedules are tightly
-		// constrained
 
-		sf.finish();
-        return sf.getScore();
+        return score;
     }
 
     public Map<Integer, Map<String, ModeAttributes>> getAttributes(Id<Person> personId) {

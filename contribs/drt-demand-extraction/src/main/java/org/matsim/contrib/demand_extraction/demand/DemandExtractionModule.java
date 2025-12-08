@@ -65,7 +65,29 @@ public class DemandExtractionModule extends AbstractModule {
 		ensureQSimConfigCorrect(config);
 		ensureDrtScoringParamsExist(config, exMasConfig.getDrtMode());
 		ensureTravelTimeCalculatorCorrect(config);
+		ensureRoutingRandomnessDisabled(config);
 		ensurePtRouterConfigCorrect(config, exMasConfig);
+	}
+
+	/**
+	 * Disables routing randomness for deterministic results.
+	 *
+	 * The RandomizingTimeDistanceTravelDisutility adds log-normal randomness to
+	 * distance costs based on config.routing().getRoutingRandomness(). Setting this
+	 * to 0 gives deterministic routing while still including:
+	 * - Travel time costs
+	 * - Distance costs
+	 * - Monetary distance rates (tolls, road pricing)
+	 *
+	 * This ensures the same O-D pair at the same time always produces the same route,
+	 * which is essential for reproducible demand extraction results.
+	 */
+	private static void ensureRoutingRandomnessDisabled(Config config) {
+		if (config.routing().getRoutingRandomness() != 0.0) {
+			log.info("Setting routing.routingRandomness to 0.0 for deterministic network routing");
+			log.info("  (This still includes tolls and distance costs, just without randomization)");
+			config.routing().setRoutingRandomness(0.0);
+		}
 	}
 
 	/**

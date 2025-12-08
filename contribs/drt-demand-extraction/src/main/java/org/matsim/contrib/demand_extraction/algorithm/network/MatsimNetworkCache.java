@@ -111,19 +111,21 @@ public class MatsimNetworkCache {
 			drtTravelTime = injector.getInstance(Key.get(TravelTime.class, Names.named(TransportMode.car)));
 		}
 
-		// Choose TravelDisutility based on config setting:
-		// - Deterministic (useDeterministicNetworkRouting=true): Uses OnlyTimeDependentTravelDisutility
-		//   - Guarantees reproducible results (same O-D pair always produces same route)
-		//   - But ignores tolls and other monetary costs on the network
-		// - Full (useDeterministicNetworkRouting=false): Uses mode-specific TravelDisutility
-		//   - Captures tolls, road pricing, and other cost factors
-		//   - May have slight variation if RandomizingTimeDistanceTravelDisutilityFactory is used
+		// Use mode-specific TravelDisutility which includes:
+		// - Travel time costs
+		// - Distance costs
+		// - Monetary distance rates (tolls, road pricing)
+		//
+		// NOTE: DemandExtractionModule sets config.routing().routingRandomness = 0
+		// which ensures deterministic routing while preserving toll/cost calculations.
+		// If useDeterministicNetworkRouting is true, we use OnlyTimeDependentTravelDisutility
+		// which ignores distance/monetary costs entirely (useful for debugging or specific scenarios).
 		TravelDisutility disutility;
 		if (config.isUseDeterministicNetworkRouting()) {
-			log.info("Using deterministic network routing (time-only, ignores tolls)");
+			log.info("Using time-only network routing (ignores tolls and distance costs)");
 			disutility = new OnlyTimeDependentTravelDisutility(drtTravelTime);
 		} else {
-			// Use mode-specific TravelDisutility (captures tolls)
+			// Use mode-specific TravelDisutility (captures tolls, deterministic via routingRandomness=0)
 			TravelDisutilityFactory drtDisutilityFactory;
 			try {
 				drtDisutilityFactory = injector.getInstance(Key.get(TravelDisutilityFactory.class, Names.named(drtMode)));
@@ -132,7 +134,7 @@ public class MatsimNetworkCache {
 				drtDisutilityFactory = injector.getInstance(Key.get(TravelDisutilityFactory.class, Names.named(TransportMode.car)));
 			}
 			disutility = drtDisutilityFactory.createTravelDisutility(drtTravelTime);
-			log.info("Using full network routing (includes tolls and costs, TravelDisutility type: {})",
+			log.info("Using full network routing with tolls (deterministic via routingRandomness=0, type: {})",
 					disutility.getClass().getSimpleName());
 		}
 

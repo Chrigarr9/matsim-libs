@@ -16,6 +16,7 @@ import org.matsim.core.population.PopulationUtils;
 import org.matsim.core.population.routes.RouteUtils;
 import org.matsim.core.scoring.ScoringFunction;
 import org.matsim.core.scoring.ScoringFunctionFactory;
+import org.matsim.core.scoring.functions.ModeUtilityParameters;
 import org.matsim.core.scoring.functions.ScoringParameters;
 import org.matsim.core.scoring.functions.ScoringParametersForPerson;
 
@@ -272,7 +273,36 @@ public class BudgetValidator {
 		scoringFunction.addScore(waitScore);
 
 		scoringFunction.finish();
-		return scoringFunction.getScore();
+		double score = scoringFunction.getScore();
+
+		// IMPORTANT: Correct for daily constants that were incorrectly added.
+		//
+		// MATSim's CharyparNagelLegScoring adds dailyUtilityConstant and dailyMoneyConstant
+		// the first time a mode is used. Since we create a NEW ScoringFunction for each trip,
+		// these daily constants are added every time, which is incorrect.
+		//
+		// For demand extraction comparing individual trips:
+		// - Daily constants are day-level decisions, not trip-level
+		// - They don't affect the marginal utility of DRT vs other modes for THIS trip
+		// - Including them would over-count (person may make multiple trips per day)
+		//
+		// We subtract the daily constants for the modes used in this DRT trip:
+		// - walk (for access/egress)
+		// - DRT mode (for the main ride)
+		String drtMode = exMasConfig.getDrtMode();
+		ModeUtilityParameters walkParams = scoringParams.modeParams.get(TransportMode.walk);
+		ModeUtilityParameters drtParams = scoringParams.modeParams.get(drtMode);
+
+		if (walkParams != null) {
+			score -= walkParams.dailyUtilityConstant;
+			score -= walkParams.dailyMoneyConstant * scoringParams.marginalUtilityOfMoney;
+		}
+		if (drtParams != null) {
+			score -= drtParams.dailyUtilityConstant;
+			score -= drtParams.dailyMoneyConstant * scoringParams.marginalUtilityOfMoney;
+		}
+
+		return score;
 	}
 	
 	/**
