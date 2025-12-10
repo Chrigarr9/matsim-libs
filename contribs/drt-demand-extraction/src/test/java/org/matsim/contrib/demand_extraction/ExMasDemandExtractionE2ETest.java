@@ -189,7 +189,9 @@ public class ExMasDemandExtractionE2ETest {
 		exMasConfig.setMinMaxWaitingTime(0.0); // No waiting
 		exMasConfig.setMinDrtAccessEgressDistance(0.0); // Minimal access/egress distance
 
+
 		// Set ExMAS algorithm parameters
+		exMasConfig.setMaxDetourFactor(1.5);
 		exMasConfig.setSearchHorizon(0.0); // 10 minutes time window for pairing
 		exMasConfig.setOriginFlexibilityAbsolute(9000.0); // 15 minutes departure flexibility
 		exMasConfig.setDestinationFlexibilityAbsolute(9000.0); // 15 minutes arrival flexibility
@@ -251,11 +253,12 @@ public class ExMasDemandExtractionE2ETest {
 			Assertions.assertTrue(header.contains("startTime"), "Header should contain startTime");
 			Assertions.assertTrue(header.contains("rideTravelTime"), "Header should contain rideTravelTime");
 			Assertions.assertTrue(header.contains("rideDistance"), "Header should contain rideDistance");
+			Assertions.assertTrue(header.contains("detours"), "Header should contain detours");
 
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				Assertions.assertEquals(18, parts.length, "Each ride should have 18 fields");
+				Assertions.assertEquals(19, parts.length, "Each ride should have 19 fields (includes detours)");
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();
@@ -264,10 +267,10 @@ public class ExMasDemandExtractionE2ETest {
 
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
 
-				double duration = Double.parseDouble(parts[16]);
+				double duration = Double.parseDouble(parts[17]);
 				Assertions.assertTrue(duration >= 0, "Duration should be non-negative");
 
-				double distance = Double.parseDouble(parts[17]);
+				double distance = Double.parseDouble(parts[18]);
 				Assertions.assertTrue(distance >= 0, "Distance should be non-negative");
 
 				rideCount++;

@@ -203,6 +203,15 @@ public class DrtRequestFactory {
 		Id<Link> originLinkId = getLinkId(originActivity);
 		Id<Link> destinationLinkId = getLinkId(destActivity);
 
+		// Skip trips with zero travel time/distance (same origin-destination)
+		// These cause division by zero and NaN propagation in delay calculations
+		if (drtAttrs.travelTime <= 0.0 || drtAttrs.distance <= 0.0) {
+			log.warn(
+					"Skipping request index {} (person: {}): zero travel time/distance (origin=destination or routing failure)",
+					requestIndex, person.getId());
+			return null;
+		}
+
 		double requestTime = trip.getOriginActivity().getEndTime().orElse(0.0);
 
 		// Build temporary request to use BudgetValidator for budget calculation
@@ -225,6 +234,7 @@ public class DrtRequestFactory {
 				.requestTime(requestTime)
 				.directTravelTime(drtAttrs.travelTime)
 				.directDistance(drtAttrs.distance)
+				.maxDetourFactor(exmasConfig.getMaxDetourFactor())
 				// Temporary placeholders for time windows (will be recalculated with actual
 				// budget)
 				.earliestDeparture(requestTime)
@@ -234,37 +244,35 @@ public class DrtRequestFactory {
 		// Calculate budget using BudgetValidator for consistency
 		double budget = budgetValidator.calculateBudget(tempRequest);
 
-		// Calculate temporal window with flexible origin/destination components
-		// max_absolute_detour is the smaller of:
-		// 1) Budget-derived detour (how much delay utility budget allows)
-		// 2) Config max factor (policy limit on detour)
-		// Uses person-specific scoring parameters for accurate budget-to-constraint
-		// conversion
+		// Calculate max detour factor as minimum of budget-derived and config limit
+		// This determines the maximum acceptable trip duration (e.g., 1.5 means 50%
+		// longer than direct)
 		double budgetDerivedDetour = budgetToConstraintsCalculator.budgetToMaxDetourTime(
 				budget, person, drtAttrs.travelTime, drtAttrs.distance);
 		double configMaxDetour = drtAttrs.travelTime * (exmasConfig.getMaxDetourFactor() - 1.0);
 		double maxAbsoluteDetour = Math.min(budgetDerivedDetour, configMaxDetour);
+		double effectiveMaxDetourFactor = 1.0 + (maxAbsoluteDetour / drtAttrs.travelTime);
 
-		// Origin flexibility (departure window) - how much earlier/later can we depart?
-		// This shares the detour budget: if we use flexibility for late departure,
-		// we have less budget for route detours
-		double originFlex = exmasConfig.getOriginFlexibilityAbsolute()
-				+ (maxAbsoluteDetour * exmasConfig.getOriginFlexibilityRelative());
+		// Flexibility controls WHEN someone can depart/arrive (temporal window)
+		// This is INDEPENDENT from detour (which controls HOW LONG the trip can take)
+		// Origin flexibility: how much earlier/later can passenger depart?
+		double originFlex = exmasConfig.getOriginFlexibilityAbsolute();
 
-		// Destination flexibility (arrival window) - how much earlier/later can we
-		// arrive?
-		// This also shares the detour budget
-		double destFlex = exmasConfig.getDestinationFlexibilityAbsolute()
-				+ (maxAbsoluteDetour * exmasConfig.getDestinationFlexibilityRelative());
+		// Destination flexibility: how much earlier/later can passenger arrive?
+		double destFlex = exmasConfig.getDestinationFlexibilityAbsolute();
 
-		// Time window calculation:
-		// earliestDeparture: earliest time DRT vehicle can pick up passenger
-		// = requestTime (activity end) - originFlex (can leave earlier)
-		// latestArrival: latest time passenger can arrive at destination
-		// = requestTime + directTravelTime + maxAbsoluteDetour + destFlex
+		// Time window calculation (matching Python reference implementation):
+		// earliest_departure = treq - max_negative_delay (flexibility)
+		// latest_departure = treq + max_positive_delay (flexibility)
+		// earliest_arrival = earliest_departure + travel_time
+		// latest_arrival = latest_departure + travel_time
+		//
+		// Note: max_travel_time is SEPARATE and equals directTravelTime *
+		// maxDetourFactor
 
 		double earliestDep = requestTime - originFlex;
-		double latestArr = requestTime + drtAttrs.travelTime + maxAbsoluteDetour + destFlex;
+		double latestDep = requestTime + destFlex;
+		double latestArr = latestDep + drtAttrs.travelTime;
 
 		// Calculate PT accessibility metrics
 		// ptMetrics[0] = carTravelTime, ptMetrics[1] = ptTravelTime
@@ -301,6 +309,7 @@ public class DrtRequestFactory {
 				.latestArrival(latestArr)
 				.directTravelTime(drtAttrs.travelTime)
 				.directDistance(drtAttrs.distance)
+				.maxDetourFactor(effectiveMaxDetourFactor)
 				.carTravelTime(carTravelTime)
 				.ptTravelTime(ptTravelTime)
 				.ptAccessibility(ptAccessibility)

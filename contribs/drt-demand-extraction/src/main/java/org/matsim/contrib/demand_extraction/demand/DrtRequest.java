@@ -46,6 +46,7 @@ public class DrtRequest {
     // Direct trip metrics (baseline for detour calculation)
     public final double directTravelTime; // Direct travel time without sharing (seconds)
     public final double directDistance; // Direct distance without sharing (meters)
+	public final double maxDetourFactor; // Maximum detour factor (e.g., 1.5 means 50% longer than direct)
 
     // PT Accessibility metrics - calculated for ALL agents regardless of car availability
     // These allow comparing the PT accessibility of each trip
@@ -73,6 +74,7 @@ public class DrtRequest {
         this.latestArrival = builder.latestArrival;
         this.directTravelTime = builder.directTravelTime;
         this.directDistance = builder.directDistance;
+		this.maxDetourFactor = builder.maxDetourFactor;
         this.carTravelTime = builder.carTravelTime;
         this.ptTravelTime = builder.ptTravelTime;
         this.ptAccessibility = builder.ptAccessibility;
@@ -111,21 +113,18 @@ public class DrtRequest {
 	 * Maximum acceptable pooled travel time (used by ExMAS algorithm).
 	 * 
 	 * This represents the maximum total travel time INCLUDING detour:
-	 * = direct travel time + maximum acceptable detour
+	 * maxTravelTime = directTravelTime * maxDetourFactor
 	 * 
-	 * The maximum detour is already baked into the temporal window
-	 * (earliestDeparture to latestArrival) during budget calculation,
-	 * where BudgetToConstraintsCalculator.budgetToMaxDetourTime() converts
-	 * the utility budget into a time constraint.
+	 * This is separate from temporal flexibility (earliestDeparture/latestArrival),
+	 * which controls WHEN someone can depart/arrive, not HOW LONG the trip can
+	 * take.
 	 * 
-	 * Therefore: maxTravelTime = latestArrival - earliestDeparture
-	 * = directTravelTime + maxDetourFromBudget
-	 * 
-	 * This is equivalent to: directTravelTime * (1.0 + effectiveDetourFactor)
-	 * where effectiveDetourFactor is determined by budget, not config.
+	 * Example: maxDetourFactor = 1.5, directTravelTime = 1000s
+	 * -> maxTravelTime = 1500s (can be 50% longer than direct)
+	 * -> maxAbsoluteDetour = 500s (the extra time allowed)
 	 */
     public double getMaxTravelTime() {
-        return latestArrival - earliestDeparture;
+		return directTravelTime * maxDetourFactor;
     }
     
 	// Delay methods for temporal flexibility (used by pair generation algorithm)	
@@ -165,6 +164,7 @@ public class DrtRequest {
         private double latestArrival;
         private double directTravelTime;
         private double directDistance;
+		private double maxDetourFactor;
         private double carTravelTime;
         private double ptTravelTime;
         private double ptAccessibility;
@@ -188,6 +188,11 @@ public class DrtRequest {
         public Builder latestArrival(double latestArrival) { this.latestArrival = latestArrival; return this; }
         public Builder directTravelTime(double directTravelTime) { this.directTravelTime = directTravelTime; return this; }
         public Builder directDistance(double directDistance) { this.directDistance = directDistance; return this; }
+
+		public Builder maxDetourFactor(double maxDetourFactor) {
+			this.maxDetourFactor = maxDetourFactor;
+			return this;
+		}
         public Builder carTravelTime(double carTravelTime) { this.carTravelTime = carTravelTime; return this; }
         public Builder ptTravelTime(double ptTravelTime) { this.ptTravelTime = ptTravelTime; return this; }
         public Builder ptAccessibility(double ptAccessibility) { this.ptAccessibility = ptAccessibility; return this; }

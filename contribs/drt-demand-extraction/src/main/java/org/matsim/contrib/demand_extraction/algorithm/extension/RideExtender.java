@@ -292,15 +292,20 @@ public final class RideExtender {
 
 		for (int i = 0; i < degree + 1; i++) {
 			DrtRequest req = requests[i];
-			double detour = pttActual[i] - req.getTravelTime();
-			detours[i] = detour;
+			double detourFactor = pttActual[i] / req.getTravelTime();
+			detours[i] = detourFactor;
+
+			// Convert detour factor to absolute time for delay budget calculations
+			double detourTime = req.getTravelTime() * (detourFactor - 1.0);
 
 			double posAdj = req.getPositiveDelayRelComponent() > 0.0
-					? Math.max(0.0, req.getPositiveDelayRelComponent() - detour) : 0.0;
+					? Math.max(0.0, req.getPositiveDelayRelComponent() - detourTime)
+					: 0.0;
 			double negAdj = req.getNegativeDelayRelComponent() > 0.0
-					? Math.max(0.0, req.getNegativeDelayRelComponent() - detour) : 0.0;
+					? Math.max(0.0, req.getNegativeDelayRelComponent() - detourTime)
+					: 0.0;
 
-			effMaxPos[i] = (req.getMaxPositiveDelay() - detour) - posAdj;
+			effMaxPos[i] = (req.getMaxPositiveDelay() - detourTime) - posAdj;
 			effMaxNeg[i] = req.getMaxNegativeDelay() - negAdj;
 		}
 

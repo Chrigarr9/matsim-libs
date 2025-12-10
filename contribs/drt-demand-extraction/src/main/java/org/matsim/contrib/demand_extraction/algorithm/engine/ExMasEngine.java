@@ -181,6 +181,7 @@ public final class ExMasEngine {
 					.passengerDistances(oldRide.getPassengerDistances())
 					.passengerNetworkUtilities(oldRide.getPassengerNetworkUtilities())
 					.delays(oldRide.getDelays())
+					.detours(oldRide.getDetours())
 					.remainingBudgets(oldRide.getRemainingBudgets())
 					.connectionTravelTimes(oldRide.getConnectionTravelTimes())
 					.connectionDistances(oldRide.getConnectionDistances())

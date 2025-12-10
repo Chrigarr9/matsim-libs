@@ -88,7 +88,7 @@ public final class ExMasCsvWriter {
 			writer.write("rideIndex,degree,kind," +
 					"requestIndices,personIds,groupIds,requestTimes,isCommutes," +
 					"originsOrdered,destinationsOrdered," +
-					"passengerTravelTimes,passengerDistances,delays,remainingBudgets," +
+					"passengerTravelTimes,passengerDistances,delays,detours,remainingBudgets," +
 					"startTime,endTime,rideTravelTime,rideDistance");
 			writer.newLine();
 

@@ -1,5 +1,7 @@
 package org.matsim.contrib.demand_extraction.algorithm.validation;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.network.Link;
@@ -35,6 +37,7 @@ import com.google.inject.Singleton;
  */
 @Singleton
 public class BudgetValidator {
+	private static final Logger log = LogManager.getLogger(BudgetValidator.class);
 	
 	private final ScoringFunctionFactory scoringFunctionFactory;
 	private final ScoringParametersForPerson scoringParametersForPerson;
@@ -94,6 +97,7 @@ public class BudgetValidator {
 				.passengerDistances(ride.getPassengerDistances())
 				.passengerNetworkUtilities(ride.getPassengerNetworkUtilities())
 				.delays(ride.getDelays())
+				.detours(ride.getDetours())
 				.remainingBudgets(remainingBudgets)
 				.connectionTravelTimes(ride.getConnectionTravelTimes())
 				.connectionDistances(ride.getConnectionDistances())
@@ -172,11 +176,25 @@ public class BudgetValidator {
 			double actualTravelTime, double actualDistance,
 			double actualWalkDistanceAccess, double actualWalkDistanceEgress) {
 		
+		// Validate inputs - if any are NaN/infinite, scoring cannot proceed
+		if (!Double.isFinite(delay)) {
+			log.error("Delay is NaN/infinite for request index {} (person: {}). Cannot calculate DRT score.",
+					request.index, request.personId);
+			return Double.NEGATIVE_INFINITY;
+		}
+
 		// Validate that routing succeeded - if travel time is infinite/NaN, DRT routing
 		// failed
 		if (!Double.isFinite(actualTravelTime) || !Double.isFinite(actualDistance)) {
-			// Return very negative score to indicate this ride is not feasible
-			// TODO log a warning with whhat links are problematic
+			log.warn("DRT routing failed for request index {} (person: {}): travelTime={}, distance={}",
+					request.index, request.personId, actualTravelTime, actualDistance);
+			return Double.NEGATIVE_INFINITY;
+		}
+
+		// Validate walk distances
+		if (!Double.isFinite(actualWalkDistanceAccess) || !Double.isFinite(actualWalkDistanceEgress)) {
+			log.error("Access/egress walk distance is NaN/infinite for request index {} (person: {})",
+					request.index, request.personId);
 			return Double.NEGATIVE_INFINITY;
 		}
 

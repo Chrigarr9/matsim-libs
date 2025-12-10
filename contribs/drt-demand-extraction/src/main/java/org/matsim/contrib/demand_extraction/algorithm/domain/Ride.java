@@ -30,7 +30,8 @@ public final class Ride {
     private final double[] passengerDistances;
     private final double[] passengerNetworkUtilities;
     private final double[] delays;
-	private final double[] detours; // Detour time: passengerTravelTime - directTravelTime (seconds)
+	private final double[] detours; // Detour factor: passengerTravelTime / directTravelTime (1.0 = no detour, 2.0 =
+									// 100% detour)
     private final double[] remainingBudgets;  // Budget remaining after scoring (utils)
 
     // Connection segments (length = degree*2 - 1 for most rides)

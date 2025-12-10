@@ -205,8 +205,8 @@ public final class PairGenerator {
 
 		if (pttI > i.getMaxTravelTime() || pttJ > j.getMaxTravelTime()) return null;
 
-		double detourI = pttI - i.getTravelTime();
-		double detourJ = pttJ - j.getTravelTime();
+		double detourI = pttI / i.getTravelTime();
+		double detourJ = pttJ / j.getTravelTime();
 
 		double[] effMaxPos = calculateEffectiveMaxPos(i, j, detourI, detourJ);
 		double[] effMaxNeg = calculateEffectiveMaxNeg(i, j, detourI, detourJ);
@@ -250,8 +250,8 @@ public final class PairGenerator {
 
 		if (pttI > i.getMaxTravelTime() || pttJ > j.getMaxTravelTime()) return null;
 
-		double detourI = pttI - i.getTravelTime();
-		double detourJ = pttJ - j.getTravelTime();
+		double detourI = pttI / i.getTravelTime();
+		double detourJ = pttJ / j.getTravelTime();
 
 		double[] effMaxPos = calculateEffectiveMaxPos(i, j, detourI, detourJ);
 		double[] effMaxNeg = calculateEffectiveMaxNeg(i, j, detourI, detourJ);
@@ -279,21 +279,35 @@ public final class PairGenerator {
 	}
 
 	private double[] calculateEffectiveMaxPos(DrtRequest i, DrtRequest j, double detourI, double detourJ) {
+		// Convert detour factors to absolute time: detourTime = directTime * (factor -
+		// 1.0)
+		double detourTimeI = i.getTravelTime() * (detourI - 1.0);
+		double detourTimeJ = j.getTravelTime() * (detourJ - 1.0);
+
 		double posAdjI = i.getPositiveDelayRelComponent() > 0.0
-				? Math.max(0.0, i.getPositiveDelayRelComponent() - detourI) : 0.0;
+				? Math.max(0.0, i.getPositiveDelayRelComponent() - detourTimeI)
+				: 0.0;
 		double posAdjJ = j.getPositiveDelayRelComponent() > 0.0
-				? Math.max(0.0, j.getPositiveDelayRelComponent() - detourJ) : 0.0;
+				? Math.max(0.0, j.getPositiveDelayRelComponent() - detourTimeJ)
+				: 0.0;
 		return new double[] {
-				(i.getMaxPositiveDelay() - detourI) - posAdjI,
-				(j.getMaxPositiveDelay() - detourJ) - posAdjJ
+				(i.getMaxPositiveDelay() - detourTimeI) - posAdjI,
+				(j.getMaxPositiveDelay() - detourTimeJ) - posAdjJ
 		};
 	}
 
 	private double[] calculateEffectiveMaxNeg(DrtRequest i, DrtRequest j, double detourI, double detourJ) {
+		// Convert detour factors to absolute time: detourTime = directTime * (factor -
+		// 1.0)
+		double detourTimeI = i.getTravelTime() * (detourI - 1.0);
+		double detourTimeJ = j.getTravelTime() * (detourJ - 1.0);
+
 		double negAdjI = i.getNegativeDelayRelComponent() > 0.0
-				? Math.max(0.0, i.getNegativeDelayRelComponent() - detourI) : 0.0;
+				? Math.max(0.0, i.getNegativeDelayRelComponent() - detourTimeI)
+				: 0.0;
 		double negAdjJ = j.getNegativeDelayRelComponent() > 0.0
-				? Math.max(0.0, j.getNegativeDelayRelComponent() - detourJ) : 0.0;
+				? Math.max(0.0, j.getNegativeDelayRelComponent() - detourTimeJ)
+				: 0.0;
 		return new double[] {
 				i.getMaxNegativeDelay() - negAdjI,
 				j.getMaxNegativeDelay() - negAdjJ
