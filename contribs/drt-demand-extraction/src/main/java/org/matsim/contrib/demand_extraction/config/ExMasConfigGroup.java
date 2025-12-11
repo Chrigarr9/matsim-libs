@@ -68,23 +68,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private double minDrtAccessEgressDistance = 0.0; // Minimum access/egress distance (meters)
 	private double minMaxWaitingTime = 0.0; // Minimum maximum waiting time (minutes)
 	
-
-	//C: dont we also need a origin activity type and a destination activity type? orient on C:\Users\VWAUCCY\dev\msf\projects\Dissertation\ExmasCommuters\src\exmas_commuters\core\requests\processing.py
-	// ExMAS algorithm parameters
-	// Flexible temporal windows for departure and arrival
-	// Origin flexibility (departure window): How much earlier/later can passenger depart?
-	// - Absolute: Fixed time buffer regardless of trip (seconds)
-	// - Relative: Fraction of max detour budget (dimensionless, 0.0-1.0)
-	private double originFlexibilityAbsolute = 300.0; // Absolute origin flex (5 minutes)
-	private double originFlexibilityRelative = 0.5; // Relative origin flex (50% of detour budget)
-	
-	// Destination flexibility (arrival window): How much earlier/later can passenger arrive?
-	private double destinationFlexibilityAbsolute = 300.0; // Absolute destination flex (5 minutes)
-	private double destinationFlexibilityRelative = 0.5; // Relative destination flex (50% of detour budget)
 	
 	// Maximum detour factor: Maximum acceptable detour as factor of direct travel time
 	// Example: 1.5 means maximum travel time = 1.5 * direct travel time
-	//C: this should limit the detour to this max factor during the max detour calculation from the remaining budget for each requests
+
 	private double maxDetourFactor = 1.5; // Maximum detour factor (50% longer than direct)
 	
 	private Double maxAbsoluteDetour = null; // Absolute detour cap (seconds). If set, limits the max detour time.
@@ -129,6 +116,7 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private boolean calcShapleyValues = true;
 
 	// Calculate predecessor/successor relationships between rides
+	// When enabled, connection cache is automatically written
 	private boolean calcPredecessors = true;
 
 	// Maximum time gap (seconds) between predecessor end and successor start; null => unbounded
@@ -281,48 +269,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter("networkTimeBinSize")
 	public void setNetworkTimeBinSize(int networkTimeBinSize) {
 		this.networkTimeBinSize = networkTimeBinSize;
-	}
-	
-	// Origin flexibility getters/setters
-	@StringGetter("originFlexibilityAbsolute")
-	public double getOriginFlexibilityAbsolute() {
-		return originFlexibilityAbsolute;
-	}
-
-	@StringSetter("originFlexibilityAbsolute")
-	public void setOriginFlexibilityAbsolute(double originFlexibilityAbsolute) {
-		this.originFlexibilityAbsolute = originFlexibilityAbsolute;
-	}
-	
-	@StringGetter("originFlexibilityRelative")
-	public double getOriginFlexibilityRelative() {
-		return originFlexibilityRelative;
-	}
-
-	@StringSetter("originFlexibilityRelative")
-	public void setOriginFlexibilityRelative(double originFlexibilityRelative) {
-		this.originFlexibilityRelative = originFlexibilityRelative;
-	}
-	
-	// Destination flexibility getters/setters
-	@StringGetter("destinationFlexibilityAbsolute")
-	public double getDestinationFlexibilityAbsolute() {
-		return destinationFlexibilityAbsolute;
-	}
-
-	@StringSetter("destinationFlexibilityAbsolute")
-	public void setDestinationFlexibilityAbsolute(double destinationFlexibilityAbsolute) {
-		this.destinationFlexibilityAbsolute = destinationFlexibilityAbsolute;
-	}
-	
-	@StringGetter("destinationFlexibilityRelative")
-	public double getDestinationFlexibilityRelative() {
-		return destinationFlexibilityRelative;
-	}
-
-	@StringSetter("destinationFlexibilityRelative")
-	public void setDestinationFlexibilityRelative(double destinationFlexibilityRelative) {
-		this.destinationFlexibilityRelative = destinationFlexibilityRelative;
 	}
 	
 	// Max detour factor getter/setter
@@ -549,25 +495,17 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"List of baseline travel modes to compare against DRT (comma-separated). Default: 'car,pt,bike,walk'");
 		map.put("privateVehicleModes",
 				"List of modes requiring private vehicles for subtour constraints (comma-separated). Default: 'car,bike'");
-		map.put("originFlexibilityAbsolute",
-				"Absolute origin flexibility (seconds). Fixed time buffer for early/late departure. Default: 300 (5 min)");
-		map.put("originFlexibilityRelative",
-				"Relative origin flexibility (fraction of max detour). 0.5 means 50% of detour budget can be used for departure shifts. Default: 0.5");
-		map.put("destinationFlexibilityAbsolute",
-				"Absolute destination flexibility (seconds). Fixed time buffer for early/late arrival. Default: 300 (5 min)");
-		map.put("destinationFlexibilityRelative",
-				"Relative destination flexibility (fraction of max detour). 0.5 means 50% of detour budget can be used for arrival shifts. Default: 0.5");
 		map.put("maxDetourFactor",
 				"Maximum detour factor. Maximum travel time = factor * direct travel time. 1.5 means 50% longer. Default: 1.5");
 		map.put("maxAbsoluteDetour", "Absolute detour cap (seconds). If set, limits the max detour time regardless of factor. Default: null");
 		map.put("requestSampleSize", "Fraction of requests to keep (0.0-1.0). Default: 1.0 (all requests)");
 		map.put("requestCount", "Absolute number of requests to keep. Overrides requestSampleSize if set. Default: null");
 		map.put("positiveFlexibilityAttribute", "Person attribute for positive flexibility (late departure).");
-		map.put("positiveFlexibilityAbsoluteMap", "Map for positive absolute flexibility (value:seconds,value:seconds).");
-		map.put("positiveFlexibilityRelativeMap", "Map for positive relative flexibility (value:factor,value:factor).");
+		map.put("positiveFlexibilityAbsoluteMap", "Map for positive absolute flexibility (value:seconds,value:seconds). Single value sets default. Default: default:0.0");
+		map.put("positiveFlexibilityRelativeMap", "Map for positive relative flexibility (value:factor,value:factor). Single value sets default. Default: default:0.5");
 		map.put("negativeFlexibilityAttribute", "Person attribute for negative flexibility (early departure).");
-		map.put("negativeFlexibilityAbsoluteMap", "Map for negative absolute flexibility (value:seconds,value:seconds).");
-		map.put("negativeFlexibilityRelativeMap", "Map for negative relative flexibility (value:factor,value:factor).");
+		map.put("negativeFlexibilityAbsoluteMap", "Map for negative absolute flexibility (value:seconds,value:seconds). Single value sets default. Default: default:0.0");
+		map.put("negativeFlexibilityRelativeMap", "Map for negative relative flexibility (value:factor,value:factor). Single value sets default. Default: default:0.5");
 		map.put("networkTimeBinSize",
 				"Time bin size for network travel time caching (seconds). Queries within same bin reuse cached values. Default: 900 (15 min)");
 		map.put("searchHorizon",
@@ -584,7 +522,7 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Parallelism for Shapley/predecessor calculations. -1 = all processors, 1 = sequential. Default: -1");
 		map.put("calcShapleyValues", "Calculate Shapley values for each ride (distance contribution per passenger). Default: true");
 		map.put("calcPredecessors",
-				"Calculate predecessor/successor relationships between rides. Default: true");
+				"Calculate predecessor/successor relationships between rides. When enabled, connection cache is automatically written. Default: true");
 		map.put("predecessorsFilterTime",
 				"Maximum time gap (seconds) between predecessor end and successor start. Null/omitted => unbounded.");
 		map.put("predecessorsFilterDistanceFactor",

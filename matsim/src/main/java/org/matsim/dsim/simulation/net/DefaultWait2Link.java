@@ -25,7 +25,7 @@ public class DefaultWait2Link implements Wait2Link {
 	@Override
 	public boolean accept(DistributedMobsimVehicle vehicle, SimLink link, double now) {
 		waitingVehicles
-			.computeIfAbsent(link.getId(), _ -> new ArrayDeque<>())
+			.computeIfAbsent(link.getId(), ignored -> new ArrayDeque<>())
 			.add(new Waiting(vehicle, link));
 		return true;
 	}

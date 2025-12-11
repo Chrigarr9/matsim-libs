@@ -91,8 +91,10 @@ public class ExMasDemandExtractionE2ETest {
 		// 8. Verify output files exist
 		Path requestsFile = testOutputDir.resolve("drt_requests.csv");
 		Path ridesFile = testOutputDir.resolve("exmas_rides.csv");
+		Path connectionCacheFile = testOutputDir.resolve("connection_cache.csv");
 		Assertions.assertTrue(Files.exists(requestsFile), "DRT requests file should exist: " + requestsFile);
 		Assertions.assertTrue(Files.exists(ridesFile), "ExMAS rides file should exist: " + ridesFile);
+		Assertions.assertTrue(Files.exists(connectionCacheFile), "Connection cache file should exist: " + connectionCacheFile);
 
 		// 9. Validate request and ride content
 		validateRequests(requestsFile);
@@ -102,6 +104,7 @@ public class ExMasDemandExtractionE2ETest {
 		System.out.println("\n=== Test Output Location ===");
 		System.out.println("Requests: " + requestsFile.toAbsolutePath());
 		System.out.println("Rides: " + ridesFile.toAbsolutePath());
+		System.out.println("Connection Cache: " + connectionCacheFile.toAbsolutePath());
 		System.out.println("============================\n");
 	}
 
@@ -193,8 +196,8 @@ public class ExMasDemandExtractionE2ETest {
 		// Set ExMAS algorithm parameters
 		exMasConfig.setMaxDetourFactor(1.5);
 		exMasConfig.setSearchHorizon(0.0); // 10 minutes time window for pairing
-		exMasConfig.setOriginFlexibilityAbsolute(9000.0); // 15 minutes departure flexibility
-		exMasConfig.setDestinationFlexibilityAbsolute(9000.0); // 15 minutes arrival flexibility
+		exMasConfig.setNegativeFlexibilityAbsoluteMap("default:9000.0"); // 15 minutes departure flexibility
+		exMasConfig.setPositiveFlexibilityAbsoluteMap("default:9000.0"); // 15 minutes arrival flexibility
 	}
 
 	private void validateRequests(Path requestsFile) throws IOException {
@@ -258,7 +261,8 @@ public class ExMasDemandExtractionE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				Assertions.assertEquals(19, parts.length, "Each ride should have 19 fields (includes detours)");
+				// Updated to 23 columns to include maxCosts, shapleyValues, predecessors, successors
+				Assertions.assertEquals(23, parts.length, "Each ride should have 23 fields (includes detours, maxCosts, shapleyValues, predecessors, successors)");
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();
@@ -267,10 +271,12 @@ public class ExMasDemandExtractionE2ETest {
 
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
 
-				double duration = Double.parseDouble(parts[17]);
+				// rideTravelTime is at index 21
+				double duration = Double.parseDouble(parts[21]);
 				Assertions.assertTrue(duration >= 0, "Duration should be non-negative");
 
-				double distance = Double.parseDouble(parts[18]);
+				// rideDistance is at index 22
+				double distance = Double.parseDouble(parts[22]);
 				Assertions.assertTrue(distance >= 0, "Distance should be non-negative");
 
 				rideCount++;

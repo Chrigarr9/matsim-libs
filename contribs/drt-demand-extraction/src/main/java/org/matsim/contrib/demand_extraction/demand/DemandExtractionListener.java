@@ -12,6 +12,7 @@ import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
+import org.matsim.contrib.demand_extraction.io.ConnectionCacheWriter;
 import org.matsim.contrib.demand_extraction.io.ExMasCsvWriter;
 import org.matsim.core.config.Config;
 import org.matsim.core.controler.OutputDirectoryHierarchy;
@@ -97,7 +98,7 @@ public class DemandExtractionListener implements ShutdownListener {
 		List<DrtRequest> requests = budgetCalculator.buildRequests(population);
 		
 		// Apply sampling if configured
-		requests = RequestSamplingUtils.sampleRequests(requests, exMasConfig, config.global().getRandomSeed());
+		requests = requestSampler.sampleRequests(requests);
 
 		// 4. Generate ExMAS Rides (with budget validation)
 		log.info("");
@@ -126,6 +127,16 @@ public class DemandExtractionListener implements ShutdownListener {
 		String ridesFilename = outputDirectory.getOutputFilename("exmas_rides.csv");
 		ExMasCsvWriter.writeRides(ridesFilename, rides);
 		log.info("Wrote {} rides to: {}", rides.size(), ridesFilename);
+
+		// 7. Write Connection Cache (Optional - written when predecessors are calculated)
+		if (exMasConfig.isCalcPredecessors()) {
+			String connectionCacheFilename = outputDirectory.getOutputFilename("connection_cache.csv");
+			log.info("Writing connection cache to: {}", connectionCacheFilename);
+			// Use configured time bin size (default 900s = 15 min)
+			double timeBinSize = exMasConfig.getNetworkTimeBinSize();
+			ConnectionCacheWriter.writeConnectionCache(connectionCacheFilename, rides, networkCache, timeBinSize);
+			log.info("Wrote connection cache");
+		}
 
 		// Final summary
 		long overallElapsed = System.currentTimeMillis() - overallStartTime;

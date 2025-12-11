@@ -30,7 +30,7 @@ public class SimStepMessaging {
 		this.messageBroker = messageBroker;
 
 		for (int neighbor : partition.getNeighbors()) {
-			msgs.computeIfAbsent(neighbor, _ -> SimStepMessage.builder());
+			msgs.computeIfAbsent(neighbor, ignored -> SimStepMessage.builder());
 		}
 	}
 
@@ -42,7 +42,7 @@ public class SimStepMessaging {
 			person.getClass(), person.toMessage(), exitTime
 		);
 
-		msgs.computeIfAbsent(targetPart, _ -> SimStepMessage.builder())
+		msgs.computeIfAbsent(targetPart, ignored -> SimStepMessage.builder())
 			.addTeleportation(teleportation);
 	}
 
@@ -51,7 +51,7 @@ public class SimStepMessaging {
 			linkId, released, consumed
 		);
 
-		msgs.computeIfAbsent(targetPart, _ -> SimStepMessage.builder())
+		msgs.computeIfAbsent(targetPart, ignored -> SimStepMessage.builder())
 			.addCapacityUpdate(capacityUpdateMessage);
 	}
 
@@ -59,7 +59,7 @@ public class SimStepMessaging {
 
 		Id<Link> currentLinkId = simVehicle.getCurrentLinkId();
 		int targetPart = networkPartitioning.getPartition(currentLinkId);
-		msgs.computeIfAbsent(targetPart, _ -> SimStepMessage.builder())
+		msgs.computeIfAbsent(targetPart, ignored -> SimStepMessage.builder())
 			.addVehicleContainer(AgentSourcesContainer.vehicleToContainer(simVehicle));
 	}
 

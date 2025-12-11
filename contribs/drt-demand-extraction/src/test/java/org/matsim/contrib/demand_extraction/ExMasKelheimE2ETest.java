@@ -186,11 +186,11 @@ public class ExMasKelheimE2ETest {
 
 		// Set ExMAS algorithm parameters - more conservative for larger scenario
 		exMasConfig.setSearchHorizon(60.0); // No time window for pairing (instant matching)
-		exMasConfig.setMaxDetourFactor(1.1);
-		exMasConfig.setOriginFlexibilityAbsolute(0.0); // 0 minutes departure flexibility
-		exMasConfig.setOriginFlexibilityRelative(0.0); // 0% of detour time
-		exMasConfig.setDestinationFlexibilityAbsolute(0.0); // 15 minutes arrival flexibility
-		exMasConfig.setDestinationFlexibilityRelative(0.0); // 0% of detour time
+		exMasConfig.setMaxDetourFactor(1.5);
+		exMasConfig.setNegativeFlexibilityAbsoluteMap("default:0.0"); // 0 minutes departure flexibility
+		exMasConfig.setNegativeFlexibilityRelativeMap("default:0.0"); // 0% of detour time
+		exMasConfig.setPositiveFlexibilityAbsoluteMap("default:0.5"); // 15 minutes arrival flexibility
+		exMasConfig.setPositiveFlexibilityRelativeMap("default:0.5"); // 0% of detour time
 		exMasConfig.setMaxPoolingDegree(10); // Allow up to 10 passengers
 
 		// TEMPORARY: Disable PT optimization due to SwissRailRaptor configuration issue

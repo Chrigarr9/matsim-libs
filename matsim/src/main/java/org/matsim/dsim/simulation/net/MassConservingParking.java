@@ -49,7 +49,7 @@ class MassConservingParking implements ParkedVehicles {
 			return;
 		}
 
-		parkedVehicles.computeIfAbsent(link.getId(), _ -> new HashMap<>())
+		parkedVehicles.computeIfAbsent(link.getId(), ignored -> new HashMap<>())
 			.put(vehicle.getId(), vehicle);
 	}
 }

@@ -380,7 +380,7 @@ public class MatsimNetworkCache {
 			
 			return new TravelSegment(tt, dist, utility);
 			
-		} catch (OutOfMemoryError _) {
+		} catch (OutOfMemoryError e) {
 			// SpeedyALT bug: infinite loop in path construction for some link pairs
 			// Treat as routing failure and return infinity segment
 			log.warn("OutOfMemoryError during routing from link {} to link {} - treating as unreachable",

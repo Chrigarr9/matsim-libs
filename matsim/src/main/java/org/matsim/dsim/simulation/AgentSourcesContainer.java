@@ -30,11 +30,11 @@ public class AgentSourcesContainer {
 	public void addSource(DistributedAgentSource as) {
 		agentSources.add(as);
 		for (Class<? extends DistributedMobsimAgent> agentClass : as.getAgentClasses()) {
-			agentTypes.computeIfAbsent(agentClass, (_) -> new ArrayList<>()).add(as);
+			agentTypes.computeIfAbsent(agentClass, (ignored) -> new ArrayList<>()).add(as);
 		}
 
 		for (Class<? extends DistributedMobsimVehicle> vehicleClass : as.getVehicleClasses()) {
-			vehicleTypes.computeIfAbsent(vehicleClass, (_) -> new ArrayList<>()).add(as);
+			vehicleTypes.computeIfAbsent(vehicleClass, (ignored) -> new ArrayList<>()).add(as);
 		}
 	}
 

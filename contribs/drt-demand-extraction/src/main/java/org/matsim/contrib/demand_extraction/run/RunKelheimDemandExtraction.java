@@ -17,6 +17,8 @@ import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.CommuteFilte
 import org.matsim.contrib.demand_extraction.demand.DemandExtractionConfigValidator;
 import org.matsim.contrib.demand_extraction.demand.DemandExtractionModule;
 import org.matsim.contrib.drt.run.DrtControlerCreator;
+import org.matsim.contrib.drt.run.MultiModeDrtConfigGroup;
+import org.matsim.contrib.dvrp.run.DvrpConfigGroup;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.config.groups.ScoringConfigGroup;
@@ -128,15 +130,6 @@ public class RunKelheimDemandExtraction {
 		// Create and run controller
 		Controler controler = DrtControlerCreator.createControler(config, scenario, false);
 		controler.addOverridingModule(new DemandExtractionModule());
-
-		// Guard against Guice JIT-disabled errors by providing explicit bindings for core types
-		controler.addOverridingModule(new AbstractModule() {
-			@Override
-			public void install() {
-				bind(Scenario.class).toInstance(scenario);
-				bind(Network.class).toInstance(scenario.getNetwork());
-			}
-		});
 		
 		controler.run();
 		
@@ -156,8 +149,32 @@ public class RunKelheimDemandExtraction {
 		log.info("Loading Kelheim KEXI config...");
 		
 		// Load v3.1 25% config as base (only 25% exists, we adjust for other sample sizes)
-		Config config = ConfigUtils.loadConfig(LOCAL_CONFIG_PATH, new ExMasConfigGroup());
+		Config config = ConfigUtils.loadConfig(LOCAL_CONFIG_PATH, new ExMasConfigGroup(), new MultiModeDrtConfigGroup(), new DvrpConfigGroup());
 		log.info("Using config: {}", LOCAL_CONFIG_PATH);
+
+		// Remove 'av' mode if present to ensure single-mode DRT for ExMAS
+		MultiModeDrtConfigGroup multiModeDrt = ConfigUtils.addOrGetModule(config, MultiModeDrtConfigGroup.class);
+		if (multiModeDrt != null) {
+			// Find the 'av' mode config group
+			org.matsim.contrib.drt.run.DrtConfigGroup avMode = null;
+			for (org.matsim.contrib.drt.run.DrtConfigGroup drtConfig : multiModeDrt.getModalElements()) {
+				if ("av".equals(drtConfig.getMode())) {
+					avMode = drtConfig;
+					break;
+				}
+			}
+			
+			if (avMode != null) {
+				log.info("Removing 'av' DRT mode to ensure single-mode compatibility...");
+				multiModeDrt.removeParameterSet(avMode);
+			}
+		}
+
+		// Update DVRP network modes to only include 'drt'
+		DvrpConfigGroup dvrp = ConfigUtils.addOrGetModule(config, DvrpConfigGroup.class);
+		if (dvrp != null) {
+			dvrp.setNetworkModes(java.util.Collections.singleton("drt"));
+		}
 		
 		// Adjust capacity factors and plans file for the requested sample size
 		double sampleFactor = sampleSize / 100.0;
@@ -247,12 +264,12 @@ public class RunKelheimDemandExtraction {
 		exMasConfig.setMinDrtAccessEgressDistance(100.0);
 		
 		// ExMAS algorithm parameters
-		exMasConfig.setSearchHorizon(0.0);  // 10 minute time window for pairing
+		exMasConfig.setSearchHorizon(600.0);  // 10 minute time window for pairing
 		exMasConfig.setMaxDetourFactor(1.5);  // Max 50% longer than direct
-		exMasConfig.setOriginFlexibilityAbsolute(600.0);  // 10 min departure flexibility
-		exMasConfig.setDestinationFlexibilityAbsolute(600.0);  // 10 min arrival flexibility
+		// exMasConfig.setNegativeFlexibilityAbsoluteMap("default:600.0");  // 10 min departure flexibility
+		// exMasConfig.setPositiveFlexibilityAbsoluteMap("default:600.0");  // 10 min arrival flexibility
 		exMasConfig.setMaxPoolingDegree(8);  // Max 8 passengers per ride (reasonable for KEXI)
-		
+
 		// Disable PT departure optimization to avoid SwissRailRaptor configuration issues
 		exMasConfig.setPtOptimizeDepartureTime(false);
 		

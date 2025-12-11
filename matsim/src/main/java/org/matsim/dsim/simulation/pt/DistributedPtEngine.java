@@ -95,7 +95,7 @@ public class DistributedPtEngine implements DistributedMobsimEngine, Distributed
 		}
 
 		waitingVehicles
-			.computeIfAbsent(link.getId(), _ -> new ArrayDeque<>())
+			.computeIfAbsent(link.getId(), ignored -> new ArrayDeque<>())
 			.add(new DefaultWait2Link.Waiting(vehicle, link));
 		return true;
 	}
@@ -163,7 +163,7 @@ public class DistributedPtEngine implements DistributedMobsimEngine, Distributed
 			if (delay > 0.0) {
 				vehicle.setEarliestLinkExitTime(now + delay);
 				activeStops
-					.computeIfAbsent(link.getId(), _ -> new PriorityQueue<>(new VehAtStopComparator()))
+					.computeIfAbsent(link.getId(), ignored -> new PriorityQueue<>(new VehAtStopComparator()))
 					.add(new VehicleAtStop(vehicle, link));
 				return true;
 			}
@@ -217,7 +217,7 @@ public class DistributedPtEngine implements DistributedMobsimEngine, Distributed
 		} else {
 			// the vehicle stops outside the link (e.g. inside a booth) and the following vehicles can pass
 			activeStops
-				.computeIfAbsent(link.getId(), _ -> new PriorityQueue<>(new VehAtStopComparator()))
+				.computeIfAbsent(link.getId(), ignored -> new PriorityQueue<>(new VehAtStopComparator()))
 				.add(new VehicleAtStop(vehicle, link));
 			return SimLink.OnLeaveQueueInstruction.RemoveVehicle;
 		}

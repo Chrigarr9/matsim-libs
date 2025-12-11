@@ -102,10 +102,12 @@ public class DemandExtractionConfigValidator {
 				exMasConfig.getMaxPoolingDegree() == Integer.MAX_VALUE ? "unlimited"
 						: exMasConfig.getMaxPoolingDegree());
 		log.info("  Search horizon: {}s", exMasConfig.getSearchHorizon());
-		log.info("  Origin flexibility: {}s absolute, {}% relative",
-				exMasConfig.getOriginFlexibilityAbsolute(), exMasConfig.getOriginFlexibilityRelative() * 100);
-		log.info("  Destination flexibility: {}s absolute, {}% relative",
-				exMasConfig.getDestinationFlexibilityAbsolute(), exMasConfig.getDestinationFlexibilityRelative() * 100);
+		log.info("  Origin flexibility (default): {}s absolute, {}% relative",
+				getDefaultFromMapString(exMasConfig.getNegativeFlexibilityAbsoluteMap(), 0.0),
+				getDefaultFromMapString(exMasConfig.getNegativeFlexibilityRelativeMap(), 0.5) * 100);
+		log.info("  Destination flexibility (default): {}s absolute, {}% relative",
+				getDefaultFromMapString(exMasConfig.getPositiveFlexibilityAbsoluteMap(), 0.0),
+				getDefaultFromMapString(exMasConfig.getPositiveFlexibilityRelativeMap(), 0.5) * 100);
 		log.info("Routing Settings:");
 		log.info("  PT optimization: {}", exMasConfig.isPtOptimizeDepartureTime() ? "enabled" : "disabled");
 		log.info("  Deterministic network routing: {}",
@@ -185,8 +187,9 @@ public class DemandExtractionConfigValidator {
 
 		// Use ExMas origin flexibility for PT range query
 		// This allows agents to depart earlier/later to catch better connections
-		int maxEarlierDeparture = (int) exMasConfig.getOriginFlexibilityAbsolute();
-		int maxLaterDeparture = (int) exMasConfig.getOriginFlexibilityAbsolute();
+		double originFlexAbs = getDefaultFromMapString(exMasConfig.getNegativeFlexibilityAbsoluteMap(), 0.0);
+		int maxEarlierDeparture = (int) originFlexAbs;
+		int maxLaterDeparture = (int) originFlexAbs;
 
 		// Check if ANY range query settings exist by checking the parameter sets
 		var existingSettings = raptorConfig.getParameterSets("RangeQuerySettings");
@@ -367,19 +370,6 @@ public class DemandExtractionConfigValidator {
 							" (must be >= 1.0)");
 		}
 
-		// Validate flexibility parameters
-		if (exMasConfig.getOriginFlexibilityAbsolute() < 0 ||
-				exMasConfig.getDestinationFlexibilityAbsolute() < 0) {
-			throw new RuntimeException("Flexibility parameters must be non-negative");
-		}
-
-		if (exMasConfig.getOriginFlexibilityRelative() < 0 ||
-				exMasConfig.getOriginFlexibilityRelative() > 1.0 ||
-				exMasConfig.getDestinationFlexibilityRelative() < 0 ||
-				exMasConfig.getDestinationFlexibilityRelative() > 1.0) {
-			throw new RuntimeException("Relative flexibility parameters must be in [0.0, 1.0]");
-		}
-
 		// Validate search horizon (0 means instant matching, no time window)
 		if (exMasConfig.getSearchHorizon() < 0) {
 			throw new RuntimeException("Search horizon must be non-negative (0 = instant matching)");
@@ -399,5 +389,31 @@ public class DemandExtractionConfigValidator {
 		}
 
 		log.info("ExMAS algorithm parameters validated successfully");
+	}
+
+	private static double getDefaultFromMapString(String mapString, double fallback) {
+		if (mapString == null || mapString.isEmpty()) {
+			return fallback;
+		}
+		for (String entry : mapString.split(",")) {
+			String[] parts = entry.split(":");
+			if (parts.length == 1) {
+				try {
+					// Single value is treated as default
+					return Double.parseDouble(parts[0].trim());
+				} catch (NumberFormatException e) {
+					// ignore
+				}
+			} else if (parts.length == 2) {
+				if ("default".equalsIgnoreCase(parts[0].trim())) {
+					try {
+						return Double.parseDouble(parts[1].trim());
+					} catch (NumberFormatException e) {
+						// ignore
+					}
+				}
+			}
+		}
+		return fallback;
 	}
 }

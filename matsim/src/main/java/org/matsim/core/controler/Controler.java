@@ -252,7 +252,7 @@ public final class Controler implements Controller, ControlerI, MatsimServices, 
 							install(module);
 						}
 						// should not be necessary: created in the controler
-						//install(new ScenarioByInstanceModule(scenario));
+						install(new ScenarioByInstanceModule(scenario));
 					}
 				}
 			);

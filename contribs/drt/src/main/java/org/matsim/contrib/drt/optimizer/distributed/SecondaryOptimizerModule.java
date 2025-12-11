@@ -52,7 +52,7 @@ public class SecondaryOptimizerModule extends AbstractDvrpModeQSimModule {
 		})).in(Singleton.class);
 
 		bindModal(ScheduleTimingUpdater.class).toProvider(modalProvider(
-			_ ->  {
+			ignored ->  {
 				throw new UnsupportedOperationException("TODO: Not supported due to API changes.");
 			}
 		));

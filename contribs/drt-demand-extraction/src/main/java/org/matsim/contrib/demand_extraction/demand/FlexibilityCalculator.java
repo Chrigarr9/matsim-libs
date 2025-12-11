@@ -51,8 +51,6 @@ public class FlexibilityCalculator {
 				config.getNegativeFlexibilityAttribute(),
 				negAbsMap,
 				negRelMap,
-				config.getOriginFlexibilityAbsolute(),
-				config.getOriginFlexibilityRelative(),
 				maxDetour);
 	}
 
@@ -65,15 +63,16 @@ public class FlexibilityCalculator {
 				config.getPositiveFlexibilityAttribute(),
 				posAbsMap,
 				posRelMap,
-				config.getDestinationFlexibilityAbsolute(),
-				config.getDestinationFlexibilityRelative(),
 				maxDetour);
 	}
 
 	private double calculate(Person person, Activity activity, String attribute, 
 			Map<String, Double> absMap, Map<String, Double> relMap, 
-			double defaultAbs, double defaultRel, double maxDetour) {
+			double maxDetour) {
 		
+		double defaultAbs = absMap.getOrDefault("default", 0.0);
+		double defaultRel = relMap.getOrDefault("default", 0.5);
+
 		if (attribute == null) {
 			// Fallback to simple scalar config if no attribute specified
 			return defaultAbs + (defaultRel * maxDetour);
@@ -94,8 +93,8 @@ public class FlexibilityCalculator {
 			}
 		}
 
-		double abs = absMap.getOrDefault(attrVal, absMap.getOrDefault("default", defaultAbs));
-		double relFactor = relMap.getOrDefault(attrVal, relMap.getOrDefault("default", defaultRel));
+		double abs = absMap.getOrDefault(attrVal, defaultAbs);
+		double relFactor = relMap.getOrDefault(attrVal, defaultRel);
 
 		return abs + (relFactor * maxDetour);
 	}
@@ -112,6 +111,12 @@ public class FlexibilityCalculator {
 					map.put(parts[0].trim().toLowerCase(), Double.parseDouble(parts[1].trim()));
 				} catch (NumberFormatException e) {
 					log.warn("Invalid number format in flexibility map: {}", entry);
+				}
+			} else if (parts.length == 1) {
+				try {
+					map.put("default", Double.parseDouble(parts[0].trim()));
+				} catch (NumberFormatException e) {
+					log.warn("Invalid number format in flexibility map (default value): {}", entry);
 				}
 			}
 		}

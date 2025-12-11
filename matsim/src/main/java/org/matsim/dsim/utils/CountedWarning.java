@@ -11,7 +11,7 @@ public class CountedWarning {
 	private static final ConcurrentMap<String, AtomicInteger> registeredWarnings = new ConcurrentHashMap<>();
 
 	public static void warn(String name, int maxCount, String message, Object arg) {
-		var count = registeredWarnings.computeIfAbsent(name, _ -> new AtomicInteger()).incrementAndGet();
+		var count = registeredWarnings.computeIfAbsent(name, ignored -> new AtomicInteger()).incrementAndGet();
 		if (count < maxCount) {
 			LogManager.getLogger(name).warn(message, arg);
 		} if (count == maxCount) {

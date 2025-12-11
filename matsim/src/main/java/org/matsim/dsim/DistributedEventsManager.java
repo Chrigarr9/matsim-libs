@@ -183,7 +183,7 @@ public final class DistributedEventsManager implements EventsManager {
 
 			EventSource source = task.getEventSource(type);
 			if (!task.isDirect() && source == EventSource.GLOBAL) {
-				globalListener.computeIfAbsent(type, _ -> new ArrayList<>()).add(task);
+				globalListener.computeIfAbsent(type, ignored -> new ArrayList<>()).add(task);
 				remoteSyncStep = Double.min(remoteSyncStep, task.getHandler().getProcessInterval());
 			}
 			// otherwise the task is local and is not added to any queue.
@@ -193,17 +193,17 @@ public final class DistributedEventsManager implements EventsManager {
 				for (Integer p : computeNode.getParts()) {
 					long address = MessageBroker.address(p, type);
 					if (task.isDirect())
-						directListener.computeIfAbsent(address, _ -> new ArrayList<>()).add(task.getConsumer(type));
+						directListener.computeIfAbsent(address, ignored -> new ArrayList<>()).add(task.getConsumer(type));
 					else
-						byPartitionAndType.computeIfAbsent(address, _ -> new ArrayList<>()).add(task);
+						byPartitionAndType.computeIfAbsent(address, ignored -> new ArrayList<>()).add(task);
 				}
 			} else {
 
 				long address = MessageBroker.address(part, type);
 				if (task.isDirect())
-					directListener.computeIfAbsent(address, _ -> new ArrayList<>()).add(task.getConsumer(type));
+					directListener.computeIfAbsent(address, ignored -> new ArrayList<>()).add(task.getConsumer(type));
 				else
-					byPartitionAndType.computeIfAbsent(address, _ -> new ArrayList<>()).add(task);
+					byPartitionAndType.computeIfAbsent(address, ignored -> new ArrayList<>()).add(task);
 
 			}
 		}
@@ -259,7 +259,7 @@ public final class DistributedEventsManager implements EventsManager {
 			globalListener.forEach((type, list) -> {
 				String name = serializer.getType(type).getSimpleName();
 				for (EventHandlerTask task : list) {
-					info.computeIfAbsent(task.getName(), _ -> new ArrayList<>()).add(name);
+					info.computeIfAbsent(task.getName(), ignored -> new ArrayList<>()).add(name);
 				}
 			});
 
@@ -287,7 +287,7 @@ public final class DistributedEventsManager implements EventsManager {
 				int receiver = remoteListener.containsKey(type) ? Communicator.BROADCAST_TO_ALL : reg.getRank();
 
 				remoteListener.put(type, receiver);
-				remoteEvents.computeIfAbsent(receiver, _ -> new ManyToOneConcurrentLinkedQueue<>());
+				remoteEvents.computeIfAbsent(receiver, ignored -> new ManyToOneConcurrentLinkedQueue<>());
 			}
 
 			// TODO: Does not consider if events are broadcasted from other nodes
