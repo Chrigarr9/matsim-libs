@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.matsim.api.core.v01.Scenario;
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.CommuteFilter;
 import org.matsim.contrib.demand_extraction.demand.DemandExtractionConfigValidator;
 import org.matsim.contrib.demand_extraction.demand.DemandExtractionModule;
 import org.matsim.contrib.drt.run.DrtControlerCreator;
@@ -73,9 +74,9 @@ public class ExMasKelheimE2ETest {
 
 		// Set all daily monetary constants to zero for testing
 		// This eliminates fixed daily costs (e.g., car ownership, PT pass) from budget calculation
-		config.scoring().getModes().values().forEach(modeParams -> {
-			modeParams.setDailyMonetaryConstant(0.0);
-		});
+		// config.scoring().getModes().values().forEach(modeParams -> {
+		// 	modeParams.setDailyMonetaryConstant(0.0);
+		// });
 
 		// Configure DRT scoring parameters (will be auto-created by DemandExtractionModule if not present)
 		// Set marginalUtilityOfTraveling to -0.5 to match car's travel time utility
@@ -169,6 +170,7 @@ public class ExMasKelheimE2ETest {
 
 		// Set DRT routing mode
 		exMasConfig.setDrtRoutingMode(TransportMode.car);
+		exMasConfig.setCommuteFilter(CommuteFilter.COMMUTES_ONLY);
 
 		// Set private vehicle modes
 		Set<String> privateVehicles = new HashSet<>();
@@ -183,10 +185,12 @@ public class ExMasKelheimE2ETest {
 		exMasConfig.setMinDrtAccessEgressDistance(0.0);
 
 		// Set ExMAS algorithm parameters - more conservative for larger scenario
-		exMasConfig.setSearchHorizon(600.0); // No time window for pairing (instant matching)
-		exMasConfig.setMaxDetourFactor(1.5);
-		exMasConfig.setOriginFlexibilityAbsolute(600.0); // 0 minutes departure flexibility
-		exMasConfig.setDestinationFlexibilityAbsolute(600.0); // 15 minutes arrival flexibility
+		exMasConfig.setSearchHorizon(60.0); // No time window for pairing (instant matching)
+		exMasConfig.setMaxDetourFactor(1.1);
+		exMasConfig.setOriginFlexibilityAbsolute(0.0); // 0 minutes departure flexibility
+		exMasConfig.setOriginFlexibilityRelative(0.0); // 0% of detour time
+		exMasConfig.setDestinationFlexibilityAbsolute(0.0); // 15 minutes arrival flexibility
+		exMasConfig.setDestinationFlexibilityRelative(0.0); // 0% of detour time
 		exMasConfig.setMaxPoolingDegree(10); // Allow up to 10 passengers
 
 		// TEMPORARY: Disable PT optimization due to SwissRailRaptor configuration issue

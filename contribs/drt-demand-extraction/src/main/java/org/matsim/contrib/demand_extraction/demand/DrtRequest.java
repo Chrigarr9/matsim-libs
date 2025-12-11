@@ -84,6 +84,33 @@ public class DrtRequest {
         return new Builder();
     }
     
+    public Builder toBuilder() {
+        return new Builder()
+            .index(this.index)
+            .personId(this.personId)
+            .groupId(this.groupId)
+            .tripIndex(this.tripIndex)
+            .isCommute(this.isCommute)
+            .budget(this.budget)
+            .bestModeScore(this.bestModeScore)
+            .bestMode(this.bestMode)
+            .originLinkId(this.originLinkId)
+            .destinationLinkId(this.destinationLinkId)
+            .originX(this.originX)
+            .originY(this.originY)
+            .destinationX(this.destinationX)
+            .destinationY(this.destinationY)
+            .requestTime(this.requestTime)
+            .earliestDeparture(this.earliestDeparture)
+            .latestArrival(this.latestArrival)
+            .directTravelTime(this.directTravelTime)
+            .directDistance(this.directDistance)
+            .maxDetourFactor(this.maxDetourFactor)
+            .carTravelTime(this.carTravelTime)
+            .ptTravelTime(this.ptTravelTime)
+            .ptAccessibility(this.ptAccessibility);
+    }
+    
     // Computed and compatibility getters for ExMAS algorithm
     public double getLatestDeparture() {
         return latestArrival - directTravelTime;

@@ -4,6 +4,8 @@ import java.util.Map;
 import java.util.Set;
 
 import org.matsim.core.config.ReflectiveConfigGroup;
+import org.matsim.core.config.ReflectiveConfigGroup.StringGetter;
+import org.matsim.core.config.ReflectiveConfigGroup.StringSetter;
 
 public class ExMasConfigGroup extends ReflectiveConfigGroup {
     public static final String GROUP_NAME = "exmas";
@@ -85,6 +87,23 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	//C: this should limit the detour to this max factor during the max detour calculation from the remaining budget for each requests
 	private double maxDetourFactor = 1.5; // Maximum detour factor (50% longer than direct)
 	
+	private Double maxAbsoluteDetour = null; // Absolute detour cap (seconds). If set, limits the max detour time.
+
+	// Sampling settings
+	private double requestSampleSize = 1.0; // Fraction of requests to keep (0.0-1.0)
+	private Integer requestCount = null; // Absolute number of requests to keep (overrides fraction)
+
+	// Advanced Flexibility Configuration (Attribute-based)
+	// Positive Flexibility (Late Departure / Late Arrival)
+	private String positiveFlexibilityAttribute = null; // Person attribute name
+	private String positiveFlexibilityAbsoluteMap = null; // Map "value:seconds,value:seconds"
+	private String positiveFlexibilityRelativeMap = null; // Map "value:factor,value:factor"
+
+	// Negative Flexibility (Early Departure)
+	private String negativeFlexibilityAttribute = null; // Person attribute name
+	private String negativeFlexibilityAbsoluteMap = null; // Map "value:seconds,value:seconds"
+	private String negativeFlexibilityRelativeMap = null; // Map "value:factor,value:factor"
+
 	private int networkTimeBinSize = 900; // Network cache time bin size in seconds (15 minutes)
 	
 	// ExMAS algorithm parameters
@@ -100,6 +119,26 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// If true, allows the PT router to optimize departure time to reduce waiting
 	// This means agents can leave earlier/later to catch better PT connections
 	private boolean ptOptimizeDepartureTime = true;
+
+	// Heuristics and post-processing settings (align with exmas_pipeline.heuristics)
+	// Controls parallelism for expensive metrics (Shapley, predecessors)
+	// -1 => use all available processors; 1 => force sequential
+	private int heuristicsProcessCount = -1;
+
+	// Calculate Shapley values for rides (distance contribution per passenger)
+	private boolean calcShapleyValues = true;
+
+	// Calculate predecessor/successor relationships between rides
+	private boolean calcPredecessors = true;
+
+	// Maximum time gap (seconds) between predecessor end and successor start; null => unbounded
+	private Double predecessorsFilterTime = null;
+
+	// Maximum connection distance as factor of predecessor ride distance; null => unbounded
+	private Double predecessorsFilterDistanceFactor = null;
+
+	// Optional intermediate writes (parity with Python, currently unused)
+	private boolean intermediateWrite = false;
 
 	// Default walk speed for access/egress calculations (m/s)
 	// 0.833333333 m/s = 3 km/h (typical walking speed)
@@ -296,6 +335,96 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	public void setMaxDetourFactor(double maxDetourFactor) {
 		this.maxDetourFactor = maxDetourFactor;
 	}
+
+	@StringGetter("maxAbsoluteDetour")
+	public Double getMaxAbsoluteDetour() {
+		return maxAbsoluteDetour;
+	}
+
+	@StringSetter("maxAbsoluteDetour")
+	public void setMaxAbsoluteDetour(Double maxAbsoluteDetour) {
+		this.maxAbsoluteDetour = maxAbsoluteDetour;
+	}
+
+	@StringGetter("requestSampleSize")
+	public double getRequestSampleSize() {
+		return requestSampleSize;
+	}
+
+	@StringSetter("requestSampleSize")
+	public void setRequestSampleSize(double requestSampleSize) {
+		this.requestSampleSize = requestSampleSize;
+	}
+
+	@StringGetter("requestCount")
+	public Integer getRequestCount() {
+		return requestCount;
+	}
+
+	@StringSetter("requestCount")
+	public void setRequestCount(Integer requestCount) {
+		this.requestCount = requestCount;
+	}
+
+	@StringGetter("positiveFlexibilityAttribute")
+	public String getPositiveFlexibilityAttribute() {
+		return positiveFlexibilityAttribute;
+	}
+
+	@StringSetter("positiveFlexibilityAttribute")
+	public void setPositiveFlexibilityAttribute(String positiveFlexibilityAttribute) {
+		this.positiveFlexibilityAttribute = positiveFlexibilityAttribute;
+	}
+
+	@StringGetter("positiveFlexibilityAbsoluteMap")
+	public String getPositiveFlexibilityAbsoluteMap() {
+		return positiveFlexibilityAbsoluteMap;
+	}
+
+	@StringSetter("positiveFlexibilityAbsoluteMap")
+	public void setPositiveFlexibilityAbsoluteMap(String positiveFlexibilityAbsoluteMap) {
+		this.positiveFlexibilityAbsoluteMap = positiveFlexibilityAbsoluteMap;
+	}
+
+	@StringGetter("positiveFlexibilityRelativeMap")
+	public String getPositiveFlexibilityRelativeMap() {
+		return positiveFlexibilityRelativeMap;
+	}
+
+	@StringSetter("positiveFlexibilityRelativeMap")
+	public void setPositiveFlexibilityRelativeMap(String positiveFlexibilityRelativeMap) {
+		this.positiveFlexibilityRelativeMap = positiveFlexibilityRelativeMap;
+	}
+
+	@StringGetter("negativeFlexibilityAttribute")
+	public String getNegativeFlexibilityAttribute() {
+		return negativeFlexibilityAttribute;
+	}
+
+	@StringSetter("negativeFlexibilityAttribute")
+	public void setNegativeFlexibilityAttribute(String negativeFlexibilityAttribute) {
+		this.negativeFlexibilityAttribute = negativeFlexibilityAttribute;
+	}
+
+	@StringGetter("negativeFlexibilityAbsoluteMap")
+	public String getNegativeFlexibilityAbsoluteMap() {
+		return negativeFlexibilityAbsoluteMap;
+	}
+
+	@StringSetter("negativeFlexibilityAbsoluteMap")
+	public void setNegativeFlexibilityAbsoluteMap(String negativeFlexibilityAbsoluteMap) {
+		this.negativeFlexibilityAbsoluteMap = negativeFlexibilityAbsoluteMap;
+	}
+
+	@StringGetter("negativeFlexibilityRelativeMap")
+	public String getNegativeFlexibilityRelativeMap() {
+		return negativeFlexibilityRelativeMap;
+	}
+
+	@StringSetter("negativeFlexibilityRelativeMap")
+	public void setNegativeFlexibilityRelativeMap(String negativeFlexibilityRelativeMap) {
+		this.negativeFlexibilityRelativeMap = negativeFlexibilityRelativeMap;
+	}
 	
 	@StringGetter("searchHorizon")
 	public double getSearchHorizon() {
@@ -337,6 +466,67 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.ptOptimizeDepartureTime = ptOptimizeDepartureTime;
 	}
 
+	// Heuristics/post-processing
+	@StringGetter("heuristicsProcessCount")
+	public int getHeuristicsProcessCount() {
+		return heuristicsProcessCount;
+	}
+
+	@StringSetter("heuristicsProcessCount")
+	public void setHeuristicsProcessCount(int heuristicsProcessCount) {
+		this.heuristicsProcessCount = heuristicsProcessCount;
+	}
+
+	@StringGetter("calcShapleyValues")
+	public boolean isCalcShapleyValues() {
+		return calcShapleyValues;
+	}
+
+	@StringSetter("calcShapleyValues")
+	public void setCalcShapleyValues(boolean calcShapleyValues) {
+		this.calcShapleyValues = calcShapleyValues;
+	}
+
+	@StringGetter("calcPredecessors")
+	public boolean isCalcPredecessors() {
+		return calcPredecessors;
+	}
+
+	@StringSetter("calcPredecessors")
+	public void setCalcPredecessors(boolean calcPredecessors) {
+		this.calcPredecessors = calcPredecessors;
+	}
+
+	@StringGetter("predecessorsFilterTime")
+	public Double getPredecessorsFilterTime() {
+		return predecessorsFilterTime;
+	}
+
+	@StringSetter("predecessorsFilterTime")
+	public void setPredecessorsFilterTime(Double predecessorsFilterTime) {
+		this.predecessorsFilterTime = predecessorsFilterTime;
+	}
+
+	@StringGetter("predecessorsFilterDistanceFactor")
+	public Double getPredecessorsFilterDistanceFactor() {
+		return predecessorsFilterDistanceFactor;
+	}
+
+	@StringSetter("predecessorsFilterDistanceFactor")
+	public void setPredecessorsFilterDistanceFactor(Double predecessorsFilterDistanceFactor) {
+		this.predecessorsFilterDistanceFactor = predecessorsFilterDistanceFactor;
+	}
+
+	@StringGetter("intermediateWrite")
+	public boolean isIntermediateWrite() {
+		return intermediateWrite;
+	}
+
+	@StringSetter("intermediateWrite")
+	public void setIntermediateWrite(boolean intermediateWrite) {
+		this.intermediateWrite = intermediateWrite;
+	}
+
     @Override
     public Map<String, String> getComments() {
         Map<String, String> map = super.getComments();
@@ -369,6 +559,15 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Relative destination flexibility (fraction of max detour). 0.5 means 50% of detour budget can be used for arrival shifts. Default: 0.5");
 		map.put("maxDetourFactor",
 				"Maximum detour factor. Maximum travel time = factor * direct travel time. 1.5 means 50% longer. Default: 1.5");
+		map.put("maxAbsoluteDetour", "Absolute detour cap (seconds). If set, limits the max detour time regardless of factor. Default: null");
+		map.put("requestSampleSize", "Fraction of requests to keep (0.0-1.0). Default: 1.0 (all requests)");
+		map.put("requestCount", "Absolute number of requests to keep. Overrides requestSampleSize if set. Default: null");
+		map.put("positiveFlexibilityAttribute", "Person attribute for positive flexibility (late departure).");
+		map.put("positiveFlexibilityAbsoluteMap", "Map for positive absolute flexibility (value:seconds,value:seconds).");
+		map.put("positiveFlexibilityRelativeMap", "Map for positive relative flexibility (value:factor,value:factor).");
+		map.put("negativeFlexibilityAttribute", "Person attribute for negative flexibility (early departure).");
+		map.put("negativeFlexibilityAbsoluteMap", "Map for negative absolute flexibility (value:seconds,value:seconds).");
+		map.put("negativeFlexibilityRelativeMap", "Map for negative relative flexibility (value:factor,value:factor).");
 		map.put("networkTimeBinSize",
 				"Time bin size for network travel time caching (seconds). Queries within same bin reuse cached values. Default: 900 (15 min)");
 		map.put("searchHorizon",
@@ -381,6 +580,17 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("ptOptimizeDepartureTime",
 				"If true, PT router can optimize departure time to reduce waiting times. " +
 				"Agent can leave earlier/later to catch better connections. Default: true");
+		map.put("heuristicsProcessCount",
+				"Parallelism for Shapley/predecessor calculations. -1 = all processors, 1 = sequential. Default: -1");
+		map.put("calcShapleyValues", "Calculate Shapley values for each ride (distance contribution per passenger). Default: true");
+		map.put("calcPredecessors",
+				"Calculate predecessor/successor relationships between rides. Default: true");
+		map.put("predecessorsFilterTime",
+				"Maximum time gap (seconds) between predecessor end and successor start. Null/omitted => unbounded.");
+		map.put("predecessorsFilterDistanceFactor",
+				"Maximum connection distance as factor of predecessor ride distance. Null/omitted => unbounded.");
+		map.put("intermediateWrite",
+				"Write intermediate outputs during heuristics (parity with Python implementation). Default: false");
         return map;
     }
 }

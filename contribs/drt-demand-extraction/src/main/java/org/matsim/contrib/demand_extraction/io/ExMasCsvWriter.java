@@ -88,7 +88,7 @@ public final class ExMasCsvWriter {
 			writer.write("rideIndex,degree,kind," +
 					"requestIndices,personIds,groupIds,requestTimes,isCommutes," +
 					"originsOrdered,destinationsOrdered," +
-					"passengerTravelTimes,passengerDistances,delays,detours,remainingBudgets," +
+					"passengerTravelTimes,passengerDistances,delays,detours,remainingBudgets,maxCosts,shapleyValues,predecessors,successors," +
 					"startTime,endTime,rideTravelTime,rideDistance");
 			writer.newLine();
 
@@ -122,12 +122,16 @@ public final class ExMasCsvWriter {
 				String budgets = ride.getRemainingBudgets() != null
 						? formatDoubleArray(ride.getRemainingBudgets())
 						: "[]";
+				String maxCosts = ride.getMaxCosts() != null ? formatDoubleArray(ride.getMaxCosts()) : "[]";
+				String shapleyValues = ride.getShapleyValues() != null ? formatDoubleArray(ride.getShapleyValues()) : "[]";
+				String predecessors = ride.getPredecessors() != null ? formatIntArray(ride.getPredecessors()) : "[]";
+				String successors = ride.getSuccessors() != null ? formatIntArray(ride.getSuccessors()) : "[]";
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f",
 						ride.getIndex(), ride.getDegree(), ride.getKind(),
 						reqIndices, personIds, groupIds, requestTimes, isCommutes,
 						origins, destinations,
-						pttimes, pdists, delays, detours, budgets,
+						pttimes, pdists, delays, detours, budgets, maxCosts, shapleyValues, predecessors, successors,
 						ride.getStartTime(), ride.getEndTime(),
 						ride.getRideTravelTime(), ride.getRideDistance()));
 				writer.newLine();

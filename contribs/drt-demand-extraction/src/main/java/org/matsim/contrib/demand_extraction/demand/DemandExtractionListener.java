@@ -7,9 +7,11 @@ import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.engine.ExMasEngine;
+import org.matsim.contrib.demand_extraction.algorithm.engine.RidePostProcessor;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
 import org.matsim.contrib.demand_extraction.io.ExMasCsvWriter;
 import org.matsim.core.config.Config;
 import org.matsim.core.controler.OutputDirectoryHierarchy;
@@ -31,7 +33,9 @@ public class DemandExtractionListener implements ShutdownListener {
 	private final Config config;
 	private final MatsimNetworkCache networkCache;
 	private final BudgetValidator budgetValidator;
+	private final BudgetToConstraintsCalculator budgetToConstraintsCalculator;
 	private final OutputDirectoryHierarchy outputDirectory;
+	private final RequestSampler requestSampler;
 
     @Inject
 	public DemandExtractionListener(
@@ -43,7 +47,9 @@ public class DemandExtractionListener implements ShutdownListener {
 			Config config,
 			MatsimNetworkCache networkCache,
 			BudgetValidator budgetValidator,
-			OutputDirectoryHierarchy outputDirectory) {
+			BudgetToConstraintsCalculator budgetToConstraintsCalculator,
+			OutputDirectoryHierarchy outputDirectory,
+			RequestSampler requestSampler) {
         this.modeRoutingCache = modeRoutingCache;
         this.chainIdentifier = chainIdentifier;
         this.budgetCalculator = budgetCalculator;
@@ -52,7 +58,9 @@ public class DemandExtractionListener implements ShutdownListener {
 		this.config = config;
 		this.networkCache = networkCache;
 		this.budgetValidator = budgetValidator;
+		this.budgetToConstraintsCalculator = budgetToConstraintsCalculator;
 		this.outputDirectory = outputDirectory;
+		this.requestSampler = requestSampler;
     }
 
     @Override
@@ -87,6 +95,9 @@ public class DemandExtractionListener implements ShutdownListener {
 		log.info("STEP 3: Building DRT requests with budgets");
 		log.info("----------------------------------------------------------------------");
 		List<DrtRequest> requests = budgetCalculator.buildRequests(population);
+		
+		// Apply sampling if configured
+		requests = RequestSamplingUtils.sampleRequests(requests, exMasConfig, config.global().getRandomSeed());
 
 		// 4. Generate ExMAS Rides (with budget validation)
 		log.info("");
@@ -98,6 +109,10 @@ public class DemandExtractionListener implements ShutdownListener {
 				exMasConfig.getSearchHorizon(),
 				exMasConfig.getMaxPoolingDegree());
 		List<Ride> rides = exmasEngine.run(requests);
+
+		// Post-process rides with advanced metrics (maxCost, Shapley, predecessors)
+		RidePostProcessor postProcessor = new RidePostProcessor(exMasConfig, networkCache, budgetToConstraintsCalculator, population);
+		rides = postProcessor.process(rides);
 
 		// 5. Write DRT Requests Output
 		log.info("");

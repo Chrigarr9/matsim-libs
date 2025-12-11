@@ -183,6 +183,7 @@ public final class ExMasEngine {
 					.delays(oldRide.getDelays())
 					.detours(oldRide.getDetours())
 					.remainingBudgets(oldRide.getRemainingBudgets())
+					.maxCosts(oldRide.getMaxCosts())
 					.connectionTravelTimes(oldRide.getConnectionTravelTimes())
 					.connectionDistances(oldRide.getConnectionDistances())
 					.connectionNetworkUtilities(oldRide.getConnectionNetworkUtilities())

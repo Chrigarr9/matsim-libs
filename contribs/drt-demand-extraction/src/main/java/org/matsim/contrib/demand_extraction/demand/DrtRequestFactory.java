@@ -53,12 +53,13 @@ public class DrtRequestFactory {
 	private final Network network;
 	private final BudgetToConstraintsCalculator budgetToConstraintsCalculator;
 	private final BudgetValidator budgetValidator;
+	private final FlexibilityCalculator flexibilityCalculator;
 
 	@Inject
 	public DrtRequestFactory(ExMasConfigGroup config, ModeRoutingCache modeRoutingCache,
 			ChainIdentifier chainIdentifier, CommuteIdentifier commuteIdentifier,
 			Network network, BudgetToConstraintsCalculator budgetToConstraintsCalculator,
-			BudgetValidator budgetValidator) {
+			BudgetValidator budgetValidator, FlexibilityCalculator flexibilityCalculator) {
 		this.exmasConfig = config;
 		this.modeRoutingCache = modeRoutingCache;
 		this.chainIdentifier = chainIdentifier;
@@ -66,6 +67,7 @@ public class DrtRequestFactory {
 		this.network = network;
 		this.budgetToConstraintsCalculator = budgetToConstraintsCalculator;
 		this.budgetValidator = budgetValidator;
+		this.flexibilityCalculator = flexibilityCalculator;
 	}
 
 	public List<DrtRequest> buildRequests(Population population) {
@@ -251,15 +253,24 @@ public class DrtRequestFactory {
 				budget, person, drtAttrs.travelTime, drtAttrs.distance);
 		double configMaxDetour = drtAttrs.travelTime * (exmasConfig.getMaxDetourFactor() - 1.0);
 		double maxAbsoluteDetour = Math.min(budgetDerivedDetour, configMaxDetour);
+		
+		// Apply absolute detour cap if configured
+		if (exmasConfig.getMaxAbsoluteDetour() != null) {
+			maxAbsoluteDetour = Math.min(maxAbsoluteDetour, exmasConfig.getMaxAbsoluteDetour());
+		}
+		
 		double effectiveMaxDetourFactor = 1.0 + (maxAbsoluteDetour / drtAttrs.travelTime);
 
 		// Flexibility controls WHEN someone can depart/arrive (temporal window)
 		// This is INDEPENDENT from detour (which controls HOW LONG the trip can take)
-		// Origin flexibility: how much earlier/later can passenger depart?
-		double originFlex = exmasConfig.getOriginFlexibilityAbsolute();
+		
+		// Origin flexibility (Negative Flexibility): how much earlier/later can passenger depart?
+		// Corresponds to max_negative_delay in Python
+		double originFlex = flexibilityCalculator.calculateOriginFlexibility(person, trip.getOriginActivity(), maxAbsoluteDetour);
 
-		// Destination flexibility: how much earlier/later can passenger arrive?
-		double destFlex = exmasConfig.getDestinationFlexibilityAbsolute();
+		// Destination flexibility (Positive Flexibility): how much earlier/later can passenger arrive?
+		// Corresponds to max_positive_delay in Python
+		double destFlex = flexibilityCalculator.calculateDestinationFlexibility(person, trip.getDestinationActivity(), maxAbsoluteDetour);
 
 		// Time window calculation (matching Python reference implementation):
 		// earliest_departure = treq - max_negative_delay (flexibility)

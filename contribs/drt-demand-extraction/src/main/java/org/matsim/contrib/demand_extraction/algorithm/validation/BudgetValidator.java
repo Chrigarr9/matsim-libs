@@ -11,6 +11,7 @@ import org.matsim.api.core.v01.population.Population;
 import org.matsim.api.core.v01.population.Route;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.contrib.drt.routing.DrtRoute;
 import org.matsim.core.config.Config;
@@ -45,6 +46,7 @@ public class BudgetValidator {
 	private final double walkSpeed;
 	private final Config config;
 	private final Population population;
+	private final BudgetToConstraintsCalculator budgetToConstraintsCalculator;
 	
 	@Inject
 	public BudgetValidator(
@@ -52,18 +54,21 @@ public class BudgetValidator {
 			ScoringParametersForPerson scoringParametersForPerson,
 			ExMasConfigGroup exMasConfig,
 			Config config,
-			Population population) {
+			Population population,
+			BudgetToConstraintsCalculator budgetToConstraintsCalculator) {
 		this.scoringFunctionFactory = scoringFunctionFactory;
 		this.scoringParametersForPerson = scoringParametersForPerson;
 		this.exMasConfig = exMasConfig;
 		this.population = population;
 		this.config = config;
+		this.budgetToConstraintsCalculator = budgetToConstraintsCalculator;
 		
 		// Get configured walking speed (same logic as ModeRoutingCache)
 		double configuredSpeed = config.routing()
 				.getOrCreateModeRoutingParams(TransportMode.walk)
 				.getTeleportedModeSpeed();
 		this.walkSpeed = (configuredSpeed > 0) ? configuredSpeed : ExMasConfigGroup.DEFAULT_WALK_SPEED;
+
 	}
 	
 	/**
@@ -137,7 +142,6 @@ public class BudgetValidator {
 					// we will use actual walk distances
 					exMasConfig.getMinDrtAccessEgressDistance(),
 					exMasConfig.getMinDrtAccessEgressDistance());
-
 			// Calculate remaining budget (positive = DRT is better than baseline)
 			remainingBudgets[i] = actualDrtScore - request.bestModeScore;
 		}
@@ -322,6 +326,7 @@ public class BudgetValidator {
 
 		return score;
 	}
+	
 	
 	/**
 	 * Build a realistic DrtRoute exactly as MATSim's DrtRouteCreator would.

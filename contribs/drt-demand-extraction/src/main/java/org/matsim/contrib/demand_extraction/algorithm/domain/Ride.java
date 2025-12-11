@@ -33,6 +33,7 @@ public final class Ride {
 	private final double[] detours; // Detour factor: passengerTravelTime / directTravelTime (1.0 = no detour, 2.0 =
 									// 100% detour)
     private final double[] remainingBudgets;  // Budget remaining after scoring (utils)
+    private final double[] maxCosts; // Maximum willingness-to-pay per passenger (currency units)
 
     // Connection segments (length = degree*2 - 1 for most rides)
     private final double[] connectionTravelTimes;
@@ -67,6 +68,7 @@ public final class Ride {
         this.delays = builder.delays.clone();
 		this.detours = builder.detours.clone();
         this.remainingBudgets = builder.remainingBudgets != null ? builder.remainingBudgets.clone() : null;
+        this.maxCosts = builder.maxCosts != null ? builder.maxCosts.clone() : null;
         this.connectionTravelTimes = builder.connectionTravelTimes.clone();
         this.connectionDistances = builder.connectionDistances.clone();
         this.connectionNetworkUtilities = builder.connectionNetworkUtilities.clone();
@@ -166,6 +168,7 @@ public final class Ride {
 		return detours.clone();
 	}
     public double[] getRemainingBudgets() { return remainingBudgets != null ? remainingBudgets.clone() : null; }
+    public double[] getMaxCosts() { return maxCosts != null ? maxCosts.clone() : null; }
     public double[] getConnectionTravelTimes() { return connectionTravelTimes.clone(); }
     public double[] getConnectionDistances() { return connectionDistances.clone(); }
     public double[] getConnectionNetworkUtilities() { return connectionNetworkUtilities.clone(); }
@@ -198,6 +201,7 @@ public final class Ride {
         private double[] delays;
 		private double[] detours;
         private double[] remainingBudgets;
+        private double[] maxCosts;
         private double[] connectionTravelTimes;
         private double[] connectionDistances;
         private double[] connectionNetworkUtilities;
@@ -290,6 +294,11 @@ public final class Ride {
 
         public Builder shapleyValues(double[] shapleyValues) {
             this.shapleyValues = shapleyValues;
+            return this;
+        }
+
+        public Builder maxCosts(double[] maxCosts) {
+            this.maxCosts = maxCosts;
             return this;
         }
 

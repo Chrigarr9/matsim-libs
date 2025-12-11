@@ -2,7 +2,10 @@ package org.matsim.contrib.demand_extraction.demand;
 
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.population.Person;
+import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
+import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.core.config.Config;
 import org.matsim.core.scoring.functions.ModeUtilityParameters;
@@ -31,6 +34,7 @@ public class BudgetToConstraintsCalculator {
 	private final ExMasConfigGroup exMasConfig;
 	private final DrtConfigGroup drtConfig;
 	private final ScoringParametersForPerson scoringParametersForPerson;
+	private final Population population;
 	
 	// DRT fare parameters (not person-specific)
 	private final double baseFare;
@@ -42,11 +46,13 @@ public class BudgetToConstraintsCalculator {
 	public BudgetToConstraintsCalculator(
 			Config config,
 			ExMasConfigGroup exMasConfig,
-			ScoringParametersForPerson scoringParametersForPerson) {
+			ScoringParametersForPerson scoringParametersForPerson,
+			Population population) {
 		this.config = config;
 		this.exMasConfig = exMasConfig;
 		this.drtConfig = DrtConfigGroup.getSingleModeDrtConfig(config);
 		this.scoringParametersForPerson = scoringParametersForPerson;
+		this.population = population;
 		
 		// Verify DRT mode is configured in scoring
 		if (!config.scoring().getModes().containsKey(exMasConfig.getDrtMode())) {
@@ -67,6 +73,56 @@ public class BudgetToConstraintsCalculator {
 			this.distanceFare_m = 0.0;
 			this.minFarePerTrip = 0.0;
 		}
+	}
+
+	/**
+	 * Calculate maximum acceptable fare from remaining budget.
+	 * 
+	 * The max cost represents the maximum fare a passenger can pay while still
+	 * maintaining a non-negative utility budget (DRT remains at least as good as
+	 * their best alternative mode).
+	 * 
+	 * Calculation:
+	 * - Base fare: What the trip would cost at minimum service level (from DRT config)
+	 * - Additional affordable fare: remaining budget (utils) / marginalUtilityOfMoney
+	 * - Max cost = base fare + additional affordable fare
+	 * 
+	 * This aligns with other budgetToXxx methods - takes budget and person as inputs.
+	 * 
+	 * @param budget remaining utility budget (utils, must be >= 0)
+	 * @param person the person for whom to calculate (used for marginalUtilityOfMoney)
+	 * @param travelTimeSeconds actual travel time for this trip segment (seconds)
+	 * @param distanceMeters actual distance for this trip segment (meters)
+	 * @return maximum acceptable fare in currency units, or 0.0 if budget is insufficient
+	 */
+	public double budgetToMaxCost(double budget, Person person, double travelTimeSeconds, double distanceMeters) {
+		if (budget < 0 || !Double.isFinite(budget)) {
+			return 0.0; // No budget for any cost
+		}
+		
+		// Get person-specific marginal utility of money
+		ScoringParameters params = scoringParametersForPerson.getScoringParameters(person);
+		double marginalUtilityOfMoney = params.marginalUtilityOfMoney;
+		
+		if (!Double.isFinite(marginalUtilityOfMoney) || marginalUtilityOfMoney <= 0) {
+			return 0.0; // Cannot convert budget to currency
+		}
+		
+		// Calculate base fare for this trip (minimum fare based on time/distance)
+		// Integrated fare calculation (was previously in calculateDrtFare)
+		double calculatedFare = this.baseFare 
+				+ (timeFare_h * (travelTimeSeconds / 3600.0)) 
+				+ (distanceFare_m * distanceMeters);
+		double baseFare = Math.max(calculatedFare, minFarePerTrip);
+		
+		// Convert remaining utility budget to additional affordable fare
+		// budget (utils) / marginalUtilityOfMoney (utils/currency) = currency
+		double additionalAffordableFare = budget / marginalUtilityOfMoney;
+		
+		// Maximum cost = base fare + what they can additionally afford from their budget
+		double maxCost = baseFare + additionalAffordableFare;
+		
+		return Math.max(maxCost, minFarePerTrip);
 	}
 	
 	/**

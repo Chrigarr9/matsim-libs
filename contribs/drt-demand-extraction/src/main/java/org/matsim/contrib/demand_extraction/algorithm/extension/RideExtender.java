@@ -163,6 +163,7 @@ public final class RideExtender {
 				.delays(ride.getDelays())
 				.detours(ride.getDetours())
 				.remainingBudgets(ride.getRemainingBudgets())
+				.maxCosts(ride.getMaxCosts())
 				.connectionTravelTimes(ride.getConnectionTravelTimes())
 				.connectionDistances(ride.getConnectionDistances())
 				.connectionNetworkUtilities(ride.getConnectionNetworkUtilities())
