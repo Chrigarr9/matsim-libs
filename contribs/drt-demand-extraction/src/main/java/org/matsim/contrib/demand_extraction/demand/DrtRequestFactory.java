@@ -315,6 +315,8 @@ public class DrtRequestFactory {
 				.originY(originCoord.getY())
 				.destinationX(destCoord.getX())
 				.destinationY(destCoord.getY())
+				.originActivityType(originActivity.getType())
+				.destinationActivityType(destActivity.getType())
 				.requestTime(requestTime)
 				.earliestDeparture(earliestDep)
 				.latestArrival(latestArr)

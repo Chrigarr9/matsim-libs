@@ -194,10 +194,14 @@ public class ExMasDemandExtractionE2ETest {
 
 
 		// Set ExMAS algorithm parameters
-		exMasConfig.setMaxDetourFactor(1.5);
+		exMasConfig.setMaxDetourFactor(2.0);
 		exMasConfig.setSearchHorizon(0.0); // 10 minutes time window for pairing
 		exMasConfig.setNegativeFlexibilityAbsoluteMap("default:9000.0"); // 15 minutes departure flexibility
 		exMasConfig.setPositiveFlexibilityAbsoluteMap("default:9000.0"); // 15 minutes arrival flexibility
+
+		exMasConfig.setCalcPredecessors(true);
+		exMasConfig.setCalcShapleyValues(true);
+
 	}
 
 	private void validateRequests(Path requestsFile) throws IOException {
@@ -211,16 +215,18 @@ public class ExMasDemandExtractionE2ETest {
 			Assertions.assertTrue(header.contains("groupId"), "Header should contain groupId");
 			Assertions.assertTrue(header.contains("budget"), "Header should contain budget");
 			Assertions.assertTrue(header.contains("ptAccessibility"), "Header should contain ptAccessibility");
+			Assertions.assertTrue(header.contains("originActivityType"), "Header should contain originActivityType");
+			Assertions.assertTrue(header.contains("destinationActivityType"), "Header should contain destinationActivityType");
 
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				if (parts.length != 25) {
-					System.err.println("ERROR: Expected 25 fields but got " + parts.length);
+				if (parts.length != 27) {
+					System.err.println("ERROR: Expected 27 fields but got " + parts.length);
 					System.err.println("Line: " + line);
 					System.err.println("Fields: " + java.util.Arrays.toString(parts));
 				}
-				Assertions.assertEquals(25, parts.length, "Each request should have 25 fields (includes PT accessibility)");
+				Assertions.assertEquals(27, parts.length, "Each request should have 27 fields (includes activity types + PT accessibility)");
 
 				String personId = parts[1];
 				double budget = Double.parseDouble(parts[5]);
@@ -261,8 +267,11 @@ public class ExMasDemandExtractionE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// Updated to 23 columns to include maxCosts, shapleyValues, predecessors, successors
-				Assertions.assertEquals(23, parts.length, "Each ride should have 23 fields (includes detours, maxCosts, shapleyValues, predecessors, successors)");
+				// Updated to 22 columns (predecessors removed)
+				// rideIndex,degree,kind,requestIndices,personIds,groupIds,requestTimes,isCommutes,
+				// originsOrdered,destinationsOrdered,passengerTravelTimes,passengerDistances,delays,detours,
+				// remainingBudgets,maxCosts,shapleyValues,successors,startTime,endTime,rideTravelTime,rideDistance
+				Assertions.assertEquals(22, parts.length, "Each ride should have 22 fields (predecessors removed)");
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();
@@ -271,12 +280,12 @@ public class ExMasDemandExtractionE2ETest {
 
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
 
-				// rideTravelTime is at index 21
-				double duration = Double.parseDouble(parts[21]);
+				// rideTravelTime is at index 20
+				double duration = Double.parseDouble(parts[20]);
 				Assertions.assertTrue(duration >= 0, "Duration should be non-negative");
 
-				// rideDistance is at index 22
-				double distance = Double.parseDouble(parts[22]);
+				// rideDistance is at index 21
+				double distance = Double.parseDouble(parts[21]);
 				Assertions.assertTrue(distance >= 0, "Distance should be non-negative");
 
 				rideCount++;

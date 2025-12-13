@@ -39,20 +39,24 @@ public final class ExMasCsvWriter {
 	public static void writeRequests(String filename, List<DrtRequest> requests) {
 		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
 			// Header includes all request attributes
+			// Note: baseMode/baseModeScore are the mode we compare DRT against (typically the best available mode)
 			writer.write("index,personId,groupId,tripIndex,isCommute,budget,requestTime," +
 					"originLinkId,destinationLinkId,originX,originY,destinationX,destinationY," +
+					"originActivityType,destinationActivityType," +
 					"directTravelTime,directDistance,earliestDeparture,latestArrival," +
-					"maxTravelTime,maxPositiveDelay,maxNegativeDelay,bestModeScore,bestMode," +
+					"maxTravelTime,maxPositiveDelay,maxNegativeDelay,baseModeScore,baseMode," +
 					"carTravelTime,ptTravelTime,ptAccessibility");
 			writer.newLine();
 
 			for (DrtRequest req : requests) {
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%s,%s,%d,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f",
+						"%d,%s,%s,%d,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f",
 						req.index, req.personId, req.groupId, req.tripIndex, req.isCommute,
 						req.budget, req.requestTime,
 						req.originLinkId, req.destinationLinkId,
 						req.originX, req.originY, req.destinationX, req.destinationY,
+						req.originActivityType != null ? req.originActivityType : "",
+						req.destinationActivityType != null ? req.destinationActivityType : "",
 						req.directTravelTime, req.directDistance,
 						req.earliestDeparture, req.latestArrival,
 						req.getMaxTravelTime(), req.getMaxPositiveDelay(), req.getMaxNegativeDelay(),
@@ -85,10 +89,11 @@ public final class ExMasCsvWriter {
 	public static void writeRides(String filename, List<Ride> rides) {
 		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
 			// Header with all ride attributes and flattened request attributes
+			// Note: predecessors removed (not needed for optimization), successors kept for path cover
 			writer.write("rideIndex,degree,kind," +
 					"requestIndices,personIds,groupIds,requestTimes,isCommutes," +
 					"originsOrdered,destinationsOrdered," +
-					"passengerTravelTimes,passengerDistances,delays,detours,remainingBudgets,maxCosts,shapleyValues,predecessors,successors," +
+					"passengerTravelTimes,passengerDistances,delays,detours,remainingBudgets,maxCosts,shapleyValues,successors," +
 					"startTime,endTime,rideTravelTime,rideDistance");
 			writer.newLine();
 
@@ -124,14 +129,13 @@ public final class ExMasCsvWriter {
 						: "[]";
 				String maxCosts = ride.getMaxCosts() != null ? formatDoubleArray(ride.getMaxCosts()) : "[]";
 				String shapleyValues = ride.getShapleyValues() != null ? formatDoubleArray(ride.getShapleyValues()) : "[]";
-				String predecessors = ride.getPredecessors() != null ? formatIntArray(ride.getPredecessors()) : "[]";
 				String successors = ride.getSuccessors() != null ? formatIntArray(ride.getSuccessors()) : "[]";
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f",
 						ride.getIndex(), ride.getDegree(), ride.getKind(),
 						reqIndices, personIds, groupIds, requestTimes, isCommutes,
 						origins, destinations,
-						pttimes, pdists, delays, detours, budgets, maxCosts, shapleyValues, predecessors, successors,
+						pttimes, pdists, delays, detours, budgets, maxCosts, shapleyValues, successors,
 						ride.getStartTime(), ride.getEndTime(),
 						ride.getRideTravelTime(), ride.getRideDistance()));
 				writer.newLine();

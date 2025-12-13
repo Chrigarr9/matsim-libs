@@ -185,12 +185,12 @@ public class ExMasKelheimE2ETest {
 		exMasConfig.setMinDrtAccessEgressDistance(0.0);
 
 		// Set ExMAS algorithm parameters - more conservative for larger scenario
-		exMasConfig.setSearchHorizon(60.0); // No time window for pairing (instant matching)
+		exMasConfig.setSearchHorizon(600.0); // No time window for pairing (instant matching)
 		exMasConfig.setMaxDetourFactor(1.5);
-		exMasConfig.setNegativeFlexibilityAbsoluteMap("default:0.0"); // 0 minutes departure flexibility
-		exMasConfig.setNegativeFlexibilityRelativeMap("default:0.0"); // 0% of detour time
-		exMasConfig.setPositiveFlexibilityAbsoluteMap("default:0.5"); // 15 minutes arrival flexibility
-		exMasConfig.setPositiveFlexibilityRelativeMap("default:0.5"); // 0% of detour time
+		// exMasConfig.setNegativeFlexibilityAbsoluteMap("default:0.0"); // 0 minutes departure flexibility
+		// exMasConfig.setNegativeFlexibilityRelativeMap("default:0.0"); // 0% of detour time
+		// exMasConfig.setPositiveFlexibilityAbsoluteMap("default:0.5"); // 15 minutes arrival flexibility
+		// exMasConfig.setPositiveFlexibilityRelativeMap("default:0.5"); // 0% of detour time
 		exMasConfig.setMaxPoolingDegree(10); // Allow up to 10 passengers
 
 		// TEMPORARY: Disable PT optimization due to SwissRailRaptor configuration issue
@@ -215,12 +215,12 @@ public class ExMasKelheimE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// Updated format has 25 fields:
+				// Updated format has 27 fields:
 				// index,personId,groupId,tripIndex,isCommute,budget,requestTime,
 				// originLinkId,destinationLinkId,originX,originY,destinationX,destinationY,directTravelTime,
 				// directDistance,earliestDeparture,latestArrival,maxTravelTime,maxPositiveDelay,maxNegativeDelay,
-				// bestModeScore,bestMode,carTravelTime,ptTravelTime,ptAccessibility
-				Assertions.assertEquals(25, parts.length, "Each request should have 25 fields");
+				// baseModeScore,baseMode,originActivityType,destinationActivityType,carTravelTime,ptTravelTime,ptAccessibility
+				Assertions.assertEquals(27, parts.length, "Each request should have 27 fields (includes activity types)");
 
 				String personId = parts[1]; // personId is now column 1 (after index)
 				double budget = Double.parseDouble(parts[5]); // budget is now column 5
@@ -260,11 +260,11 @@ public class ExMasKelheimE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// Updated format:
+				// Updated format (22 fields, predecessors removed):
 				// rideIndex,degree,kind,requestIndices,personIds,groupIds,requestTimes,isCommutes,
 				// originsOrdered,destinationsOrdered,passengerTravelTimes,passengerDistances,delays,detours,
-				// remainingBudgets,startTime,endTime,rideTravelTime,rideDistance
-				Assertions.assertEquals(19, parts.length, "Each ride should have 19 fields");
+				// remainingBudgets,maxCosts,shapleyValues,successors,startTime,endTime,rideTravelTime,rideDistance
+				Assertions.assertEquals(22, parts.length, "Each ride should have 22 fields (predecessors removed)");
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();
@@ -273,11 +273,11 @@ public class ExMasKelheimE2ETest {
 
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
 
-				// rideTravelTime is field 17, rideDistance is field 18
-				double duration = Double.parseDouble(parts[17]);
+				// rideTravelTime is field 20, rideDistance is field 21
+				double duration = Double.parseDouble(parts[20]);
 				Assertions.assertTrue(duration >= 0, "Duration should be non-negative");
 
-				double distance = Double.parseDouble(parts[18]);
+				double distance = Double.parseDouble(parts[21]);
 				Assertions.assertTrue(distance >= 0, "Distance should be non-negative");
 
 				// Verify remaining budgets are present (field 14)

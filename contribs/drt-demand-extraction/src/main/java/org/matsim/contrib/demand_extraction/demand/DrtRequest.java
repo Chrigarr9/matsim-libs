@@ -48,6 +48,10 @@ public class DrtRequest {
     public final double directDistance; // Direct distance without sharing (meters)
 	public final double maxDetourFactor; // Maximum detour factor (e.g., 1.5 means 50% longer than direct)
 
+    // Activity types (for downstream analysis grouping)
+    public final String originActivityType; // Type of origin activity (e.g., "home", "work")
+    public final String destinationActivityType; // Type of destination activity
+
     // PT Accessibility metrics - calculated for ALL agents regardless of car availability
     // These allow comparing the PT accessibility of each trip
     public final double carTravelTime; // Car travel time for this trip (seconds) - always calculated
@@ -74,7 +78,9 @@ public class DrtRequest {
         this.latestArrival = builder.latestArrival;
         this.directTravelTime = builder.directTravelTime;
         this.directDistance = builder.directDistance;
-		this.maxDetourFactor = builder.maxDetourFactor;
+        this.maxDetourFactor = builder.maxDetourFactor;
+        this.originActivityType = builder.originActivityType;
+        this.destinationActivityType = builder.destinationActivityType;
         this.carTravelTime = builder.carTravelTime;
         this.ptTravelTime = builder.ptTravelTime;
         this.ptAccessibility = builder.ptAccessibility;
@@ -106,6 +112,8 @@ public class DrtRequest {
             .directTravelTime(this.directTravelTime)
             .directDistance(this.directDistance)
             .maxDetourFactor(this.maxDetourFactor)
+            .originActivityType(this.originActivityType)
+            .destinationActivityType(this.destinationActivityType)
             .carTravelTime(this.carTravelTime)
             .ptTravelTime(this.ptTravelTime)
             .ptAccessibility(this.ptAccessibility);
@@ -192,6 +200,8 @@ public class DrtRequest {
         private double directTravelTime;
         private double directDistance;
 		private double maxDetourFactor;
+        private String originActivityType;
+        private String destinationActivityType;
         private double carTravelTime;
         private double ptTravelTime;
         private double ptAccessibility;
@@ -220,6 +230,8 @@ public class DrtRequest {
 			this.maxDetourFactor = maxDetourFactor;
 			return this;
 		}
+        public Builder originActivityType(String originActivityType) { this.originActivityType = originActivityType; return this; }
+        public Builder destinationActivityType(String destinationActivityType) { this.destinationActivityType = destinationActivityType; return this; }
         public Builder carTravelTime(double carTravelTime) { this.carTravelTime = carTravelTime; return this; }
         public Builder ptTravelTime(double ptTravelTime) { this.ptTravelTime = ptTravelTime; return this; }
         public Builder ptAccessibility(double ptAccessibility) { this.ptAccessibility = ptAccessibility; return this; }
