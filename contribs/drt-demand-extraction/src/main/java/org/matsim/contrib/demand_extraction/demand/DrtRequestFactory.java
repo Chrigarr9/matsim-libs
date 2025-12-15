@@ -205,12 +205,40 @@ public class DrtRequestFactory {
 		Id<Link> originLinkId = getLinkId(originActivity);
 		Id<Link> destinationLinkId = getLinkId(destActivity);
 
+		// Calculate beeline distance for validation
+		double beelineDistance = org.matsim.core.utils.geometry.CoordUtils.calcEuclideanDistance(originCoord, destCoord);
+
 		// Skip trips with zero travel time/distance (same origin-destination)
 		// These cause division by zero and NaN propagation in delay calculations
 		if (drtAttrs.travelTime <= 0.0 || drtAttrs.distance <= 0.0) {
 			log.warn(
 					"Skipping request index {} (person: {}): zero travel time/distance (origin=destination or routing failure)",
 					requestIndex, person.getId());
+			return null;
+		}
+
+		// Skip trips where origin and destination are on the same link but have different coordinates
+		// These produce unrealistic routing results (router routes from link to itself through network)
+		if (originLinkId.equals(destinationLinkId) && beelineDistance > 100.0) {
+			log.warn(
+					"Skipping request index {} (person: {}): same origin/destination link {} but different coordinates "
+							+ "(beeline={}m). This produces unrealistic routing. Consider fixing activity link assignments.",
+					requestIndex, person.getId(), originLinkId, String.format("%.0f", beelineDistance));
+			return null;
+		}
+
+		// Validate routing result against beeline distance
+		// Network distance should not be more than 5x beeline distance for realistic routes
+		// (factor accounts for road network detours, but 50x+ indicates routing failure)
+		double maxRealisticDistanceRatio = 5.0;
+		if (beelineDistance > 100.0 && drtAttrs.distance / beelineDistance > maxRealisticDistanceRatio) {
+			log.warn(
+					"Skipping request index {} (person: {}): unrealistic routing result. "
+							+ "Beeline={}m but routed distance={}m (ratio={:.1f}x). "
+							+ "Origin link: {}, Dest link: {}. This may indicate activities mapped to wrong links.",
+					requestIndex, person.getId(),
+					String.format("%.0f", beelineDistance), String.format("%.0f", drtAttrs.distance),
+					drtAttrs.distance / beelineDistance, originLinkId, destinationLinkId);
 			return null;
 		}
 

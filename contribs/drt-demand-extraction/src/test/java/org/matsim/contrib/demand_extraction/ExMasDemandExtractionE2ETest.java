@@ -92,19 +92,25 @@ public class ExMasDemandExtractionE2ETest {
 		Path requestsFile = testOutputDir.resolve("drt_requests.csv");
 		Path ridesFile = testOutputDir.resolve("exmas_rides.csv");
 		Path connectionCacheFile = testOutputDir.resolve("connection_cache.csv");
+		Path personAttributesFile = testOutputDir.resolve("person_attributes.csv");
 		Assertions.assertTrue(Files.exists(requestsFile), "DRT requests file should exist: " + requestsFile);
 		Assertions.assertTrue(Files.exists(ridesFile), "ExMAS rides file should exist: " + ridesFile);
 		Assertions.assertTrue(Files.exists(connectionCacheFile), "Connection cache file should exist: " + connectionCacheFile);
+		Assertions.assertTrue(Files.exists(personAttributesFile), "Person attributes file should exist: " + personAttributesFile);
 
 		// 9. Validate request and ride content
 		validateRequests(requestsFile);
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		validateRides(ridesFile, exMasConfig);
+		
+		// 10. Validate person attributes
+		validatePersonAttributes(personAttributesFile);
 
 		System.out.println("\n=== Test Output Location ===");
 		System.out.println("Requests: " + requestsFile.toAbsolutePath());
 		System.out.println("Rides: " + ridesFile.toAbsolutePath());
 		System.out.println("Connection Cache: " + connectionCacheFile.toAbsolutePath());
+		System.out.println("Person Attributes: " + personAttributesFile.toAbsolutePath());
 		System.out.println("============================\n");
 	}
 
@@ -311,5 +317,49 @@ public class ExMasDemandExtractionE2ETest {
 			}
 		}
 		System.out.println("================================\n");
+	}
+
+	/**
+	 * Validates the person attributes CSV file.
+	 * Checks for required columns and verifies person attributes were exported.
+	 */
+	private void validatePersonAttributes(Path personAttributesFile) throws IOException {
+		int personCount = 0;
+		Set<String> attributeNames = new HashSet<>();
+
+		try (BufferedReader reader = IOUtils.getBufferedReader(personAttributesFile.toString())) {
+			String header = reader.readLine();
+			Assertions.assertNotNull(header, "File should have header");
+			Assertions.assertTrue(header.contains("personId"), "Header should contain personId");
+
+			// Parse header to get all attribute names
+			String[] headerParts = header.split(",");
+			for (String col : headerParts) {
+				if (!col.equals("personId")) {
+					attributeNames.add(col.trim());
+				}
+			}
+
+			// Expect at least carAvail and hasLicense (set in enhancePopulationWithAttributes)
+			Assertions.assertTrue(attributeNames.contains("carAvail"),
+					"Should have carAvail attribute: " + attributeNames);
+			Assertions.assertTrue(attributeNames.contains("hasLicense"),
+					"Should have hasLicense attribute: " + attributeNames);
+
+			String line;
+			while ((line = reader.readLine()) != null) {
+				String[] parts = line.split(",");
+				Assertions.assertTrue(parts.length >= 3,
+						"Each row should have at least personId and 2 attributes");
+				personCount++;
+			}
+		}
+
+		Assertions.assertTrue(personCount > 0, "Should have at least one person with attributes");
+
+		System.out.println("\n=== Person Attributes Results ===");
+		System.out.println("Unique persons: " + personCount);
+		System.out.println("Attributes exported: " + attributeNames);
+		System.out.println("=================================\n");
 	}
 }

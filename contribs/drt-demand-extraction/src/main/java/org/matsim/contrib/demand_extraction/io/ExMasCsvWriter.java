@@ -239,4 +239,56 @@ public final class ExMasCsvWriter {
 		sb.append("]");
 		return sb.toString();
 	}
+
+	/**
+	 * Write mode cache to CSV file for debugging.
+	 * Exports all mode alternatives routed for each person-trip combination,
+	 * allowing analysis of why certain baseline modes were selected.
+	 *
+	 * @param filename output file path
+	 * @param modeCache map: PersonId -> TripIndex -> ModeName -> ModeAttributes
+	 * @throws RuntimeException if writing fails
+	 */
+	public static void writeModeCache(
+			String filename,
+			java.util.Map<org.matsim.api.core.v01.Id<org.matsim.api.core.v01.population.Person>,
+					java.util.Map<Integer, java.util.Map<String, org.matsim.contrib.demand_extraction.demand.ModeAttributes>>> modeCache) {
+		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
+			// Header
+			writer.write("personId,tripIndex,mode,travelTime,distance,cost,score");
+			writer.newLine();
+
+			// Sort by person ID for consistent output
+			var sortedPersonIds = modeCache.keySet().stream()
+					.sorted(java.util.Comparator.comparing(id -> id.toString()))
+					.toList();
+
+			for (var personId : sortedPersonIds) {
+				var tripModes = modeCache.get(personId);
+				if (tripModes == null) continue;
+
+				// Sort by trip index
+				var sortedTripIndices = tripModes.keySet().stream().sorted().toList();
+
+				for (Integer tripIndex : sortedTripIndices) {
+					var modes = tripModes.get(tripIndex);
+					if (modes == null) continue;
+
+					// Sort by mode name for consistent output
+					var sortedModes = modes.keySet().stream().sorted().toList();
+
+					for (String mode : sortedModes) {
+						var attrs = modes.get(mode);
+						writer.write(String.format(java.util.Locale.US,
+								"%s,%d,%s,%.2f,%.2f,%.4f,%.4f",
+								personId, tripIndex, mode,
+								attrs.travelTime, attrs.distance, attrs.cost, attrs.score));
+						writer.newLine();
+					}
+				}
+			}
+		} catch (IOException e) {
+			throw new RuntimeException("Could not write mode cache CSV: " + filename, e);
+		}
+	}
 }

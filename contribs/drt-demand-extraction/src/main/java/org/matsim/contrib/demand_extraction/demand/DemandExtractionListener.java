@@ -14,6 +14,7 @@ import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
 import org.matsim.contrib.demand_extraction.io.ConnectionCacheWriter;
 import org.matsim.contrib.demand_extraction.io.ExMasCsvWriter;
+import org.matsim.contrib.demand_extraction.io.PersonAttributesWriter;
 import org.matsim.core.config.Config;
 import org.matsim.core.controler.OutputDirectoryHierarchy;
 import org.matsim.core.controler.events.ShutdownEvent;
@@ -128,7 +129,19 @@ public class DemandExtractionListener implements ShutdownListener {
 		ExMasCsvWriter.writeRides(ridesFilename, rides);
 		log.info("Wrote {} rides to: {}", rides.size(), ridesFilename);
 
-		// 7. Write Connection Cache (Optional - written when predecessors are calculated)
+		// 7. Write Person Attributes (for cluster analysis in Python)
+		String personAttributesFilename = outputDirectory.getOutputFilename("person_attributes.csv");
+		PersonAttributesWriter.writePersonAttributes(personAttributesFilename, population, requests);
+		log.info("Wrote person attributes to: {}", personAttributesFilename);
+
+		// 8. Write Mode Cache (for debugging mode choice issues)
+		// This exports all mode alternatives routed for each person-trip, helpful for analyzing
+		// why certain baseline modes were selected (e.g., bike vs car for long-distance trips)
+		String modeCacheFilename = outputDirectory.getOutputFilename("mode_cache.csv");
+		ExMasCsvWriter.writeModeCache(modeCacheFilename, modeRoutingCache.getAllModeAttributes());
+		log.info("Wrote mode cache to: {}", modeCacheFilename);
+
+		// 9. Write Connection Cache (Optional - written when predecessors are calculated)
 		if (exMasConfig.isCalcPredecessors()) {
 			String connectionCacheFilename = outputDirectory.getOutputFilename("connection_cache.csv");
 			log.info("Writing connection cache to: {}", connectionCacheFilename);

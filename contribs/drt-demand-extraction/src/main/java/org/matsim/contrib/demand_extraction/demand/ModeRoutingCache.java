@@ -353,16 +353,20 @@ public class ModeRoutingCache {
 			}
 		}
 
-		// Note: Opportunity cost of time is NOT included in this simplified calculation.
-		// For budget calculation, we're comparing travel utilities between modes.
-		// Since all modes connect the same O-D pair at the same departure time,
-		// the opportunity cost difference would be:
-		// opportunityCost = (newTravelTime - baselineTravelTime) * marginalUtilityOfPerforming
-		//
-		// This is implicitly captured in the travel time disutility of the legs.
-		// A full implementation would need to account for:
-		// - Fixed vs flexible activity durations
-		// - Impact on subsequent activities in the daily schedule
+		// Add opportunity cost of time (lost activity time)
+		// In standard MATSim, longer travel means less activity time, reducing the activity score.
+		// Since we only score legs here, we must explicitly subtract the utility of performing
+		// the activity that is displaced by travel.
+		// Effective marginal utility of travel = marginalUtilityOfTraveling - marginalUtilityOfPerforming
+		if (exMasConfig.isIncludeOpportunityCost()) {
+			double totalTravelTime = 0.0;
+			for (PlanElement pe : newRoute) {
+				if (pe instanceof Leg leg) {
+					totalTravelTime += leg.getTravelTime().seconds();
+				}
+			}
+			score -= totalTravelTime * params.marginalUtilityOfPerforming_s;
+		}
 
         return score;
     }
@@ -382,6 +386,15 @@ public class ModeRoutingCache {
 	 */
 	public Map<Id<Person>, Map<Integer, double[]>> getPtAccessibilityMetrics() {
 		return ptAccessibilityMetrics;
+	}
+
+	/**
+	 * Get all mode attributes for all persons.
+	 * Returns Map: Person ID -> Trip Index -> Mode Name -> ModeAttributes
+	 * Used for debugging and analyzing mode choice decisions.
+	 */
+	public Map<Id<Person>, Map<Integer, Map<String, ModeAttributes>>> getAllModeAttributes() {
+		return cache;
 	}
 
 	/**

@@ -10,7 +10,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Scenario;
 import org.matsim.api.core.v01.TransportMode;
-import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.population.Activity;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.CommuteFilter;
@@ -24,18 +23,25 @@ import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.config.groups.ScoringConfigGroup;
 import org.matsim.core.controler.Controler;
 import org.matsim.core.controler.OutputDirectoryHierarchy;
-import org.matsim.core.controler.AbstractModule;
 import org.matsim.core.scenario.ScenarioUtils;
 import org.matsim.dsim.Activities;
 
 /**
  * Run class for extracting DRT demand from the Kelheim scenario.
  * 
- * <p>This class loads the Kelheim KEXI configuration, configures ExMAS demand extraction,
- * and runs zero iterations to warm up travel times before extracting DRT requests and rides.
+ * <p>This class loads the Kelheim KEXI configuration from the local matsim-kelheim repository,
+ * configures ExMAS demand extraction, and runs zero iterations to use iteration 0 travel times
+ * before extracting DRT requests and rides.
+ * 
+ * <p><b>Prerequisites:</b>
+ * <ul>
+ *   <li>Clone matsim-kelheim repo to: ../../../matsim_scenarios/matsim-kelheim</li>
+ *   <li>The config uses online SVN resources for network, plans, transit, etc.</li>
+ * </ul>
  * 
  * <p><b>Key features:</b>
  * <ul>
+ *   <li>Uses FULL Kelheim network (not the test mini-network from matsim-libs examples)</li>
  *   <li>Supports different sample sizes (1%, 10%, 25%) via command line argument</li>
  *   <li>Filters for commute trips only (home ↔ work)</li>
  *   <li>Excludes freight agents from demand extraction</li>
@@ -45,15 +51,20 @@ import org.matsim.dsim.Activities;
  * 
  * <p><b>Usage:</b>
  * <pre>
- * java RunKelheimDemandExtraction --sample 25
- * java RunKelheimDemandExtraction --sample 10
- * java RunKelheimDemandExtraction --sample 1
+ * # From drt-demand-extraction directory:
+ * mvn exec:java -Dexec.mainClass="org.matsim.contrib.demand_extraction.run.RunKelheimDemandExtraction" -Dexec.args="--sample 1"
+ * 
+ * # Or with different sample sizes:
+ * mvn exec:java -Dexec.mainClass="org.matsim.contrib.demand_extraction.run.RunKelheimDemandExtraction" -Dexec.args="--sample 10"
+ * mvn exec:java -Dexec.mainClass="org.matsim.contrib.demand_extraction.run.RunKelheimDemandExtraction" -Dexec.args="--sample 25"
  * </pre>
  * 
  * <p><b>Output:</b>
  * <ul>
  *   <li>{runId}.drt_requests.csv - DRT request data with budget, times, coordinates</li>
  *   <li>{runId}.exmas_rides.csv - All feasible ride combinations</li>
+ *   <li>{runId}.person_attributes.csv - Person attributes for cluster analysis</li>
+ *   <li>{runId}.connection_cache.csv - Network connections for optimization</li>
  * </ul>
  * 
  * <p><b>Scoring Parameters Note:</b>
@@ -81,14 +92,15 @@ public class RunKelheimDemandExtraction {
 	private static final String KELHEIM_PLANS_BASE = 
 			"https://svn.vsp.tu-berlin.de/repos/public-svn/matsim/scenarios/countries/de/kelheim/kelheim-v3.0/input/";
 	
-	// Local config file path - test.with-drt.config.xml is compatible with MATSim 2026.0-SNAPSHOT
-	// (v3.1 configs use deprecated module names like 'controler' instead of 'controller')
+	// Local config file path - uses the FULL Kelheim scenario from matsim-kelheim repo
+	// This has the complete network, not the mini test network from matsim-libs/examples
+	// test.with-drt.config.xml is compatible with MATSim 2026.0-SNAPSHOT
 	private static final String LOCAL_CONFIG_PATH = 
 			"../../../matsim_scenarios/matsim-kelheim/input/test.with-drt.config.xml";
 	
 	public static void main(String[] args) throws IOException {
-		// Parse sample size argument
-		int sampleSize = 25; // Default: 25%
+		// Parse sample size argument (default: 1%)
+		int sampleSize = 1;
 		for (int i = 0; i < args.length; i++) {
 			if ("--sample".equals(args[i]) && i + 1 < args.length) {
 				sampleSize = Integer.parseInt(args[i + 1]);
@@ -102,6 +114,7 @@ public class RunKelheimDemandExtraction {
 		
 		log.info("=== Kelheim DRT Demand Extraction ===");
 		log.info("Sample size: {}%", sampleSize);
+		log.info("Using FULL Kelheim network from matsim-kelheim repository");
 		
 		// Create output directory
 		Path outputDir = Path.of("output/kelheim-demand-extraction-" + sampleSize + "pct");
@@ -139,18 +152,29 @@ public class RunKelheimDemandExtraction {
 		log.info("Output directory: {}", outputDir.toAbsolutePath());
 		log.info("Requests file: {}.drt_requests.csv", runId);
 		log.info("Rides file: {}.exmas_rides.csv", runId);
+		log.info("Person attributes: {}.person_attributes.csv", runId);
+		log.info("Connection cache: {}.connection_cache.csv", runId);
 		log.info("===================================\n");
 	}
 	
 	/**
 	 * Load Kelheim config and adjust for the specified sample size.
+	 * 
+	 * Uses the FULL Kelheim network from the matsim-kelheim repository,
+	 * not the mini test network from matsim-libs/examples/scenarios/kelheim.
 	 */
 	private static Config loadKelheimConfig(int sampleSize) {
-		log.info("Loading Kelheim KEXI config...");
+		log.info("Loading Kelheim KEXI config from matsim-kelheim repository...");
+		log.info("Config path: {}", LOCAL_CONFIG_PATH);
 		
-		// Load v3.1 25% config as base (only 25% exists, we adjust for other sample sizes)
-		Config config = ConfigUtils.loadConfig(LOCAL_CONFIG_PATH, new ExMasConfigGroup(), new MultiModeDrtConfigGroup(), new DvrpConfigGroup());
-		log.info("Using config: {}", LOCAL_CONFIG_PATH);
+		// Load test.with-drt.config.xml which has the full network and DRT configuration
+		Config config = ConfigUtils.loadConfig(LOCAL_CONFIG_PATH, 
+				new ExMasConfigGroup(), 
+				new MultiModeDrtConfigGroup(), 
+				new DvrpConfigGroup());
+		
+		log.info("Network: {}", config.network().getInputFile());
+		log.info("Transit schedule: {}", config.transit().getTransitScheduleFile());
 
 		// Remove 'av' mode if present to ensure single-mode DRT for ExMAS
 		MultiModeDrtConfigGroup multiModeDrt = ConfigUtils.addOrGetModule(config, MultiModeDrtConfigGroup.class);
@@ -176,7 +200,7 @@ public class RunKelheimDemandExtraction {
 			dvrp.setNetworkModes(java.util.Collections.singleton("drt"));
 		}
 		
-		// Adjust capacity factors and plans file for the requested sample size
+		// Adjust capacity factors for the requested sample size
 		double sampleFactor = sampleSize / 100.0;
 		config.qsim().setFlowCapFactor(sampleFactor);
 		config.qsim().setStorageCapFactor(sampleFactor);
@@ -226,6 +250,7 @@ public class RunKelheimDemandExtraction {
 	
 	/**
 	 * Configure ExMAS algorithm parameters.
+	 * Settings aligned with ExMasKelheimE2ETest for consistency.
 	 */
 	private static void configureExMas(Config config) {
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
@@ -233,13 +258,12 @@ public class RunKelheimDemandExtraction {
 		// DRT mode must match Kelheim config
 		exMasConfig.setDrtMode("drt");
 		
-		// Base modes for budget calculation
+		// Base modes for budget calculation (aligned with E2E test)
 		Set<String> baseModes = new HashSet<>();
 		baseModes.add(TransportMode.car);
 		baseModes.add(TransportMode.pt);
 		baseModes.add(TransportMode.walk);
 		baseModes.add(TransportMode.bike);
-		baseModes.add(TransportMode.ride);
 		exMasConfig.setBaseModes(baseModes);
 		
 		// DRT routing uses car network
@@ -257,20 +281,24 @@ public class RunKelheimDemandExtraction {
 		exMasConfig.setHomeActivityType("home");
 		exMasConfig.setWorkActivityType("work");
 		
-		// DRT service quality parameters (baseline for budget calculation)
+		// DRT service quality parameters for budget calculation (aligned with E2E test)
 		exMasConfig.setMinDrtCostPerKm(0.0);
 		exMasConfig.setMinMaxDetourFactor(1.0);
 		exMasConfig.setMinMaxWaitingTime(0.0);
-		exMasConfig.setMinDrtAccessEgressDistance(100.0);
+		exMasConfig.setMinDrtAccessEgressDistance(100.0);  // Changed from 100.0 to match test
 		
-		// ExMAS algorithm parameters
-		exMasConfig.setSearchHorizon(600.0);  // 10 minute time window for pairing
+		// ExMAS algorithm parameters (aligned with E2E test)
+		exMasConfig.setSearchHorizon(1800.0);  // 10 minute time window for pairing
 		exMasConfig.setMaxDetourFactor(1.5);  // Max 50% longer than direct
-		// exMasConfig.setNegativeFlexibilityAbsoluteMap("default:600.0");  // 10 min departure flexibility
-		// exMasConfig.setPositiveFlexibilityAbsoluteMap("default:600.0");  // 10 min arrival flexibility
-		exMasConfig.setMaxPoolingDegree(8);  // Max 8 passengers per ride (reasonable for KEXI)
+		exMasConfig.setMaxPoolingDegree(10);  // Allow up to 10 passengers (aligned with test)
+
+		// Enable predecessor calculation for connection_cache.csv output
+		// This is needed for optimization empty vehicle kilometer calculations
+		exMasConfig.setCalcPredecessors(true);
+		exMasConfig.setCalcShapleyValues(true);
 
 		// Disable PT departure optimization to avoid SwissRailRaptor configuration issues
+		// TODO: Fix SwissRailRaptor range query settings configuration
 		exMasConfig.setPtOptimizeDepartureTime(false);
 		
 		log.info("ExMAS config:");
@@ -279,6 +307,8 @@ public class RunKelheimDemandExtraction {
 		log.info("  Base modes: {}", exMasConfig.getBaseModes());
 		log.info("  Max pooling degree: {}", exMasConfig.getMaxPoolingDegree());
 		log.info("  Max detour factor: {}", exMasConfig.getMaxDetourFactor());
+		log.info("  Calc predecessors: {}", exMasConfig.isCalcPredecessors());
+		log.info("  Include opportunity cost: {}", exMasConfig.isIncludeOpportunityCost());
 	}
 	
 	/**

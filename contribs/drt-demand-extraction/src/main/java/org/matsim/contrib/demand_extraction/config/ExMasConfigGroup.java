@@ -107,6 +107,11 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// This means agents can leave earlier/later to catch better PT connections
 	private boolean ptOptimizeDepartureTime = true;
 
+	// If true, includes opportunity cost of time (lost activity time) in trip scoring
+	// Effective marginal utility of travel = marginalUtilityOfTraveling - marginalUtilityOfPerforming
+	// This is important when marginalUtilityOfTraveling is zero (e.g. Kelheim PT)
+	private boolean includeOpportunityCost = true;
+
 	// Heuristics and post-processing settings (align with exmas_pipeline.heuristics)
 	// Controls parallelism for expensive metrics (Shapley, predecessors)
 	// -1 => use all available processors; 1 => force sequential
@@ -473,6 +478,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.intermediateWrite = intermediateWrite;
 	}
 
+	@StringGetter("includeOpportunityCost")
+	public boolean isIncludeOpportunityCost() {
+		return includeOpportunityCost;
+	}
+
+	@StringSetter("includeOpportunityCost")
+	public void setIncludeOpportunityCost(boolean includeOpportunityCost) {
+		this.includeOpportunityCost = includeOpportunityCost;
+	}
+
     @Override
     public Map<String, String> getComments() {
         Map<String, String> map = super.getComments();
@@ -518,6 +533,9 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("ptOptimizeDepartureTime",
 				"If true, PT router can optimize departure time to reduce waiting times. " +
 				"Agent can leave earlier/later to catch better connections. Default: true");
+		map.put("includeOpportunityCost",
+				"If true, includes opportunity cost of time (lost activity time) in trip scoring. " +
+				"Essential when marginalUtilityOfTraveling is zero. Default: true");
 		map.put("heuristicsProcessCount",
 				"Parallelism for Shapley/predecessor calculations. -1 = all processors, 1 = sequential. Default: -1");
 		map.put("calcShapleyValues", "Calculate Shapley values for each ride (distance contribution per passenger). Default: true");
