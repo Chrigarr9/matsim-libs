@@ -22,9 +22,10 @@ import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
-import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.core.utils.misc.Counter;
 
 /**
  * Post-process ExMAS rides to enrich them with:
@@ -53,9 +54,35 @@ public final class RidePostProcessor {
             return rides;
         }
 
+		log.info("Post-processing {} rides...", rides.size());
+		long startTime = System.currentTimeMillis();
+
+		log.info("  Computing max costs...");
+		long maxCostStart = System.currentTimeMillis();
         Map<Integer, double[]> maxCostByRide = computeMaxCosts(rides);
-        Map<Integer, double[]> shapleyByRide = config.isCalcShapleyValues() ? computeShapleyValues(rides) : Collections.emptyMap();
-        PredSucc predsAndSuccs = config.isCalcPredecessors() ? computePredecessors(rides) : new PredSucc(Collections.emptyMap(), Collections.emptyMap());
+		log.info("  Max costs computed in {} ms", System.currentTimeMillis() - maxCostStart);
+
+		Map<Integer, double[]> shapleyByRide;
+		if (config.isCalcShapleyValues()) {
+			log.info("  Computing Shapley values...");
+			long shapleyStart = System.currentTimeMillis();
+			shapleyByRide = computeShapleyValues(rides);
+			log.info("  Shapley values computed in {} ms", System.currentTimeMillis() - shapleyStart);
+		} else {
+			log.info("  Shapley values disabled (skipped)");
+			shapleyByRide = Collections.emptyMap();
+		}
+
+		PredSucc predsAndSuccs;
+		if (config.isCalcPredecessors()) {
+			log.info("  Computing predecessors/successors...");
+			long predStart = System.currentTimeMillis();
+			predsAndSuccs = computePredecessors(rides);
+			log.info("  Predecessors/successors computed in {} ms", System.currentTimeMillis() - predStart);
+		} else {
+			log.info("  Predecessors/successors disabled (skipped)");
+			predsAndSuccs = new PredSucc(Collections.emptyMap(), Collections.emptyMap());
+		}
 
         List<Ride> enriched = new ArrayList<>(rides.size());
         for (Ride ride : rides) {
@@ -89,6 +116,8 @@ public final class RidePostProcessor {
             enriched.add(rebuilt);
         }
 
+		long totalTime = System.currentTimeMillis() - startTime;
+		log.info("Post-processing complete in {} ms", totalTime);
         return enriched;
     }
 
@@ -191,6 +220,7 @@ public final class RidePostProcessor {
     }
 
     private PredSucc computePredecessors(List<Ride> rides) {
+		log.info("    Sorting {} rides by start time...", rides.size());
         List<Ride> sortedByStart = new ArrayList<>(rides);
         sortedByStart.sort(Comparator.comparingDouble(Ride::getStartTime));
         int total = sortedByStart.size();
@@ -234,12 +264,18 @@ public final class RidePostProcessor {
         Map<Integer, List<Integer>> successors = new ConcurrentHashMap<>();
 
         int parallelism = resolveParallelism();
+		log.info("    Computing predecessor/successor connections (parallelism: {})...", parallelism);
+		log.info("    This requires routing {} potential connections via network...", total * (total - 1) / 2);
+
+		long routingStartTime = System.currentTimeMillis();
         IntStream stream = IntStream.range(0, total);
         if (parallelism > 1) {
             stream = stream.parallel();
         }
+        Counter counter = new Counter("      Processed ", " / " + total + " rides...", 2);
 
         stream.forEach(j -> {
+            counter.incCounter();
             double currentStart = startTimes[j];
             double minEndTime = currentStart - filterTime;
             double maxEndTime = currentStart;
@@ -294,6 +330,10 @@ public final class RidePostProcessor {
             predecessors.put(sortedByStart.get(j).getIndex(), preds);
         });
 
+		long routingTime = System.currentTimeMillis() - routingStartTime;
+		log.info("    Network routing completed in {} ms", routingTime);
+
+		log.info("    Deriving successor relationships...");
         // Derive successors from predecessors
         for (Map.Entry<Integer, List<Integer>> entry : predecessors.entrySet()) {
             int rideId = entry.getKey();
@@ -302,6 +342,7 @@ public final class RidePostProcessor {
             }
         }
 
+		log.info("    Converting to arrays...");
         Map<Integer, int[]> predArrays = new HashMap<>();
         Map<Integer, int[]> succArrays = new HashMap<>();
         predecessors.forEach((rideId, list) -> predArrays.put(rideId, list.stream().mapToInt(Integer::intValue).toArray()));
@@ -309,6 +350,9 @@ public final class RidePostProcessor {
             Collections.sort(list);
             succArrays.put(rideId, list.stream().mapToInt(Integer::intValue).toArray());
         });
+
+		int totalPreds = predArrays.values().stream().mapToInt(arr -> arr.length).sum();
+		log.info("    Found {} predecessor connections", totalPreds);
 
         return new PredSucc(predArrays, succArrays);
     }

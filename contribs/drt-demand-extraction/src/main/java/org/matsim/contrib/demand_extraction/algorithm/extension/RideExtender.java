@@ -20,6 +20,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
 import it.unimi.dsi.fastutil.ints.IntList;
@@ -40,10 +41,11 @@ public final class RideExtender {
 	private final BudgetValidator budgetValidator;
 	private final Map<Integer, DrtRequest> requestMap;
 	private final Map<Integer, Ride> rideMap;
+	private final ExMasConfigGroup exMasConfig;
 	private static final double EPSILON = 1e-9;
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
-			List<DrtRequest> requests, List<Ride> rides) {
+			List<DrtRequest> requests, List<Ride> rides, ExMasConfigGroup exMasConfig) {
 		this.network = network;
 		this.graph = graph;
 		this.budgetValidator = budgetValidator;
@@ -51,6 +53,7 @@ public final class RideExtender {
 		for (DrtRequest r : requests) requestMap.put(r.index, r);
 		this.rideMap = new HashMap<>();
 		for (Ride r : rides) rideMap.put(r.getIndex(), r);
+		this.exMasConfig = exMasConfig;
 	}
 
 	/**
@@ -102,12 +105,15 @@ public final class RideExtender {
 			extended.add(reindexed);
 		}
 
+		// Apply group pruning after extensions
+		List<Ride> pruned = applyHeuristicPruning(extended);
+
 		long elapsed = System.currentTimeMillis() - startTime;
 		double seconds = elapsed / 1000.0;
 		log.info("Extension complete: {} rides extended to degree {} in {}s",
-				extended.size(), targetDegree, String.format("%.1f", seconds));
+				pruned.size(), targetDegree, String.format("%.1f", seconds));
 
-		return extended;
+		return pruned;
 	}
 
 	/**
@@ -143,7 +149,115 @@ public final class RideExtender {
 			}
 		}
 
+		// Optional per-base top-N pruning of extensions by objective
+		int topN = exMasConfig != null ? exMasConfig.getPruningTopNPerBase() : 0;
+		if (topN > 0 && results.size() > topN) {
+			boolean minimize = exMasConfig.getPruningGoal() == null
+					|| exMasConfig.getPruningGoal().equalsIgnoreCase("minimize");
+			Comparator<ExtensionCandidate> cmp = Comparator.comparingDouble(c -> objectiveValue(c.validatedRide));
+			if (!minimize)
+				cmp = cmp.reversed();
+			results.sort(cmp);
+			return new ArrayList<>(results.subList(0, Math.min(topN, results.size())));
+		}
+
 		return results;
+	}
+
+	private List<Ride> applyHeuristicPruning(List<Ride> rides) {
+		if (exMasConfig == null || !exMasConfig.isPruningEnabled() || rides.isEmpty()) {
+			return rides;
+		}
+
+		// Remove non-improving rides (rideDistance > sum of passenger distances)
+		int before = rides.size();
+		if (exMasConfig.isPruningRemoveNonImproving()) {
+			rides = rides.stream()
+					.filter(r -> r.getRideDistance() <= sumRequestDistances(r))
+					.collect(Collectors.toList());
+			int removed = before - rides.size();
+			if (removed > 0) {
+				log.info("  Pruning: removed {} non-improving rides", removed);
+			}
+		}
+
+		double fraction = Math.max(0.0, Math.min(1.0, exMasConfig.getPruningFraction()));
+		int minKeep = Math.max(0, exMasConfig.getPruningMinToKeep());
+		boolean minimize = exMasConfig.getPruningGoal() == null
+				|| exMasConfig.getPruningGoal().equalsIgnoreCase("minimize");
+
+		if (fraction >= 1.0 && minKeep <= 0) {
+			return rides;
+		}
+
+		Map<String, List<Ride>> byGroup = new HashMap<>();
+		for (Ride r : rides) {
+			int[] idx = r.getRequestIndices().clone();
+			Arrays.sort(idx);
+			String key = Arrays.toString(idx);
+			byGroup.computeIfAbsent(key, k -> new ArrayList<>()).add(r);
+		}
+
+		int initial = rides.size();
+		List<Ride> kept = new ArrayList<>(initial);
+		for (Map.Entry<String, List<Ride>> e : byGroup.entrySet()) {
+			List<Ride> group = e.getValue();
+			Comparator<Ride> cmp = Comparator.comparingDouble(this::objectiveValue);
+			if (!minimize)
+				cmp = cmp.reversed();
+			group.sort(cmp);
+
+			int size = group.size();
+			int keep = (int) Math.ceil(size * fraction);
+			keep = Math.max(keep, minKeep);
+			keep = Math.min(keep, size);
+			kept.addAll(group.subList(0, keep));
+		}
+
+		int removed = initial - kept.size();
+		if (removed > 0) {
+			log.info("  Pruning: fractional kept {} of {} rides (removed {})", kept.size(), initial, removed);
+		}
+		return kept;
+	}
+
+	private double objectiveValue(Ride r) {
+		String obj = exMasConfig.getPruningObjective();
+		if (obj == null)
+			obj = "rideDistance";
+		switch (obj) {
+			case "passengerTravelTime":
+				return sumPassengerTravelTimes(r);
+			case "passengerUtility":
+				return -sumPassengerUtilities(r); // higher is better
+			case "rideDistance":
+			default:
+				return r.getRideDistance();
+		}
+	}
+
+	private double sumRequestDistances(Ride r) {
+		return Arrays.stream(r.getRequests())
+				.mapToDouble(DrtRequest::getDistance)
+				.sum();
+	}
+
+	private double sumPassengerTravelTimes(Ride r) {
+		double[] t = r.getPassengerTravelTimes();
+		double s = 0.0;
+		if (t != null)
+			for (double v : t)
+				s += v;
+		return s;
+	}
+
+	private double sumPassengerUtilities(Ride r) {
+		double[] u = r.getPassengerNetworkUtilities();
+		double s = 0.0;
+		if (u != null)
+			for (double v : u)
+				s += v;
+		return s;
 	}
 
 	/**

@@ -26,22 +26,25 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 public final class ExMasEngine {
 	private static final Logger log = LogManager.getLogger(ExMasEngine.class);
 
-    private final MatsimNetworkCache network;
-    private final BudgetValidator budgetValidator;
-    private final double horizon;
-    private final int maxDegree;
+	private final MatsimNetworkCache network;
+	private final BudgetValidator budgetValidator;
+	private final double horizon;
+	private final int maxDegree;
+	private final org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig;
 
     private List<DrtRequest> requests;
     private List<Ride> allRides;
     private ShareabilityGraph graph;
 
-    public ExMasEngine(MatsimNetworkCache network, BudgetValidator budgetValidator, 
-                       double horizon, int maxDegree) {
-        this.network = network;
-        this.budgetValidator = budgetValidator;
-        this.horizon = horizon;
-        this.maxDegree = maxDegree;
-    }
+	public ExMasEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
+					   double horizon, int maxDegree,
+					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig) {
+		this.network = network;
+		this.budgetValidator = budgetValidator;
+		this.horizon = horizon;
+		this.maxDegree = maxDegree;
+		this.exMasConfig = exMasConfig;
+	}
 
     /**
      * Run ExMAS algorithm on DRT requests with budget validation.
@@ -130,8 +133,8 @@ public final class ExMasEngine {
 		log.info("======================================================================");
         List<Ride> currentDegreeRides = pairRides;
 		for (int degree = 2; degree < maxDegree; degree++) {
-            RideExtender extender = new RideExtender(network, graph, budgetValidator,
-                                                     requests, allRides);
+			RideExtender extender = new RideExtender(network, graph, budgetValidator,
+													 requests, allRides, exMasConfig);
             List<Ride> extended = extender.extendRides(currentDegreeRides, allRides.size());
 
             if (extended.isEmpty()) {

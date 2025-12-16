@@ -11,8 +11,6 @@ import org.matsim.contrib.demand_extraction.algorithm.engine.RidePostProcessor;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
-import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
-import org.matsim.contrib.demand_extraction.io.ConnectionCacheWriter;
 import org.matsim.contrib.demand_extraction.io.ExMasCsvWriter;
 import org.matsim.contrib.demand_extraction.io.PersonAttributesWriter;
 import org.matsim.core.config.Config;
@@ -106,10 +104,11 @@ public class DemandExtractionListener implements ShutdownListener {
 		log.info("STEP 4: Running ExMAS ride generation algorithm");
 		log.info("----------------------------------------------------------------------");
 		ExMasEngine exmasEngine = new ExMasEngine(
-				networkCache,
-				budgetValidator,
-				exMasConfig.getSearchHorizon(),
-				exMasConfig.getMaxPoolingDegree());
+			networkCache,
+			budgetValidator,
+			exMasConfig.getSearchHorizon(),
+			exMasConfig.getMaxPoolingDegree(),
+			exMasConfig);
 		List<Ride> rides = exmasEngine.run(requests);
 
 		// Post-process rides with advanced metrics (maxCost, Shapley, predecessors)
@@ -120,34 +119,47 @@ public class DemandExtractionListener implements ShutdownListener {
 		log.info("");
 		log.info("STEP 5: Writing output files");
 		log.info("----------------------------------------------------------------------");
-		String requestsFilename = outputDirectory.getOutputFilename("drt_requests.csv");
+
+		// Create subdirectory for demand extraction outputs
+		String demandOutputDir = outputDirectory.getOutputPath() + "/drt_demand";
+		java.nio.file.Path demandDir = java.nio.file.Paths.get(demandOutputDir);
+		try {
+			java.nio.file.Files.createDirectories(demandDir);
+		} catch (java.io.IOException e) {
+			throw new RuntimeException("Failed to create drt_demand output directory", e);
+		}
+
+		String requestsFilename = demandOutputDir + "/" + config.controller().getRunId()
+				+ ".drt_requests.csv";
 		ExMasCsvWriter.writeRequests(requestsFilename, requests);
 		log.info("Wrote {} requests to: {}", requests.size(), requestsFilename);
 
 		// 6. Write ExMAS Rides Output
-		String ridesFilename = outputDirectory.getOutputFilename("exmas_rides.csv");
+		String ridesFilename = demandOutputDir + "/" + config.controller().getRunId() + ".exmas_rides.csv";
 		ExMasCsvWriter.writeRides(ridesFilename, rides);
 		log.info("Wrote {} rides to: {}", rides.size(), ridesFilename);
 
-		// 7. Write Person Attributes (for cluster analysis in Python)
-		String personAttributesFilename = outputDirectory.getOutputFilename("person_attributes.csv");
-		PersonAttributesWriter.writePersonAttributes(personAttributesFilename, population, requests);
-		log.info("Wrote person attributes to: {}", personAttributesFilename);
+	// 7. Write Person Attributes (for cluster analysis in Python)
+	String personAttributesFilename = demandOutputDir + "/" + config.controller().getRunId()
+			+ ".person_attributes.csv";
+	PersonAttributesWriter.writePersonAttributes(personAttributesFilename, population, requests);
+	log.info("Wrote person attributes to: {}", personAttributesFilename);
 
-		// 8. Write Mode Cache (for debugging mode choice issues)
-		// This exports all mode alternatives routed for each person-trip, helpful for analyzing
-		// why certain baseline modes were selected (e.g., bike vs car for long-distance trips)
-		String modeCacheFilename = outputDirectory.getOutputFilename("mode_cache.csv");
-		ExMasCsvWriter.writeModeCache(modeCacheFilename, modeRoutingCache.getAllModeAttributes());
-		log.info("Wrote mode cache to: {}", modeCacheFilename);
+	// 8. Write Mode Cache (for debugging mode choice issues)
+	// This exports all mode alternatives routed for each person-trip, helpful for
+	// analyzing
+	// why certain baseline modes were selected (e.g., bike vs car for long-distance
+	// trips)
+	String modeCacheFilename = demandOutputDir + "/" + config.controller().getRunId()
+			+ ".mode_cache.csv";
+	ExMasCsvWriter.writeModeCache(modeCacheFilename, modeRoutingCache.getAllModeAttributes());
+	log.info("Wrote mode cache to: {}", modeCacheFilename);
 
-		// 9. Write Connection Cache (Optional - written when predecessors are calculated)
-		if (exMasConfig.isCalcPredecessors()) {
-			String connectionCacheFilename = outputDirectory.getOutputFilename("connection_cache.csv");
-			log.info("Writing connection cache to: {}", connectionCacheFilename);
-			// Use configured time bin size (default 900s = 15 min)
-			double timeBinSize = exMasConfig.getNetworkTimeBinSize();
-			ConnectionCacheWriter.writeConnectionCache(connectionCacheFilename, rides, networkCache, timeBinSize);
+	// 9. Write Connection Cache (Optional - written when predecessors are
+	// calculated)
+	if (exMasConfig.isCalcPredecessors()) {
+		String connectionCacheFilename = demandOutputDir + "/" + config.controller().getRunId()
+				+ ".connection_cache.csv";
 			log.info("Wrote connection cache");
 		}
 

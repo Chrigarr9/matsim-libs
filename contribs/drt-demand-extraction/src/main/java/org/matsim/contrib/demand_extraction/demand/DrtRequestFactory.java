@@ -318,13 +318,13 @@ public class DrtRequestFactory {
 		double carTravelTime = (ptMetrics != null && ptMetrics.length > 0) ? ptMetrics[0] : Double.NaN;
 		double ptTravelTime = (ptMetrics != null && ptMetrics.length > 1) ? ptMetrics[1] : Double.NaN;
 
-		// PT accessibility = carTravelTime / ptTravelTime
-		// Higher value = PT more competitive (if car takes 30min and PT takes 30min, ratio = 1.0)
-		// If PT is faster than car, ratio > 1.0 (PT is better)
-		// If car is faster, ratio < 1.0 (car is better)
+		// PT accessibility = ptTravelTime / carTravelTime
+		// Higher value = PT is slower (worse accessibility)
+		// Lower value = PT is faster (better accessibility)
+		// Value of 1.0 = PT and car are equally fast
 		double ptAccessibility = Double.NaN;
-		if (Double.isFinite(carTravelTime) && Double.isFinite(ptTravelTime) && ptTravelTime > 0) {
-			ptAccessibility = carTravelTime / ptTravelTime;
+	if (Double.isFinite(carTravelTime) && Double.isFinite(ptTravelTime) && carTravelTime > 0) {
+		ptAccessibility = ptTravelTime / carTravelTime;
 		}
 
 		// Build final request with calculated budget and time windows

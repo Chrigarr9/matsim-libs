@@ -56,7 +56,8 @@ public class DrtRequest {
     // These allow comparing the PT accessibility of each trip
     public final double carTravelTime; // Car travel time for this trip (seconds) - always calculated
     public final double ptTravelTime; // PT travel time for this trip (seconds)
-    public final double ptAccessibility; // Ratio: carTravelTime / ptTravelTime (higher = PT more competitive)
+	public final double ptAccessibility; // Ratio: ptTravelTime / carTravelTime (higher = PT slower/worse, lower = PT
+											// faster/better)
 
     private DrtRequest(Builder builder) {
         this.index = builder.index;

@@ -117,6 +117,15 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// -1 => use all available processors; 1 => force sequential
 	private int heuristicsProcessCount = -1;
 
+	// Heuristic pruning (to control combinatorial growth during ride extension)
+	private boolean pruningEnabled = true;
+	private double pruningFraction = 0.5; // keep top fraction per request-set group (0..1]
+	private int pruningMinToKeep = 3; // minimum rides to keep per group
+	private boolean pruningRemoveNonImproving = true; // drop rides where rideDistance > sum(passengerDistances)
+	private String pruningObjective = "rideDistance"; // rideDistance | passengerTravelTime | passengerUtility
+	private String pruningGoal = "minimize"; // minimize | maximize
+	private int pruningTopNPerBase = 0; // if >0, limit per-base extensions to top-N by objective
+
 	// Calculate Shapley values for rides (distance contribution per passenger)
 	private boolean calcShapleyValues = true;
 
@@ -428,6 +437,48 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.heuristicsProcessCount = heuristicsProcessCount;
 	}
 
+	@StringGetter("pruningEnabled")
+	public boolean isPruningEnabled() { return pruningEnabled; }
+
+	@StringSetter("pruningEnabled")
+	public void setPruningEnabled(boolean pruningEnabled) { this.pruningEnabled = pruningEnabled; }
+
+	@StringGetter("pruningFraction")
+	public double getPruningFraction() { return pruningFraction; }
+
+	@StringSetter("pruningFraction")
+	public void setPruningFraction(double pruningFraction) { this.pruningFraction = pruningFraction; }
+
+	@StringGetter("pruningMinToKeep")
+	public int getPruningMinToKeep() { return pruningMinToKeep; }
+
+	@StringSetter("pruningMinToKeep")
+	public void setPruningMinToKeep(int pruningMinToKeep) { this.pruningMinToKeep = pruningMinToKeep; }
+
+	@StringGetter("pruningRemoveNonImproving")
+	public boolean isPruningRemoveNonImproving() { return pruningRemoveNonImproving; }
+
+	@StringSetter("pruningRemoveNonImproving")
+	public void setPruningRemoveNonImproving(boolean pruningRemoveNonImproving) { this.pruningRemoveNonImproving = pruningRemoveNonImproving; }
+
+	@StringGetter("pruningObjective")
+	public String getPruningObjective() { return pruningObjective; }
+
+	@StringSetter("pruningObjective")
+	public void setPruningObjective(String pruningObjective) { this.pruningObjective = pruningObjective; }
+
+	@StringGetter("pruningGoal")
+	public String getPruningGoal() { return pruningGoal; }
+
+	@StringSetter("pruningGoal")
+	public void setPruningGoal(String pruningGoal) { this.pruningGoal = pruningGoal; }
+
+	@StringGetter("pruningTopNPerBase")
+	public int getPruningTopNPerBase() { return pruningTopNPerBase; }
+
+	@StringSetter("pruningTopNPerBase")
+	public void setPruningTopNPerBase(int pruningTopNPerBase) { this.pruningTopNPerBase = pruningTopNPerBase; }
+
 	@StringGetter("calcShapleyValues")
 	public boolean isCalcShapleyValues() {
 		return calcShapleyValues;
@@ -538,6 +589,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Essential when marginalUtilityOfTraveling is zero. Default: true");
 		map.put("heuristicsProcessCount",
 				"Parallelism for Shapley/predecessor calculations. -1 = all processors, 1 = sequential. Default: -1");
+		map.put("pruningEnabled", "Enable heuristic pruning during ride extension to avoid combinatorial explosion. Default: true");
+		map.put("pruningFraction", "Keep top fraction of rides per request-set group after each extension. Range (0,1]. Default: 0.5");
+		map.put("pruningMinToKeep", "Minimum number of rides to keep per request-set group regardless of fraction. Default: 3");
+		map.put("pruningRemoveNonImproving", "Remove rides where route distance exceeds sum of individual passenger distances. Default: true");
+		map.put("pruningObjective", "Objective for ranking rides within groups: rideDistance | passengerTravelTime | passengerUtility. Default: rideDistance");
+		map.put("pruningGoal", "Ranking goal for pruning objective: minimize | maximize. Default: minimize");
+		map.put("pruningTopNPerBase", "Limit number of extensions per base ride to top N by objective (0 disables). Default: 0");
 		map.put("calcShapleyValues", "Calculate Shapley values for each ride (distance contribution per passenger). Default: true");
 		map.put("calcPredecessors",
 				"Calculate predecessor/successor relationships between rides. When enabled, connection cache is automatically written. Default: true");
