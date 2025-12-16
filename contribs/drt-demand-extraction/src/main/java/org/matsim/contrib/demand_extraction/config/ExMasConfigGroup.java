@@ -4,8 +4,6 @@ import java.util.Map;
 import java.util.Set;
 
 import org.matsim.core.config.ReflectiveConfigGroup;
-import org.matsim.core.config.ReflectiveConfigGroup.StringGetter;
-import org.matsim.core.config.ReflectiveConfigGroup.StringSetter;
 
 public class ExMasConfigGroup extends ReflectiveConfigGroup {
     public static final String GROUP_NAME = "exmas";
