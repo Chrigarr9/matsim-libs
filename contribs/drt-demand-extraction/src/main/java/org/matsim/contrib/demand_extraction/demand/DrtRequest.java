@@ -23,6 +23,11 @@ public class DrtRequest {
     // Commute flag - marks trips that are part of a home-work-home pattern
     // When true, this trip is either home->work or work->home (not intermediate work trips)
     public final boolean isCommute;
+    
+    // Education flag - marks trips that are part of a home-education-home pattern
+    // Used in downstream Python optimization to identify education-related trips for special handling
+    // (e.g., school bus optimization, priority scheduling for students)
+    public final boolean isEducation;
 
     // Budget information
     public final double budget; // Utility difference: drtScore - bestModeScore
@@ -31,11 +36,12 @@ public class DrtRequest {
 
     
     // Location (link-based for MATSim routing)
+    // Coordinates are derived from link centroids to ensure consistency with routing
     public final Id<Link> originLinkId;
     public final Id<Link> destinationLinkId;
-    public final double originX; // Kept for backward compatibility/visualization
+    public final double originX; // Derived from originLinkId centroid - for visualization/export
     public final double originY;
-    public final double destinationX;
+    public final double destinationX; // Derived from destinationLinkId centroid - for visualization/export
     public final double destinationY;
     
     // Temporal constraints
@@ -65,6 +71,7 @@ public class DrtRequest {
         this.groupId = builder.groupId;
         this.tripIndex = builder.tripIndex;
         this.isCommute = builder.isCommute;
+        this.isEducation = builder.isEducation;
         this.budget = builder.budget;
         this.bestModeScore = builder.bestModeScore;
         this.bestMode = builder.bestMode;
@@ -98,6 +105,7 @@ public class DrtRequest {
             .groupId(this.groupId)
             .tripIndex(this.tripIndex)
             .isCommute(this.isCommute)
+            .isEducation(this.isEducation)
             .budget(this.budget)
             .bestModeScore(this.bestModeScore)
             .bestMode(this.bestMode)
@@ -186,6 +194,7 @@ public class DrtRequest {
         private String groupId;
         private int tripIndex;
         private boolean isCommute;
+        private boolean isEducation;
         private double budget;
         private double bestModeScore;
         private String bestMode;
@@ -212,6 +221,7 @@ public class DrtRequest {
         public Builder groupId(String groupId) { this.groupId = groupId; return this; }
         public Builder tripIndex(int tripIndex) { this.tripIndex = tripIndex; return this; }
         public Builder isCommute(boolean isCommute) { this.isCommute = isCommute; return this; }
+        public Builder isEducation(boolean isEducation) { this.isEducation = isEducation; return this; }
         public Builder budget(double budget) { this.budget = budget; return this; }
         public Builder bestModeScore(double bestModeScore) { this.bestModeScore = bestModeScore; return this; }
 		public Builder bestMode(String bestMode) {this.bestMode = bestMode; return this;}

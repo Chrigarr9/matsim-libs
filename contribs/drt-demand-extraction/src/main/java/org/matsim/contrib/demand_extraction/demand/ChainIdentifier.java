@@ -15,7 +15,6 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -38,9 +37,6 @@ public class ChainIdentifier {
     // Maps person ID -> trip index -> group ID
     // Group ID format: "personId_subtour_X" for subtours using private vehicles, "personId_trip_X" for independent trips
     private final Map<Id<Person>, Map<Integer, String>> tripToGroupId = new ConcurrentHashMap<>();
-    
-    // Maps person ID -> trip index -> mode used in best baseline (needed to determine vehicle usage)
-    private final Map<Id<Person>, Map<Integer, String>> tripToBestBaselineMode = new ConcurrentHashMap<>();
 
     @Inject
     public ChainIdentifier(ExMasConfigGroup exMasConfig, ModeRoutingCache modeRoutingCache) {
@@ -226,9 +222,5 @@ public class ChainIdentifier {
 
     public Map<Integer, String> getChainIds(Id<Person> personId) {
         return tripToGroupId.get(personId);
-    }
-    
-    public Map<Integer, String> getBestBaselineModes(Id<Person> personId) {
-        return tripToBestBaselineMode.get(personId);
     }
 }

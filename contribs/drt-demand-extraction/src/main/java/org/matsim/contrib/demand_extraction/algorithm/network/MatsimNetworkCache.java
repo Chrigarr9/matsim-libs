@@ -213,6 +213,31 @@ public class MatsimNetworkCache {
 			}
 		}
 	}
+
+	/**
+	 * Export filtered connection cache to CSV file for ExMasCommuter (Python).
+	 * Format: origin,destination,time_bin,travel_time,distance
+	 * 
+	 * @param filepath output file path
+	 * @param connectionKeys set of "origin_destination_timeBin" string keys to export
+	 */
+	public void exportFilteredConnectionCache(String filepath, java.util.Set<String> connectionKeys) throws IOException {
+		try (BufferedWriter writer = new BufferedWriter(new FileWriter(filepath))) {
+			writer.write("origin,destination,time_bin,travel_time,distance\n");
+			
+			for (Map.Entry<CacheKey, TravelSegment> entry : cache.entrySet()) {
+				CacheKey key = entry.getKey();
+				TravelSegment seg = entry.getValue();
+				if (!seg.isReachable()) continue;
+				
+				String lookupKey = key.origin + "_" + key.destination + "_" + key.timeBin;
+				if (connectionKeys.contains(lookupKey)) {
+					writer.write(String.format(java.util.Locale.US, "%s,%s,%d,%.2f,%.2f\n",
+							key.origin, key.destination, key.timeBin, seg.getTravelTime(), seg.getDistance()));
+				}
+			}
+		}
+	}
 	
 	/**
 	 * Import cache from CSV file.
@@ -327,6 +352,12 @@ public class MatsimNetworkCache {
 	
 	// Synchronized to prevent concurrent access to the router (SpeedyALT is not thread-safe)
 	// Multiple threads calling router.calcLeastCostPath() simultaneously causes internal state corruption
+	// TODO: Performance improvement opportunity - consider using ThreadLocal<LeastCostPathCalculator>
+	// to allow parallel routing. This would require:
+	// 1. A Provider<LeastCostPathCalculator> injected instead of a single instance
+	// 2. ThreadLocal.withInitial(() -> routerProvider.get()) to create per-thread routers
+	// 3. Testing to ensure SpeedyALT instances are truly independent when created separately
+	// Current bottleneck: all cache misses are serialized through this method
 	private synchronized TravelSegment computeSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
 		totalRoutingAttempts.incrementAndGet();
 		

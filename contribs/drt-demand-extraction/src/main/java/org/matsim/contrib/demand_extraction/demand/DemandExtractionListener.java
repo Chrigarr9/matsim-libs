@@ -1,9 +1,14 @@
 package org.matsim.contrib.demand_extraction.demand;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.List;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.engine.ExMasEngine;
@@ -11,6 +16,7 @@ import org.matsim.contrib.demand_extraction.algorithm.engine.RidePostProcessor;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.io.ConnectionCacheWriter;
 import org.matsim.contrib.demand_extraction.io.ExMasCsvWriter;
 import org.matsim.contrib.demand_extraction.io.PersonAttributesWriter;
 import org.matsim.core.config.Config;
@@ -27,7 +33,7 @@ public class DemandExtractionListener implements ShutdownListener {
 
     private final ModeRoutingCache modeRoutingCache;
     private final ChainIdentifier chainIdentifier;
-	private final DrtRequestFactory budgetCalculator;
+	private final DrtRequestFactory requestFactory;
     private final Population population;
 	private final ExMasConfigGroup exMasConfig;
 	private final Config config;
@@ -41,7 +47,7 @@ public class DemandExtractionListener implements ShutdownListener {
 	public DemandExtractionListener(
 			ModeRoutingCache modeRoutingCache,
 			ChainIdentifier chainIdentifier,
-			DrtRequestFactory budgetCalculator,
+			DrtRequestFactory requestFactory,
 			Population population,
 			ExMasConfigGroup exMasConfig,
 			Config config,
@@ -52,7 +58,7 @@ public class DemandExtractionListener implements ShutdownListener {
 			RequestSampler requestSampler) {
         this.modeRoutingCache = modeRoutingCache;
         this.chainIdentifier = chainIdentifier;
-        this.budgetCalculator = budgetCalculator;
+        this.requestFactory = requestFactory;
         this.population = population;
 		this.exMasConfig = exMasConfig;
 		this.config = config;
@@ -94,7 +100,7 @@ public class DemandExtractionListener implements ShutdownListener {
 		log.info("");
 		log.info("STEP 3: Building DRT requests with budgets");
 		log.info("----------------------------------------------------------------------");
-		List<DrtRequest> requests = budgetCalculator.buildRequests(population);
+		List<DrtRequest> requests = requestFactory.buildRequests(population);
 		
 		// Apply sampling if configured
 		requests = requestSampler.sampleRequests(requests);
@@ -122,10 +128,9 @@ public class DemandExtractionListener implements ShutdownListener {
 
 		// Create subdirectory for demand extraction outputs
 		String demandOutputDir = outputDirectory.getOutputPath() + "/drt_demand";
-		java.nio.file.Path demandDir = java.nio.file.Paths.get(demandOutputDir);
 		try {
-			java.nio.file.Files.createDirectories(demandDir);
-		} catch (java.io.IOException e) {
+			Files.createDirectories(Paths.get(demandOutputDir));
+		} catch (IOException e) {
 			throw new RuntimeException("Failed to create drt_demand output directory", e);
 		}
 
@@ -155,13 +160,16 @@ public class DemandExtractionListener implements ShutdownListener {
 	ExMasCsvWriter.writeModeCache(modeCacheFilename, modeRoutingCache.getAllModeAttributes());
 	log.info("Wrote mode cache to: {}", modeCacheFilename);
 
-	// 9. Write Connection Cache (Optional - written when predecessors are
-	// calculated)
+	// 9. Write Connection Cache (only connections needed for successors)
 	if (exMasConfig.isCalcPredecessors()) {
 		String connectionCacheFilename = demandOutputDir + "/" + config.controller().getRunId()
 				+ ".connection_cache.csv";
-			log.info("Wrote connection cache");
+		try {
+			ConnectionCacheWriter.writeConnectionCache(connectionCacheFilename, rides, networkCache, exMasConfig.getNetworkTimeBinSize());
+		} catch (IOException e) {
+			log.error("Failed to write connection cache", e);
 		}
+	}
 
 		// Final summary
 		long overallElapsed = System.currentTimeMillis() - overallStartTime;
@@ -175,4 +183,5 @@ public class DemandExtractionListener implements ShutdownListener {
 		log.info("  Output directory: {}", outputDirectory.getOutputPath());
 		log.info("======================================================================");
     }
+
 }

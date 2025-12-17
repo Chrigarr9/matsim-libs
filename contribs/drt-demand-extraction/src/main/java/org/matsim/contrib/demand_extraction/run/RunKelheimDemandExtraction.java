@@ -363,10 +363,17 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize) {
 		exMasConfig.setPrivateVehicleModes(privateVehicles);
 		
 		// === COMMUTE FILTERING ===
-		// Only extract commute trips (home ↔ work)
-		exMasConfig.setCommuteFilter(CommuteFilter.COMMUTES_ONLY);
+		// Extract commute trips (home ↔ work) AND education trips
+		exMasConfig.setCommuteFilter(CommuteFilter.COMMUTES_AND_EDUCATION);
 		exMasConfig.setHomeActivityType("home");
 		exMasConfig.setWorkActivityType("work");
+		exMasConfig.setEducationActivityType("educ");
+		
+		// Filter agents by age (e.g. only adults >= 18)
+		exMasConfig.setMinAge(18);
+		
+		// Optional: Filter by person attribute (e.g. "hasLicense")
+		// exMasConfig.setDrtAvailabilityAttribute("hasLicense");
 		
 		// DRT service quality parameters for budget calculation (aligned with E2E test)
 		exMasConfig.setMinDrtCostPerKm(0.0);
@@ -386,6 +393,18 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize) {
 		// Only consider predecessors that ended within 2 hours before successor starts
 		exMasConfig.setPredecessorsFilterTime(1800.0);
 		exMasConfig.setCalcShapleyValues(true);
+
+		// Pruning settings
+		exMasConfig.setPruningEnabled(true);
+		exMasConfig.setPruningFraction(0.5);
+		exMasConfig.setPruningMinToKeep(3);
+		exMasConfig.setPruningRemoveNonImproving(true);
+		exMasConfig.setPruningObjective("rideDistance");
+		exMasConfig.setPruningGoal("minimize");
+		exMasConfig.setPruningTopNPerBase(0);
+		
+		// Limit successors to improve performance (Top-K pruning)
+		exMasConfig.setMaxSuccessors(50);
 
 		// Scoring
 		exMasConfig.setIncludeOpportunityCost(true);

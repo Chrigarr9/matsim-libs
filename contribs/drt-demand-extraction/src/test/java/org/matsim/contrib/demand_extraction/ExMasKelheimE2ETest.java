@@ -136,10 +136,11 @@ public class ExMasKelheimE2ETest {
 		controler.run();
 
 		// 8. Verify output files exist
-		// Files are prefixed with the run ID from the scenario config
+		// Files are in the drt_demand subdirectory, prefixed with the run ID from the scenario config
 		String runId = config.controller().getRunId();
-		Path requestsFile = testOutputDir.resolve(runId + ".drt_requests.csv");
-		Path ridesFile = testOutputDir.resolve(runId + ".exmas_rides.csv");
+		Path drtDemandDir = testOutputDir.resolve("drt_demand");
+		Path requestsFile = drtDemandDir.resolve(runId + ".drt_requests.csv");
+		Path ridesFile = drtDemandDir.resolve(runId + ".exmas_rides.csv");
 		Assertions.assertTrue(Files.exists(requestsFile), "DRT requests file should exist: " + requestsFile);
 		Assertions.assertTrue(Files.exists(ridesFile), "ExMAS rides file should exist: " + ridesFile);
 

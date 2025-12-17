@@ -173,27 +173,8 @@ public final class ExMasEngine {
 		// Re-assign indices sequentially after sorting
 		for (int i = 0; i < allRides.size(); i++) {
 			Ride oldRide = allRides.get(i);
-			Ride newRide = Ride.builder()
+			Ride newRide = oldRide.toBuilder()
 					.index(i)  // New sequential index
-					.degree(oldRide.getDegree())
-					.kind(oldRide.getKind())
-					.requests(oldRide.getRequests())
-					.originsOrderedRequests(oldRide.getOriginsOrderedRequests())
-					.destinationsOrderedRequests(oldRide.getDestinationsOrderedRequests())
-					.passengerTravelTimes(oldRide.getPassengerTravelTimes())
-					.passengerDistances(oldRide.getPassengerDistances())
-					.passengerNetworkUtilities(oldRide.getPassengerNetworkUtilities())
-					.delays(oldRide.getDelays())
-					.detours(oldRide.getDetours())
-					.remainingBudgets(oldRide.getRemainingBudgets())
-					.maxCosts(oldRide.getMaxCosts())
-					.connectionTravelTimes(oldRide.getConnectionTravelTimes())
-					.connectionDistances(oldRide.getConnectionDistances())
-					.connectionNetworkUtilities(oldRide.getConnectionNetworkUtilities())
-					.startTime(oldRide.getStartTime())
-					.shapleyValues(oldRide.getShapleyValues())
-					.predecessors(oldRide.getPredecessors())
-					.successors(oldRide.getSuccessors())
 					.build();
 			allRides.set(i, newRide);
 		}

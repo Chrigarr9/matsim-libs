@@ -20,11 +20,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
      * Filter mode for commute trips.
      * - ALL: Include all trips regardless of commute status
      * - COMMUTES_ONLY: Only include commute trips (home->work, work->home)
+     * - COMMUTES_AND_EDUCATION: Include commute and education trips (home->education, education->home)
      * - NON_COMMUTES: Exclude commute trips
      */
     public enum CommuteFilter {
         ALL,
         COMMUTES_ONLY,
+        COMMUTES_AND_EDUCATION,
         NON_COMMUTES
     }
 
@@ -34,7 +36,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     // Commute identification settings
     private String homeActivityType = "home";
     private String workActivityType = "work";
+    private String educationActivityType = "education";
     private CommuteFilter commuteFilter = CommuteFilter.ALL;
+
+    // Person filtering settings
+    private int minAge = 18; // Minimum age to use DRT (if age attribute exists)
+    private String drtAvailabilityAttribute = null; // Person attribute to check for DRT eligibility (e.g. "hasLicense")
 
 	// Base modes to evaluate for budget calculation (e.g., car, pt, walk, bike)
 	// Each mode will be routed using its own routing module
@@ -137,6 +144,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// Maximum connection distance as factor of predecessor ride distance; null => unbounded
 	private Double predecessorsFilterDistanceFactor = null;
 
+	// Maximum number of successors to keep per ride (closest by distance)
+	// Reduces memory usage and optimization problem size
+	private int maxSuccessors = 50;
+
 	// Optional intermediate writes (parity with Python, currently unused)
 	private boolean intermediateWrite = false;
 
@@ -189,6 +200,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
         this.workActivityType = workActivityType;
     }
 
+    @StringGetter("educationActivityType")
+    public String getEducationActivityType() {
+        return educationActivityType;
+    }
+
+    @StringSetter("educationActivityType")
+    public void setEducationActivityType(String educationActivityType) {
+        this.educationActivityType = educationActivityType;
+    }
+
     @StringGetter("commuteFilter")
     public CommuteFilter getCommuteFilter() {
         return commuteFilter;
@@ -197,6 +218,26 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     @StringSetter("commuteFilter")
     public void setCommuteFilter(CommuteFilter commuteFilter) {
         this.commuteFilter = commuteFilter;
+    }
+
+    @StringGetter("minAge")
+    public int getMinAge() {
+        return minAge;
+    }
+
+    @StringSetter("minAge")
+    public void setMinAge(int minAge) {
+        this.minAge = minAge;
+    }
+
+    @StringGetter("drtAvailabilityAttribute")
+    public String getDrtAvailabilityAttribute() {
+        return drtAvailabilityAttribute;
+    }
+
+    @StringSetter("drtAvailabilityAttribute")
+    public void setDrtAvailabilityAttribute(String drtAvailabilityAttribute) {
+        this.drtAvailabilityAttribute = drtAvailabilityAttribute;
     }
 
     public Set<String> getBaseModes() {
@@ -517,6 +558,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.predecessorsFilterDistanceFactor = predecessorsFilterDistanceFactor;
 	}
 
+	@StringGetter("maxSuccessors")
+	public int getMaxSuccessors() {
+		return maxSuccessors;
+	}
+
+	@StringSetter("maxSuccessors")
+	public void setMaxSuccessors(int maxSuccessors) {
+		this.maxSuccessors = maxSuccessors;
+	}
+
 	@StringGetter("intermediateWrite")
 	public boolean isIntermediateWrite() {
 		return intermediateWrite;
@@ -544,7 +595,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
         map.put(DRT_MODE, "The mode name of the DRT service to be optimized. Default: 'drt'.");
         map.put("homeActivityType", "Activity type prefix for home activities (used for commute identification). Default: 'home'");
         map.put("workActivityType", "Activity type prefix for work activities (used for commute identification). Default: 'work'");
-        map.put("commuteFilter", "Filter for commute trips. Options: [ALL, COMMUTES_ONLY, NON_COMMUTES]. Default: ALL");
+        map.put("educationActivityType", "Activity type prefix for education activities (used for commute identification). Default: 'education'");
+        map.put("commuteFilter", "Filter for commute trips. Options: [ALL, COMMUTES_ONLY, COMMUTES_AND_EDUCATION, NON_COMMUTES]. Default: ALL");
+        map.put("minAge", "Minimum age to use DRT (if 'age' attribute exists). Default: 18");
+        map.put("drtAvailabilityAttribute", "Person attribute to check for DRT eligibility. If set, only persons with this attribute=true can use DRT. Default: null");
 		map.put("drtRoutingMode",
 				"Routing mode to use for DRT when no DRT routing module exists. Typically 'car' for network-based routing. Default: 'car'");
 		map.put("drtAllowedModes",
@@ -601,6 +655,7 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Maximum time gap (seconds) between predecessor end and successor start. Null/omitted => unbounded.");
 		map.put("predecessorsFilterDistanceFactor",
 				"Maximum connection distance as factor of predecessor ride distance. Null/omitted => unbounded.");
+		map.put("maxSuccessors", "Maximum number of successors to keep per ride (closest by distance). Default: 50");
 		map.put("intermediateWrite",
 				"Write intermediate outputs during heuristics (parity with Python implementation). Default: false");
         return map;

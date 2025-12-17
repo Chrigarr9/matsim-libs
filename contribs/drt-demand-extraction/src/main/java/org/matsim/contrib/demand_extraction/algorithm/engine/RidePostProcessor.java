@@ -91,24 +91,8 @@ public final class RidePostProcessor {
             int[] succs = predsAndSuccs.successors().getOrDefault(ride.getIndex(), new int[0]);
             double[] maxCosts = maxCostByRide.get(ride.getIndex());
 
-            Ride rebuilt = Ride.builder()
-                    .index(ride.getIndex())
-                    .degree(ride.getDegree())
-                    .kind(ride.getKind())
-                    .requests(ride.getRequests())
-                    .originsOrderedRequests(ride.getOriginsOrderedRequests())
-                    .destinationsOrderedRequests(ride.getDestinationsOrderedRequests())
-                    .passengerTravelTimes(ride.getPassengerTravelTimes())
-                    .passengerDistances(ride.getPassengerDistances())
-                    .passengerNetworkUtilities(ride.getPassengerNetworkUtilities())
-                    .delays(ride.getDelays())
-                    .detours(ride.getDetours())
-                    .remainingBudgets(ride.getRemainingBudgets())
+            Ride rebuilt = ride.toBuilder()
                     .maxCosts(maxCosts)
-                    .connectionTravelTimes(ride.getConnectionTravelTimes())
-                    .connectionDistances(ride.getConnectionDistances())
-                    .connectionNetworkUtilities(ride.getConnectionNetworkUtilities())
-                    .startTime(ride.getStartTime())
                     .shapleyValues(shapley)
                     .predecessors(preds)
                     .successors(succs)
@@ -233,7 +217,6 @@ public final class RidePostProcessor {
         @SuppressWarnings("unchecked")
         Id<Link>[] lastDests = (Id<Link>[]) new Id[total];
         List<Set<Integer>> requestSets = new ArrayList<>(total);
-        Map<Integer, Integer> rideIndexToPosition = new HashMap<>(total);
 
         for (int idx = 0; idx < total; idx++) {
             Ride ride = sortedByStart.get(idx);
@@ -245,20 +228,13 @@ public final class RidePostProcessor {
             firstOrigins[idx] = origins.length > 0 ? origins[0] : null;
             lastDests[idx] = destinations.length > 0 ? destinations[destinations.length - 1] : null;
             requestSets.add(Arrays.stream(ride.getRequestIndices()).boxed().collect(Collectors.toSet()));
-            rideIndexToPosition.put(ride.getIndex(), idx);
         }
-
-        int[] sortedByEnd = IntStream.range(0, total)
-                .boxed()
-                .sorted(Comparator.comparingDouble(i -> endTimes[i]))
-                .mapToInt(Integer::intValue)
-                .toArray();
-        double[] endTimesSorted = Arrays.stream(sortedByEnd).mapToDouble(i -> endTimes[i]).toArray();
 
         double filterTime = config.getPredecessorsFilterTime() != null ? config.getPredecessorsFilterTime() : Double.POSITIVE_INFINITY;
         double filterDistanceFactor = config.getPredecessorsFilterDistanceFactor() != null
                 ? config.getPredecessorsFilterDistanceFactor()
                 : Double.POSITIVE_INFINITY;
+        int maxSuccessors = config.getMaxSuccessors();
 
         Map<Integer, List<Integer>> predecessors = new ConcurrentHashMap<>();
         Map<Integer, List<Integer>> successors = new ConcurrentHashMap<>();
@@ -274,79 +250,105 @@ public final class RidePostProcessor {
         }
         Counter counter = new Counter("      Processed ", " / " + total + " rides...", 2);
 
-        stream.forEach(j -> {
+        // Forward search: For each ride i, find successors j
+        stream.forEach(i -> {
             counter.incCounter();
-            double currentStart = startTimes[j];
-            double minEndTime = currentStart - filterTime;
-            double maxEndTime = currentStart;
+            double endTime = endTimes[i];
+            double minStartTime = endTime; // Successor must start after predecessor ends
+            double maxStartTime = endTime + filterTime;
 
-            int sliceStart = Arrays.binarySearch(endTimesSorted, minEndTime);
+            // Find range in sortedByStart [minStartTime, maxStartTime]
+            int sliceStart = Arrays.binarySearch(startTimes, minStartTime);
             if (sliceStart < 0) {
                 sliceStart = -sliceStart - 1;
+            } else {
+                // Handle duplicates: move left to first occurrence
+                while (sliceStart > 0 && startTimes[sliceStart - 1] >= minStartTime) {
+                    sliceStart--;
+                }
             }
-            int sliceEnd = Arrays.binarySearch(endTimesSorted, maxEndTime);
+            
+            int sliceEnd = Arrays.binarySearch(startTimes, maxStartTime);
             if (sliceEnd < 0) {
                 sliceEnd = -sliceEnd - 1;
             } else {
                 sliceEnd += 1; // upper bound
             }
 
-            List<Integer> preds = new ArrayList<>();
-            for (int idx = sliceStart; idx < sliceEnd; idx++) {
-                int i = sortedByEnd[idx];
-                if (i >= j) {
-                    continue;
-                }
+            List<ConnectionCandidate> candidates = new ArrayList<>();
 
+            for (int j = sliceStart; j < sliceEnd; j++) {
+                if (i == j) continue; 
+
+                // Basic checks
                 Id<Link> from = lastDests[i];
                 Id<Link> to = firstOrigins[j];
-                if (from == null || to == null) {
+                if (from == null || to == null) continue;
+
+                // Disjoint requests check
+                if (!Collections.disjoint(requestSets.get(i), requestSets.get(j))) {
                     continue;
                 }
 
-                TravelSegment connection = networkCache.getSegment(from, to, endTimes[i]);
-                if (!connection.isReachable()) {
-                    continue;
-                }
+                // Network routing
+                TravelSegment connection = networkCache.getSegment(from, to, endTime);
+                if (!connection.isReachable()) continue;
 
-                double arrivalTime = endTimes[i] + connection.getTravelTime();
-                if (arrivalTime < minEndTime || arrivalTime > maxEndTime) {
-                    continue;
-                }
+                double arrivalTime = endTime + connection.getTravelTime();
+                // Arrival at successor start must be feasible? 
+                // Actually, successor starts at startTimes[j].
+                // We arrive at 'arrivalTime'.
+                // If arrivalTime > startTimes[j], we are late.
+                if (arrivalTime > startTimes[j]) continue;
+                
+                // Also check if we arrive too early? (Wait time constraint?)
+                // The filterTime constrains (startTimes[j] - endTime).
+                // So the gap is bounded.
 
                 if (Double.isFinite(filterDistanceFactor)
                         && connection.getDistance() > rideDistances[i] * filterDistanceFactor) {
                     continue;
                 }
 
-                if (!Collections.disjoint(requestSets.get(i), requestSets.get(j))) {
-                    continue;
-                }
-
-                preds.add(sortedByStart.get(i).getIndex());
+                double idlingTime = startTimes[j] - arrivalTime;
+                candidates.add(new ConnectionCandidate(sortedByStart.get(j).getIndex(), to, connection.getDistance(), idlingTime, connection.getTravelTime()));
             }
 
-            Collections.sort(preds);
-            predecessors.put(sortedByStart.get(j).getIndex(), preds);
+            // Prune to Top-K closest successors
+            if (maxSuccessors > 0 && candidates.size() > maxSuccessors) {
+                // Keep smallest score (distance * idling)
+                // "Short distance doesn't help us if we have a low idling time" -> interpreted as minimizing the product
+                // We use Math.max(1.0, idling) to ensure distance is still the primary factor when idling is near zero
+                candidates.sort(Comparator.comparingDouble(ConnectionCandidate::getScore));
+                candidates = candidates.subList(0, maxSuccessors);
+            }
+
+            List<Integer> succIds = candidates.stream().map(c -> c.rideId).collect(Collectors.toList());
+            successors.put(sortedByStart.get(i).getIndex(), succIds);
         });
 
 		long routingTime = System.currentTimeMillis() - routingStartTime;
 		log.info("    Network routing completed in {} ms", routingTime);
 
-		log.info("    Deriving successor relationships...");
-        // Derive successors from predecessors
-        for (Map.Entry<Integer, List<Integer>> entry : predecessors.entrySet()) {
-            int rideId = entry.getKey();
-            for (int predId : entry.getValue()) {
-                successors.computeIfAbsent(predId, k -> new ArrayList<>()).add(rideId);
+		log.info("    Deriving predecessor relationships...");
+        // Derive predecessors from successors
+        for (Map.Entry<Integer, List<Integer>> entry : successors.entrySet()) {
+            int predId = entry.getKey();
+            for (int succId : entry.getValue()) {
+                predecessors.computeIfAbsent(succId, k -> new ArrayList<>()).add(predId);
             }
         }
 
 		log.info("    Converting to arrays...");
         Map<Integer, int[]> predArrays = new HashMap<>();
         Map<Integer, int[]> succArrays = new HashMap<>();
-        predecessors.forEach((rideId, list) -> predArrays.put(rideId, list.stream().mapToInt(Integer::intValue).toArray()));
+        predecessors.forEach((rideId, list) -> {
+            Collections.sort(list);
+            predArrays.put(rideId, list.stream().mapToInt(Integer::intValue).toArray());
+        });
         successors.forEach((rideId, list) -> {
+            // Already sorted by distance if pruned, but let's sort by ID for consistency or keep distance order?
+            // The original code sorted by ID. Let's stick to ID sort for deterministic output.
             Collections.sort(list);
             succArrays.put(rideId, list.stream().mapToInt(Integer::intValue).toArray());
         });
@@ -355,6 +357,12 @@ public final class RidePostProcessor {
 		log.info("    Found {} predecessor connections", totalPreds);
 
         return new PredSucc(predArrays, succArrays);
+    }
+
+    private record ConnectionCandidate(int rideId, Id<Link> toLink, double distance, double idlingTime, double travelTime) {
+        double getScore() {
+            return distance * Math.max(1.0, idlingTime);
+        }
     }
 
     private int resolveParallelism() {

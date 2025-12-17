@@ -169,16 +169,15 @@ public final class RideExtender {
 			return rides;
 		}
 
+		int initialTotal = rides.size();
+		int nonImprovingRemoved = 0;
+
 		// Remove non-improving rides (rideDistance > sum of passenger distances)
-		int before = rides.size();
 		if (exMasConfig.isPruningRemoveNonImproving()) {
 			rides = rides.stream()
 					.filter(r -> r.getRideDistance() <= sumRequestDistances(r))
 					.collect(Collectors.toList());
-			int removed = before - rides.size();
-			if (removed > 0) {
-				log.info("  Pruning: removed {} non-improving rides", removed);
-			}
+			nonImprovingRemoved = initialTotal - rides.size();
 		}
 
 		double fraction = Math.max(0.0, Math.min(1.0, exMasConfig.getPruningFraction()));
@@ -186,38 +185,46 @@ public final class RideExtender {
 		boolean minimize = exMasConfig.getPruningGoal() == null
 				|| exMasConfig.getPruningGoal().equalsIgnoreCase("minimize");
 
-		if (fraction >= 1.0 && minKeep <= 0) {
+		if (fraction >= 1.0 && minKeep <= 0 && nonImprovingRemoved == 0) {
 			return rides;
 		}
 
-		Map<String, List<Ride>> byGroup = new HashMap<>();
-		for (Ride r : rides) {
-			int[] idx = r.getRequestIndices().clone();
-			Arrays.sort(idx);
-			String key = Arrays.toString(idx);
-			byGroup.computeIfAbsent(key, k -> new ArrayList<>()).add(r);
+		int beforeFractional = rides.size();
+		List<Ride> kept;
+
+		if (fraction >= 1.0 && minKeep <= 0) {
+			kept = rides;
+		} else {
+			Map<String, List<Ride>> byGroup = new HashMap<>();
+			for (Ride r : rides) {
+				int[] idx = r.getRequestIndices().clone();
+				Arrays.sort(idx);
+				String key = Arrays.toString(idx);
+				byGroup.computeIfAbsent(key, k -> new ArrayList<>()).add(r);
+			}
+
+			kept = new ArrayList<>(beforeFractional);
+			for (Map.Entry<String, List<Ride>> e : byGroup.entrySet()) {
+				List<Ride> group = e.getValue();
+				Comparator<Ride> cmp = Comparator.comparingDouble(this::objectiveValue);
+				if (!minimize)
+					cmp = cmp.reversed();
+				group.sort(cmp);
+
+				int size = group.size();
+				int keep = (int) Math.ceil(size * fraction);
+				keep = Math.max(keep, minKeep);
+				keep = Math.min(keep, size);
+				kept.addAll(group.subList(0, keep));
+			}
 		}
 
-		int initial = rides.size();
-		List<Ride> kept = new ArrayList<>(initial);
-		for (Map.Entry<String, List<Ride>> e : byGroup.entrySet()) {
-			List<Ride> group = e.getValue();
-			Comparator<Ride> cmp = Comparator.comparingDouble(this::objectiveValue);
-			if (!minimize)
-				cmp = cmp.reversed();
-			group.sort(cmp);
+		int fractionalRemoved = beforeFractional - kept.size();
+		int totalRemoved = nonImprovingRemoved + fractionalRemoved;
 
-			int size = group.size();
-			int keep = (int) Math.ceil(size * fraction);
-			keep = Math.max(keep, minKeep);
-			keep = Math.min(keep, size);
-			kept.addAll(group.subList(0, keep));
-		}
+		log.info("  Pruning stats: Total candidates: {}, Pruned: {} ({} non-improving, {} fractional), Remaining: {}",
+				initialTotal, totalRemoved, nonImprovingRemoved, fractionalRemoved, kept.size());
 
-		int removed = initial - kept.size();
-		if (removed > 0) {
-			log.info("  Pruning: fractional kept {} of {} rides (removed {})", kept.size(), initial, removed);
-		}
 		return kept;
 	}
 
@@ -264,24 +271,8 @@ public final class RideExtender {
 	 * Rebuild ride with new index.
 	 */
 	private Ride rebuildWithIndex(Ride ride, int newIndex) {
-		return Ride.builder()
+		return ride.toBuilder()
 				.index(newIndex)
-				.degree(ride.getDegree())
-				.kind(ride.getKind())
-				.requests(ride.getRequests())
-				.originsOrderedRequests(ride.getOriginsOrderedRequests())
-				.destinationsOrderedRequests(ride.getDestinationsOrderedRequests())
-				.passengerTravelTimes(ride.getPassengerTravelTimes())
-				.passengerDistances(ride.getPassengerDistances())
-				.passengerNetworkUtilities(ride.getPassengerNetworkUtilities())
-				.delays(ride.getDelays())
-				.detours(ride.getDetours())
-				.remainingBudgets(ride.getRemainingBudgets())
-				.maxCosts(ride.getMaxCosts())
-				.connectionTravelTimes(ride.getConnectionTravelTimes())
-				.connectionDistances(ride.getConnectionDistances())
-				.connectionNetworkUtilities(ride.getConnectionNetworkUtilities())
-				.startTime(ride.getStartTime())
 				.build();
 	}
 

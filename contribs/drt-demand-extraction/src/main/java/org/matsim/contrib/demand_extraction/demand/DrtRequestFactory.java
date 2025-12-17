@@ -94,6 +94,30 @@ public class DrtRequestFactory {
 
 		for (Person person : sortedPersons) {
 			processedPersons++;
+
+			// 1. Age Filter
+			int age = getPersonAge(person);
+			if (age >= 0 && age < exmasConfig.getMinAge()) {
+				// Person too young
+				continue;
+			}
+
+			// 2. DRT Availability Filter
+			if (exmasConfig.getDrtAvailabilityAttribute() != null) {
+				Object attr = person.getAttributes().getAttribute(exmasConfig.getDrtAvailabilityAttribute());
+				boolean isAvailable = false;
+				if (attr instanceof Boolean) {
+					isAvailable = (Boolean) attr;
+				} else if (attr instanceof String) {
+					isAvailable = Boolean.parseBoolean((String) attr);
+				}
+				
+				if (!isAvailable) {
+					// DRT not available for this person
+					continue;
+				}
+			}
+
 			Plan plan = person.getSelectedPlan();
 
 			// Get chain/group assignments (trip index -> group ID)
@@ -137,10 +161,15 @@ public class DrtRequestFactory {
 					continue;
 				}
 
-				// Check commute status and apply filter
+				// Check commute/education status and apply filter
 				boolean isCommute = commuteIdentifier.isCommute(person.getId(), tripIdx);
+				boolean isEducation = commuteIdentifier.isEducation(person.getId(), tripIdx);
 
 				if (commuteFilter == ExMasConfigGroup.CommuteFilter.COMMUTES_ONLY && !isCommute) {
+					filteredByCommute++;
+					continue;
+				}
+				if (commuteFilter == ExMasConfigGroup.CommuteFilter.COMMUTES_AND_EDUCATION && !isCommute && !isEducation) {
 					filteredByCommute++;
 					continue;
 				}
@@ -198,14 +227,17 @@ public class DrtRequestFactory {
 		Activity originActivity = trip.getOriginActivity();
 		Activity destActivity = trip.getDestinationActivity();
 
-		Coord originCoord = getCoord(originActivity);
-		Coord destCoord = getCoord(destActivity);
-
 		// Get link IDs (activities on links)
 		Id<Link> originLinkId = getLinkId(originActivity);
 		Id<Link> destinationLinkId = getLinkId(destActivity);
 
-		// Calculate beeline distance for validation
+		// IMPORTANT: Derive coordinates from link centroids, not from activities
+		// This ensures coordinates are always consistent with the links used for routing
+		// Activity coordinates may differ from their assigned link (e.g., facility location vs link centroid)
+		Coord originCoord = network.getLinks().get(originLinkId).getCoord();
+		Coord destCoord = network.getLinks().get(destinationLinkId).getCoord();
+
+		// Calculate beeline distance between link centroids for validation
 		double beelineDistance = org.matsim.core.utils.geometry.CoordUtils.calcEuclideanDistance(originCoord, destCoord);
 
 		// Skip trips with zero travel time/distance (same origin-destination)
@@ -358,25 +390,6 @@ public class DrtRequestFactory {
 	}
 
 	/**
-	 * Gets the coordinate of an activity, either from its coord attribute or from
-	 * its link.
-	 * This handles both activity-on-link and activity-with-coordinates models.
-	 */
-	private Coord getCoord(Activity activity) {
-		Coord coord = activity.getCoord();
-		if (coord != null) {
-			return coord;
-		}
-
-		// Fall back to link coordinate if activity doesn't have explicit coordinate
-		if (activity.getLinkId() != null) {
-			return network.getLinks().get(activity.getLinkId()).getCoord();
-		}
-
-		throw new IllegalStateException("Activity has neither coordinate nor link ID: " + activity);
-	}
-
-	/**
 	 * Gets the link ID of an activity. If activity has no link, finds nearest link
 	 * to coordinate.
 	 */
@@ -392,5 +405,19 @@ public class DrtRequestFactory {
 		}
 
 		throw new IllegalStateException("Activity has neither coordinate nor link ID: " + activity);
+	}
+
+	private int getPersonAge(Person person) {
+		Object ageAttr = person.getAttributes().getAttribute("age");
+		if (ageAttr instanceof Integer) {
+			return (Integer) ageAttr;
+		} else if (ageAttr instanceof String) {
+			try {
+				return Integer.parseInt((String) ageAttr);
+			} catch (NumberFormatException e) {
+				// ignore
+			}
+		}
+		return -1; // Age unknown
 	}
 }

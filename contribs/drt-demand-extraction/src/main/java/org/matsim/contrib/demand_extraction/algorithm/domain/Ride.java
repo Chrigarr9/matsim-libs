@@ -188,6 +188,35 @@ public final class Ride {
         return new Builder();
     }
 
+    /**
+     * Creates a new Builder pre-populated with all values from this Ride.
+     * Use this to create modified copies of existing rides without manually copying all fields.
+     * Example: ride.toBuilder().index(newIndex).build()
+     */
+    public Builder toBuilder() {
+        return new Builder()
+            .index(this.index)
+            .degree(this.degree)
+            .kind(this.kind)
+            .requests(this.requests)
+            .originsOrderedRequests(this.originsOrderedRequests)
+            .destinationsOrderedRequests(this.destinationsOrderedRequests)
+            .passengerTravelTimes(this.passengerTravelTimes)
+            .passengerDistances(this.passengerDistances)
+            .passengerNetworkUtilities(this.passengerNetworkUtilities)
+            .delays(this.delays)
+            .detours(this.detours)
+            .remainingBudgets(this.remainingBudgets)
+            .maxCosts(this.maxCosts)
+            .connectionTravelTimes(this.connectionTravelTimes)
+            .connectionDistances(this.connectionDistances)
+            .connectionNetworkUtilities(this.connectionNetworkUtilities)
+            .startTime(this.startTime)
+            .shapleyValues(this.shapleyValues)
+            .predecessors(this.predecessors)
+            .successors(this.successors);
+    }
+
     public static final class Builder {
         private int index;
         private int degree;

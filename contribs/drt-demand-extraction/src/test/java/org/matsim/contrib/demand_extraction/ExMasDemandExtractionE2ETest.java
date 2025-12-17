@@ -88,11 +88,14 @@ public class ExMasDemandExtractionE2ETest {
 		controler.addOverridingModule(new DemandExtractionModule());
 		controler.run();
 
-		// 8. Verify output files exist
-		Path requestsFile = testOutputDir.resolve("drt_requests.csv");
-		Path ridesFile = testOutputDir.resolve("exmas_rides.csv");
-		Path connectionCacheFile = testOutputDir.resolve("connection_cache.csv");
-		Path personAttributesFile = testOutputDir.resolve("person_attributes.csv");
+		// 8. Verify output files exist in drt_demand subdirectory
+		// Note: runId is null by default in this test config
+		Path demandDir = testOutputDir.resolve("drt_demand");
+		Path requestsFile = demandDir.resolve("null.drt_requests.csv");
+		Path ridesFile = demandDir.resolve("null.exmas_rides.csv");
+		Path connectionCacheFile = demandDir.resolve("null.connection_cache.csv");
+		Path personAttributesFile = demandDir.resolve("null.person_attributes.csv");
+		
 		Assertions.assertTrue(Files.exists(requestsFile), "DRT requests file should exist: " + requestsFile);
 		Assertions.assertTrue(Files.exists(ridesFile), "ExMAS rides file should exist: " + ridesFile);
 		Assertions.assertTrue(Files.exists(connectionCacheFile), "Connection cache file should exist: " + connectionCacheFile);

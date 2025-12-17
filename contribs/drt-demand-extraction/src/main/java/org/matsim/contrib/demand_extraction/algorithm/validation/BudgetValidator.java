@@ -90,27 +90,9 @@ public class BudgetValidator {
 			}
 		}
 
-		// Create new Ride with remainingBudgets populated
-		return Ride.builder()
-				.index(ride.getIndex())
-				.degree(ride.getDegree())
-				.kind(ride.getKind())
-				.requests(ride.getRequests())
-				.originsOrderedRequests(ride.getOriginsOrderedRequests())
-				.destinationsOrderedRequests(ride.getDestinationsOrderedRequests())
-				.passengerTravelTimes(ride.getPassengerTravelTimes())
-				.passengerDistances(ride.getPassengerDistances())
-				.passengerNetworkUtilities(ride.getPassengerNetworkUtilities())
-				.delays(ride.getDelays())
-				.detours(ride.getDetours())
+		// Create new Ride with remainingBudgets populated using toBuilder()
+		return ride.toBuilder()
 				.remainingBudgets(remainingBudgets)
-				.connectionTravelTimes(ride.getConnectionTravelTimes())
-				.connectionDistances(ride.getConnectionDistances())
-				.connectionNetworkUtilities(ride.getConnectionNetworkUtilities())
-				.startTime(ride.getStartTime())
-				.shapleyValues(ride.getShapleyValues())
-				.predecessors(ride.getPredecessors())
-				.successors(ride.getSuccessors())
 				.build();
 	}
 

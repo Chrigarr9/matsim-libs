@@ -43,6 +43,8 @@ public class CommuteIdentifier {
 
 	// Maps personId -> tripIndex -> isCommute
 	private final Map<Id<Person>, Set<Integer>> commuteTrips = new HashMap<>();
+	// Maps personId -> tripIndex -> isEducation
+	private final Map<Id<Person>, Set<Integer>> educationTrips = new HashMap<>();
 
 	@Inject
 	public CommuteIdentifier(ExMasConfigGroup config) {
@@ -50,45 +52,53 @@ public class CommuteIdentifier {
 	}
 
 	/**
-	 * Analyze population and identify all commute trips.
-	 * Must be called before using isCommute().
+	 * Analyze population and identify all commute and education trips.
+	 * Must be called before using isCommute() or isEducation().
 	 */
 	public void identifyCommutes(Population population) {
-		log.info("Identifying commute trips (home={}, work={})...",
-				config.getHomeActivityType(), config.getWorkActivityType());
+		log.info("Identifying mandatory trips (home={}, work={}, education={})...",
+				config.getHomeActivityType(), config.getWorkActivityType(), config.getEducationActivityType());
 
 		int totalPersons = 0;
 		int personsWithCommutes = 0;
+		int personsWithEducation = 0;
 		int totalCommuteTrips = 0;
+		int totalEducationTrips = 0;
 
 		for (Person person : population.getPersons().values()) {
 			totalPersons++;
-			Set<Integer> personCommuteTrips = identifyPersonCommutes(person);
-
+			
+			// Identify work commutes
+			Set<Integer> personCommuteTrips = identifyPersonTrips(person, config.getWorkActivityType());
 			if (!personCommuteTrips.isEmpty()) {
 				commuteTrips.put(person.getId(), personCommuteTrips);
 				personsWithCommutes++;
 				totalCommuteTrips += personCommuteTrips.size();
 			}
+
+			// Identify education trips
+			Set<Integer> personEducationTrips = identifyPersonTrips(person, config.getEducationActivityType());
+			if (!personEducationTrips.isEmpty()) {
+				educationTrips.put(person.getId(), personEducationTrips);
+				personsWithEducation++;
+				totalEducationTrips += personEducationTrips.size();
+			}
 		}
 
-		log.info("Commute identification complete: {} commute trips for {} persons (of {} total)",
-				totalCommuteTrips, personsWithCommutes, totalPersons);
+		log.info("Mandatory trip identification complete:");
+		log.info("  - Commutes: {} trips for {} persons", totalCommuteTrips, personsWithCommutes);
+		log.info("  - Education: {} trips for {} persons", totalEducationTrips, personsWithEducation);
+		log.info("  - Total persons scanned: {}", totalPersons);
 	}
 
 	/**
-	 * Identify commute trips for a single person.
-	 *
-	 * Algorithm:
-	 * 1. Find home->work trips
-	 * 2. For each home->work, find matching work->home (may skip intermediate trips)
-	 * 3. Mark both as commutes
+	 * Identify trips for a single person matching home -> activity -> home pattern.
 	 */
-	private Set<Integer> identifyPersonCommutes(Person person) {
-		Set<Integer> commutes = new HashSet<>();
+	private Set<Integer> identifyPersonTrips(Person person, String targetActivityType) {
+		Set<Integer> tripsOfInterest = new HashSet<>();
 
 		if (person.getSelectedPlan() == null) {
-			return commutes;
+			return tripsOfInterest;
 		}
 
 		List<TripStructureUtils.Trip> trips = TripStructureUtils.getTrips(person.getSelectedPlan());
@@ -98,37 +108,41 @@ public class CommuteIdentifier {
 			String originType = getActivityTypePrefix(outbound.getOriginActivity().getType());
 			String destType = getActivityTypePrefix(outbound.getDestinationActivity().getType());
 
-			// Check if this is a home -> work trip
-			if (isHomeActivity(originType) && isWorkActivity(destType)) {
-				// Look for matching work -> home trip
+			// Check for home -> target
+			if (isHomeActivity(originType) && isTargetActivity(destType, targetActivityType)) {
+				// Found outbound trip. Now look for return trip.
 				for (int j = i + 1; j < trips.size(); j++) {
-					TripStructureUtils.Trip returnTrip = trips.get(j);
-					String returnOriginType = getActivityTypePrefix(returnTrip.getOriginActivity().getType());
-					String returnDestType = getActivityTypePrefix(returnTrip.getDestinationActivity().getType());
+					TripStructureUtils.Trip inbound = trips.get(j);
+					String inOrigin = getActivityTypePrefix(inbound.getOriginActivity().getType());
+					String inDest = getActivityTypePrefix(inbound.getDestinationActivity().getType());
 
-					if (isWorkActivity(returnOriginType) && isHomeActivity(returnDestType)) {
-						// Found a commute pair
-						commutes.add(i);
-						commutes.add(j);
-						break; // Stop looking for this outbound trip's return
+					if (isTargetActivity(inOrigin, targetActivityType) && isHomeActivity(inDest)) {
+						// Found return trip. Mark both.
+						tripsOfInterest.add(i);
+						tripsOfInterest.add(j);
+						break; 
 					}
 				}
 			}
 		}
 
-		return commutes;
+		return tripsOfInterest;
 	}
 
-	/**
-	 * Check if a trip is a commute trip.
-	 *
-	 * @param personId the person ID
-	 * @param tripIndex the trip index within the person's plan
-	 * @return true if this trip is part of a home-work-home commute pattern
-	 */
 	public boolean isCommute(Id<Person> personId, int tripIndex) {
-		Set<Integer> personCommutes = commuteTrips.get(personId);
-		return personCommutes != null && personCommutes.contains(tripIndex);
+		return commuteTrips.containsKey(personId) && commuteTrips.get(personId).contains(tripIndex);
+	}
+
+	public boolean isEducation(Id<Person> personId, int tripIndex) {
+		return educationTrips.containsKey(personId) && educationTrips.get(personId).contains(tripIndex);
+	}
+
+	private boolean isHomeActivity(String type) {
+		return type.startsWith(config.getHomeActivityType().toLowerCase());
+	}
+
+	private boolean isTargetActivity(String type, String targetType) {
+		return type.startsWith(targetType.toLowerCase());
 	}
 
 	/**
@@ -152,13 +166,5 @@ public class CommuteIdentifier {
 			}
 		}
 		return activityType.toLowerCase();
-	}
-
-	private boolean isHomeActivity(String type) {
-		return type.startsWith(config.getHomeActivityType().toLowerCase());
-	}
-
-	private boolean isWorkActivity(String type) {
-		return type.startsWith(config.getWorkActivityType().toLowerCase());
 	}
 }
