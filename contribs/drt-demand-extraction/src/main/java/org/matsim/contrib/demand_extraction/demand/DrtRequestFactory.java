@@ -316,7 +316,7 @@ public class DrtRequestFactory {
 		
 		// Apply absolute detour cap if configured
 		if (exmasConfig.getMaxAbsoluteDetour() != null) {
-			maxAbsoluteDetour = Math.min(maxAbsoluteDetour, exmasConfig.getMaxAbsoluteDetour());
+			maxAbsoluteDetour = Math.min(maxAbsoluteDetour, (double) exmasConfig.getMaxAbsoluteDetour());
 		}
 		
 		double effectiveMaxDetourFactor = 1.0 + (maxAbsoluteDetour / drtAttrs.travelTime);

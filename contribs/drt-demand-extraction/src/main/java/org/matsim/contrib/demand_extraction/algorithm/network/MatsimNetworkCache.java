@@ -34,6 +34,7 @@ import org.matsim.vehicles.VehicleUtils;
 import com.google.inject.Inject;
 import com.google.inject.Injector;
 import com.google.inject.Key;
+import com.google.inject.Provider;
 import com.google.inject.Singleton;
 import com.google.inject.name.Names;
 
@@ -67,7 +68,12 @@ public class MatsimNetworkCache {
 	private static final Logger log = LogManager.getLogger(MatsimNetworkCache.class);
 	
 	private final Network network;
-	private final LeastCostPathCalculator router;
+	private final Provider<LeastCostPathCalculator> routerProvider;
+	private final ThreadLocal<LeastCostPathCalculator> threadLocalRouter;
+	private final boolean useSharedDeterministicRouter;
+	private final boolean quantizeDeterministicSegments;
+	private final LeastCostPathCalculator sharedRouter;
+	private final Object routerLock = new Object();
 	private final TravelTime travelTime;
 	private final TravelDisutility travelDisutility;
 	private final int timeBinSize;
@@ -99,8 +105,18 @@ public class MatsimNetworkCache {
 		String drtMode = config.getDrtMode();
 		String drtRouterName = "direct" + StringUtils.capitalize(drtMode) + "Router";
 
-		// Get DRT-specific router (uses filtered network)
-		this.router = injector.getInstance(Key.get(LeastCostPathCalculator.class, Names.named(drtRouterName)));
+		// Get DRT-specific router provider (uses filtered network)
+		this.routerProvider = injector.getProvider(Key.get(LeastCostPathCalculator.class, Names.named(drtRouterName)));
+		this.threadLocalRouter = ThreadLocal.withInitial(routerProvider::get);
+		// In deterministic mode, avoid subtle per-instance differences from multiple router instances.
+		// Some router implementations (e.g. SpeedyALT) can vary slightly between instances.
+		// We serialize access through a single shared instance to make cached values invariant
+		// to thread scheduling.
+		this.useSharedDeterministicRouter = config.isUseDeterministicNetworkRouting();
+		// Additionally, quantize segment metrics to avoid tiny run-to-run floating drift
+		// (e.g., on multithreaded travel-time aggregation) that can flip 2-decimal CSV rounding.
+		this.quantizeDeterministicSegments = config.isUseDeterministicNetworkRouting();
+		this.sharedRouter = useSharedDeterministicRouter ? routerProvider.get() : null;
 
 		// Try to get DRT-specific TravelTime, fall back to car
 		TravelTime drtTravelTime;
@@ -153,6 +169,12 @@ public class MatsimNetworkCache {
 	/**
 	 * Get travel segment between links at specified departure time.
 	 * Results are cached per time bin for efficiency.
+	 *
+	 * IMPORTANT: The cache key includes the time bin, not the exact departure time.
+	 * To keep results deterministic (especially under parallel execution), we compute
+	 * the cached segment for a bin using a canonical departure time: the midpoint of
+	 * the bin. Otherwise, the "first" caller within a bin would determine the cached
+	 * value, which can vary with thread scheduling.
 	 * 
 	 * @param originLinkId origin link
 	 * @param destLinkId destination link
@@ -162,13 +184,15 @@ public class MatsimNetworkCache {
 	public TravelSegment getSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
 		// Calculate time bin
 		int timeBin = (int) (departureTime / timeBinSize);
+		// Canonical departure time for this bin: midpoint
+		double canonicalDepartureTime = (timeBin + 0.5) * timeBinSize;
 		
 		CacheKey key = new CacheKey(originLinkId, destLinkId, timeBin);
 		
 		// Use computeIfAbsent for atomic cache operations
 		// This ensures only ONE thread computes the segment for a given key,
 		// preventing race conditions in the SpeedyALT router
-		return cache.computeIfAbsent(key, k -> computeSegment(originLinkId, destLinkId, departureTime));
+		return cache.computeIfAbsent(key, k -> computeSegment(originLinkId, destLinkId, canonicalDepartureTime));
 	}
 	
 	/**
@@ -224,17 +248,42 @@ public class MatsimNetworkCache {
 	public void exportFilteredConnectionCache(String filepath, java.util.Set<String> connectionKeys) throws IOException {
 		try (BufferedWriter writer = new BufferedWriter(new FileWriter(filepath))) {
 			writer.write("origin,destination,time_bin,travel_time,distance\n");
-			
-			for (Map.Entry<CacheKey, TravelSegment> entry : cache.entrySet()) {
-				CacheKey key = entry.getKey();
-				TravelSegment seg = entry.getValue();
-				if (!seg.isReachable()) continue;
-				
-				String lookupKey = key.origin + "_" + key.destination + "_" + key.timeBin;
-				if (connectionKeys.contains(lookupKey)) {
-					writer.write(String.format(java.util.Locale.US, "%s,%s,%d,%.2f,%.2f\n",
-							key.origin, key.destination, key.timeBin, seg.getTravelTime(), seg.getDistance()));
+
+			// Deterministic output: sort keys and write in that order.
+			// Avoids nondeterminism from HashSet/ConcurrentHashMap iteration.
+			List<String> sortedKeys = connectionKeys.stream().sorted().toList();
+			for (String lookupKey : sortedKeys) {
+				int lastUnderscore = lookupKey.lastIndexOf('_');
+				int secondLastUnderscore = lookupKey.lastIndexOf('_', lastUnderscore - 1);
+				if (lastUnderscore < 0 || secondLastUnderscore < 0) {
+					continue;
 				}
+
+				String originStr = lookupKey.substring(0, secondLastUnderscore);
+				String destStr = lookupKey.substring(secondLastUnderscore + 1, lastUnderscore);
+				int timeBin;
+				try {
+					timeBin = Integer.parseInt(lookupKey.substring(lastUnderscore + 1));
+				} catch (NumberFormatException e) {
+					continue;
+				}
+
+				Id<Link> origin = Id.createLinkId(originStr);
+				Id<Link> destination = Id.createLinkId(destStr);
+				CacheKey key = new CacheKey(origin, destination, timeBin);
+
+				TravelSegment seg = cache.get(key);
+				if (seg == null) {
+					// Fallback: ensure the segment exists (should already be routed during predecessor calc).
+					double canonicalDepartureTime = (timeBin + 0.5) * timeBinSize;
+					seg = getSegment(origin, destination, canonicalDepartureTime);
+				}
+				if (seg == null || !seg.isReachable()) {
+					continue;
+				}
+
+				writer.write(String.format(java.util.Locale.US, "%s,%s,%d,%.2f,%.2f\n",
+						originStr, destStr, timeBin, seg.getTravelTime(), seg.getDistance()));
 			}
 		}
 	}
@@ -350,15 +399,9 @@ public class MatsimNetworkCache {
 		public B getSecond() { return second; }
 	}
 	
-	// Synchronized to prevent concurrent access to the router (SpeedyALT is not thread-safe)
-	// Multiple threads calling router.calcLeastCostPath() simultaneously causes internal state corruption
-	// TODO: Performance improvement opportunity - consider using ThreadLocal<LeastCostPathCalculator>
-	// to allow parallel routing. This would require:
-	// 1. A Provider<LeastCostPathCalculator> injected instead of a single instance
-	// 2. ThreadLocal.withInitial(() -> routerProvider.get()) to create per-thread routers
-	// 3. Testing to ensure SpeedyALT instances are truly independent when created separately
-	// Current bottleneck: all cache misses are serialized through this method
-	private synchronized TravelSegment computeSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
+	// Use a thread-local router to allow parallel routing on cache misses.
+	// SpeedyALT is not thread-safe across threads, but separate instances are safe.
+	private TravelSegment computeSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
 		totalRoutingAttempts.incrementAndGet();
 		
 		Link originLink = network.getLinks().get(originLinkId);
@@ -378,19 +421,37 @@ public class MatsimNetworkCache {
 			// Disutility for traversing the link
 			double linkDisutility = travelDisutility.getLinkTravelDisutility(originLink, departureTime, dummyPerson,
 					dummyVehicle);
-			return new TravelSegment(linkTravelTime, linkDistance, -linkDisutility);
+			double utility = -linkDisutility;
+			if (quantizeDeterministicSegments) {
+				linkTravelTime = quantizeSecondsToTenth(linkTravelTime);
+				linkDistance = quantizeMetersToCentimeter(linkDistance);
+				utility = quantizeUtilityTo1e4(utility);
+			}
+			return new TravelSegment(linkTravelTime, linkDistance, utility);
 		}
 		try {
 				// Use link-based routing (new non-deprecated method)
 				// This properly handles turn restrictions and considers full link-to-link
 				// travel
 				// Use dummy person/vehicle for generic routing (required by TravelDisutility)
-				Path path = router.calcLeastCostPath(
+				Path path;
+				if (useSharedDeterministicRouter) {
+					synchronized (routerLock) {
+						path = sharedRouter.calcLeastCostPath(
+								originLink,
+								destLink,
+								departureTime,
+								dummyPerson,
+								dummyVehicle);
+					}
+				} else {
+					path = threadLocalRouter.get().calcLeastCostPath(
 				originLink,
 				destLink,
 				departureTime,
 				dummyPerson,
 				dummyVehicle);
+				}
 			
 			if (path == null || path.links.isEmpty()) {
 				// No path found - track failure
@@ -408,6 +469,12 @@ public class MatsimNetworkCache {
 			// This allows sorting by "best" routes (higher utility = better)
 			double disutility = path.travelCost;
 			double utility = -disutility;
+
+			if (quantizeDeterministicSegments) {
+				tt = quantizeSecondsToTenth(tt);
+				dist = quantizeMetersToCentimeter(dist);
+				utility = quantizeUtilityTo1e4(utility);
+			}
 			
 			return new TravelSegment(tt, dist, utility);
 			
@@ -429,6 +496,39 @@ public class MatsimNetworkCache {
 	
 	private TravelSegment createInfinitySegment() {
 		return TravelSegment.unreachable();
+	}
+
+	private static double quantizeSecondsToTenth(double seconds) {
+		return quantizeTowardZero(seconds, 10.0);
+	}
+
+	private static double quantizeMetersToCentimeter(double meters) {
+		return quantizeTowardZero(meters, 100.0);
+	}
+
+	private static double quantizeUtilityTo1e4(double utility) {
+		return quantizeTowardZero(utility, 10000.0);
+	}
+
+	/**
+	 * Quantizes a value by truncating toward zero on a fixed grid.
+	 * <p>
+	 * We intentionally avoid {@code Math.round(...)} here because tiny run-to-run
+	 * floating drift can flip values across a rounding threshold (e.g. ...3.3499999
+	 * vs ...3.3500001 when quantizing to 0.1), which then propagates into CSV output
+	 * and breaks strict byte-identical determinism.
+	 */
+	private static double quantizeTowardZero(double value, double scale) {
+		if (!Double.isFinite(value)) {
+			return value;
+		}
+
+		double scaled = value * scale;
+		// small epsilon to counter binary representation errors around integer boundaries
+		double eps = 1e-9;
+
+		double truncated = scaled >= 0.0 ? Math.floor(scaled + eps) : Math.ceil(scaled - eps);
+		return truncated / scale;
 	}
 	
 	/**

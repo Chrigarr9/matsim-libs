@@ -30,12 +30,14 @@ public final class PairGenerator {
 	private final MatsimNetworkCache network;
 	private final BudgetValidator budgetValidator;
 	private final double horizon;
+	private final boolean useParallel;
 	private static final double EPSILON = 1e-9;
 
-	public PairGenerator(MatsimNetworkCache network, BudgetValidator budgetValidator, double horizon) {
+	public PairGenerator(MatsimNetworkCache network, BudgetValidator budgetValidator, double horizon, int algorithmProcessCount) {
 		this.network = network;
 		this.budgetValidator = budgetValidator;
 		this.horizon = horizon;
+		this.useParallel = algorithmProcessCount != 1;
 	}
 
 	/**
@@ -71,23 +73,31 @@ public final class PairGenerator {
 	 * Parallel processing with deterministic output order.
 	 */
 	public List<Ride> generatePairs(DrtRequest[] requests) {
-		log.info("Generating pair rides from {} requests (horizon={}s) [parallel]...", requests.length, horizon);
+		log.info("Generating pair rides from {} requests (horizon={}s) [{}]...",
+				requests.length, horizon, useParallel ? "parallel" : "sequential");
 		long startTime = System.currentTimeMillis();
 
 		TimeFilter filter = new TimeFilter(requests);
 		AtomicInteger processedRequests = new AtomicInteger(0);
 		int total = filter.size();
-		int logInterval = Math.max(1, total / 10);
 
 		// Phase 1: Parallel collection of candidates (without indices)
-		List<PairCandidate> candidates = IntStream.range(0, total)
-				.parallel()
+		java.util.stream.IntStream requestStream = IntStream.range(0, total);
+		if (useParallel) {
+			requestStream = requestStream.parallel();
+		}
+
+		List<PairCandidate> candidates = requestStream
 				.mapToObj(i -> {
 					int processed = processedRequests.incrementAndGet();
-					if (processed % logInterval == 0) {
+					if (isPowerOfTwo(processed) || processed == total) {
 						double percent = (processed * 100.0) / total;
-						log.info("  Pair generation progress: {}/{} ({}%)",
-								processed, total, String.format("%.1f", percent));
+						long now = System.currentTimeMillis();
+						double elapsedSeconds = Math.max(0.001, (now - startTime) / 1000.0);
+						double rate = processed / elapsedSeconds;
+						double remainingSeconds = (total - processed) / Math.max(rate, 1e-9);
+						log.info("  Pair generation progress: {}/{} ({}%), ETA {}",
+								processed, total, String.format("%.1f", percent), formatDuration(remainingSeconds));
 					}
 					return generateCandidatesForRequest(filter, i);
 				})
@@ -123,6 +133,24 @@ public final class PairGenerator {
 				fifoCreated, lifoCreated, candidates.size());
 
 		return pairs;
+	}
+
+	private static boolean isPowerOfTwo(int value) {
+		return value > 0 && (value & (value - 1)) == 0;
+	}
+
+	private static String formatDuration(double seconds) {
+		long totalSeconds = Math.max(0L, Math.round(seconds));
+		long hours = totalSeconds / 3600;
+		long minutes = (totalSeconds % 3600) / 60;
+		long secs = totalSeconds % 60;
+		if (hours > 0) {
+			return String.format("%dh%02dm%02ds", hours, minutes, secs);
+		}
+		if (minutes > 0) {
+			return String.format("%dm%02ds", minutes, secs);
+		}
+		return String.format("%ds", secs);
 	}
 
 	/**

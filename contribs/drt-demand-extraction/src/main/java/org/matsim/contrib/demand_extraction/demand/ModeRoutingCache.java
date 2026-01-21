@@ -27,7 +27,6 @@ import org.matsim.core.router.TripRouter;
 import org.matsim.core.router.TripStructureUtils;
 import org.matsim.core.scoring.ScoringFunction;
 import org.matsim.core.scoring.ScoringFunctionFactory;
-import org.matsim.core.scoring.functions.ModeUtilityParameters;
 import org.matsim.core.scoring.functions.ScoringParameters;
 import org.matsim.core.scoring.functions.ScoringParametersForPerson;
 import org.matsim.facilities.ActivityFacilities;
@@ -83,7 +82,12 @@ public class ModeRoutingCache {
 		int totalPersons = population.getPersons().size();
 		int logInterval = Math.max(1, totalPersons / 10); // Log every 10%
 
-        population.getPersons().values().parallelStream().forEach(person -> {
+		var personStream = population.getPersons().values().stream();
+		if (!exMasConfig.isUseDeterministicNetworkRouting()) {
+			personStream = personStream.parallel();
+		}
+
+		personStream.forEach(person -> {
             TripRouter tripRouter = tripRouterProvider.get();
             Map<Integer, Map<String, ModeAttributes>> personCache = new ConcurrentHashMap<>();
 			Map<Integer, Entry<String, Double>> personBestModes = new ConcurrentHashMap<>();

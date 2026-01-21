@@ -72,23 +72,31 @@ public final class RideExtender {
 	 */
 	public List<Ride> extendRides(List<Ride> ridesToExtend, int nextRideIndex) {
 		int targetDegree = ridesToExtend.isEmpty() ? 0 : ridesToExtend.get(0).getDegree() + 1;
-		log.info("Extending {} rides from degree {} to {} [parallel]...",
-				ridesToExtend.size(), targetDegree - 1, targetDegree);
+		boolean useParallel = exMasConfig == null || exMasConfig.getAlgorithmProcessCount() != 1;
+		log.info("Extending {} rides from degree {} to {} [{}]...",
+				ridesToExtend.size(), targetDegree - 1, targetDegree, useParallel ? "parallel" : "sequential");
 		long startTime = System.currentTimeMillis();
 
 		int total = ridesToExtend.size();
 		AtomicInteger processedRides = new AtomicInteger(0);
-		int logInterval = Math.max(1, total / 10);
 
 		// Phase 1: Parallel processing - collect validated extensions
-		List<ExtensionCandidate> candidates = IntStream.range(0, total)
-				.parallel()
+		java.util.stream.IntStream rideStream = IntStream.range(0, total);
+		if (useParallel) {
+			rideStream = rideStream.parallel();
+		}
+
+		List<ExtensionCandidate> candidates = rideStream
 				.mapToObj(i -> {
 					int processed = processedRides.incrementAndGet();
-					if (processed % logInterval == 0) {
+					if (isPowerOfTwo(processed) || processed == total) {
 						double percent = (processed * 100.0) / total;
-						log.info("  Extension progress: {}/{} ({}%)",
-								processed, total, String.format("%.1f", percent));
+						long now = System.currentTimeMillis();
+						double elapsedSeconds = Math.max(0.001, (now - startTime) / 1000.0);
+						double rate = processed / elapsedSeconds;
+						double remainingSeconds = (total - processed) / Math.max(rate, 1e-9);
+						log.info("  Extension progress: {}/{} ({}%), ETA {}",
+								processed, total, String.format("%.1f", percent), formatDuration(remainingSeconds));
 					}
 					return generateExtensionsForRide(ridesToExtend.get(i));
 				})
@@ -114,6 +122,24 @@ public final class RideExtender {
 				pruned.size(), targetDegree, String.format("%.1f", seconds));
 
 		return pruned;
+	}
+
+	private static boolean isPowerOfTwo(int value) {
+		return value > 0 && (value & (value - 1)) == 0;
+	}
+
+	private static String formatDuration(double seconds) {
+		long totalSeconds = Math.max(0L, Math.round(seconds));
+		long hours = totalSeconds / 3600;
+		long minutes = (totalSeconds % 3600) / 60;
+		long secs = totalSeconds % 60;
+		if (hours > 0) {
+			return String.format("%dh%02dm%02ds", hours, minutes, secs);
+		}
+		if (minutes > 0) {
+			return String.format("%dm%02ds", minutes, secs);
+		}
+		return String.format("%ds", secs);
 	}
 
 	/**

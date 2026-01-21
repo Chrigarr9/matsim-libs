@@ -1,6 +1,10 @@
 package org.matsim.contrib.demand_extraction.algorithm;
 
+import java.util.Comparator;
+import java.util.List;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.network.Link;
@@ -63,8 +67,7 @@ public class ExMasAlgorithmModule extends AbstractModule {
 		String drtRouterName = "direct" + capitalize(exmasConfig.getDrtMode()) + "Router";
 		bind(LeastCostPathCalculator.class)
 				.annotatedWith(com.google.inject.name.Names.named(drtRouterName))
-				.toProvider(new DrtRouterProvider(drtRouterName))
-				.asEagerSingleton();
+				.toProvider(new DrtRouterProvider(drtRouterName));
 
         // Bind algorithm components as singletons
         bind(BudgetValidator.class).asEagerSingleton();
@@ -91,30 +94,79 @@ public class ExMasAlgorithmModule extends AbstractModule {
 		@Inject
 		private ExMasConfigGroup exmasConfig;
 
+		private Network cachedFilteredNetwork;
+		private Network preIndexedNetwork;
+
 		DrtRouterProvider(String routerName) {
 			// routerName kept for potential future logging/debugging
 		}
 
 		@Override
 		public LeastCostPathCalculator get() {
-			Network routingNetwork = filterNetworkByAllowedModes(network, exmasConfig.getDrtAllowedModes());
+			Network routingNetwork = getOrCreateRoutingNetwork();
 			TravelDisutility travelDisutility = travelDisutilityFactory.createTravelDisutility(travelTime);
 			return factory.createPathCalculator(routingNetwork, travelDisutility, travelTime);
 		}
 
-		private Network filterNetworkByAllowedModes(Network originalNetwork, Set<String> allowedModes) {
-			// If no modes specified, use full network
+		private synchronized Network getOrCreateRoutingNetwork() {
+			Set<String> allowedModes = exmasConfig.getDrtAllowedModes();
+
+			Network routingNetwork;
 			if (allowedModes == null || allowedModes.isEmpty()) {
-				return originalNetwork;
+				routingNetwork = network;
+			} else {
+				if (cachedFilteredNetwork == null) {
+					cachedFilteredNetwork = buildFilteredNetworkDeterministic(network, allowedModes);
+				}
+				routingNetwork = cachedFilteredNetwork;
 			}
 
-			// Create filtered network
+			ensureNetworkIdsPreIndexedDeterministic(routingNetwork);
+			return routingNetwork;
+		}
+
+		/**
+		 * Ensures deterministic assignment of {@code Id.index()} for nodes and links.
+		 *
+		 * MATSim assigns these indices lazily when {@code index()} is first called.
+		 * Some routing preprocessors (e.g. Speedy* routers) may trigger index()
+		 * assignment while iterating over HashMap-backed collections, which can vary
+		 * across runs. Pre-indexing in a sorted order stabilizes tie-breaking and
+		 * eliminates tiny numeric drift across repeated parallel runs.
+		 */
+		private void ensureNetworkIdsPreIndexedDeterministic(Network routingNetwork) {
+			if (preIndexedNetwork == routingNetwork) {
+				return;
+			}
+
+			List<org.matsim.api.core.v01.Id<org.matsim.api.core.v01.network.Node>> nodeIds = routingNetwork.getNodes().keySet().stream()
+					.sorted()
+					.toList();
+			for (org.matsim.api.core.v01.Id<org.matsim.api.core.v01.network.Node> nodeId : nodeIds) {
+				nodeId.index();
+			}
+
+			List<org.matsim.api.core.v01.Id<Link>> linkIds = routingNetwork.getLinks().keySet().stream()
+					.sorted()
+					.toList();
+			for (org.matsim.api.core.v01.Id<Link> linkId : linkIds) {
+				linkId.index();
+			}
+
+			preIndexedNetwork = routingNetwork;
+		}
+
+		private Network buildFilteredNetworkDeterministic(Network originalNetwork, Set<String> allowedModes) {
 			Network filteredNetwork = NetworkUtils.createNetwork();
 
-			for (Link link : originalNetwork.getLinks().values()) {
-				if (isLinkAllowed(link, allowedModes)) {
-					addLinkWithNodes(filteredNetwork, link);
-				}
+			List<Link> allowedLinks = originalNetwork.getLinks().values().stream()
+					.filter(Objects::nonNull)
+					.filter(link -> isLinkAllowed(link, allowedModes))
+					.sorted(Comparator.comparing(link -> link.getId().toString()))
+					.collect(Collectors.toList());
+
+			for (Link link : allowedLinks) {
+				addLinkWithNodes(filteredNetwork, link);
 			}
 
 			return filteredNetwork;

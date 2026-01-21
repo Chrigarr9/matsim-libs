@@ -79,7 +79,7 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	private double maxDetourFactor = 1.5; // Maximum detour factor (50% longer than direct)
 	
-	private Double maxAbsoluteDetour = null; // Absolute detour cap (seconds). If set, limits the max detour time.
+	private Integer maxAbsoluteDetour = null; // Absolute detour cap (seconds). If set, limits the max detour time.
 
 	// Sampling settings
 	private double requestSampleSize = 1.0; // Fraction of requests to keep (0.0-1.0)
@@ -96,7 +96,7 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private String negativeFlexibilityAbsoluteMap = null; // Map "value:seconds,value:seconds"
 	private String negativeFlexibilityRelativeMap = null; // Map "value:factor,value:factor"
 
-	private int networkTimeBinSize = 900; // Network cache time bin size in seconds (15 minutes)
+	private int networkTimeBinSize = 60 * 60; // Network cache time bin size in seconds (15 minutes)
 	
 	// ExMAS algorithm parameters
 	private double searchHorizon = 600.0; // Time horizon for pairing requests (seconds, 10 minutes)
@@ -118,6 +118,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private boolean includeOpportunityCost = true;
 
 	// Heuristics and post-processing settings (align with exmas_pipeline.heuristics)
+	// Controls parallelism in the ExMAS *core algorithm* (pair generation + extensions)
+	// -1 => use parallel streams (default); 1 => force sequential (for reproducible results)
+	private int algorithmProcessCount = -1;
+
 	// Controls parallelism for expensive metrics (Shapley, predecessors)
 	// -1 => use all available processors; 1 => force sequential
 	private int heuristicsProcessCount = -1;
@@ -158,6 +162,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     public ExMasConfigGroup() {
         super(GROUP_NAME);
     }
+
+	@StringGetter("algorithmProcessCount")
+	public int getAlgorithmProcessCount() {
+		return algorithmProcessCount;
+	}
+
+	@StringSetter("algorithmProcessCount")
+	public void setAlgorithmProcessCount(int algorithmProcessCount) {
+		this.algorithmProcessCount = algorithmProcessCount;
+	}
 
     @StringGetter(BUDGET_CALCULATION_MODE)
     public BudgetCalculationMode getBudgetCalculationMode() {
@@ -336,12 +350,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	}
 
 	@StringGetter("maxAbsoluteDetour")
-	public Double getMaxAbsoluteDetour() {
+	public Integer getMaxAbsoluteDetour() {
 		return maxAbsoluteDetour;
 	}
 
 	@StringSetter("maxAbsoluteDetour")
-	public void setMaxAbsoluteDetour(Double maxAbsoluteDetour) {
+	public void setMaxAbsoluteDetour(Integer maxAbsoluteDetour) {
 		this.maxAbsoluteDetour = maxAbsoluteDetour;
 	}
 
@@ -639,6 +653,8 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("includeOpportunityCost",
 				"If true, includes opportunity cost of time (lost activity time) in trip scoring. " +
 				"Essential when marginalUtilityOfTraveling is zero. Default: true");
+		map.put("algorithmProcessCount",
+				"Parallelism for core ExMAS pair generation and ride extension. -1 = all processors, 1 = sequential (more deterministic). Default: -1");
 		map.put("heuristicsProcessCount",
 				"Parallelism for Shapley/predecessor calculations. -1 = all processors, 1 = sequential. Default: -1");
 		map.put("pruningEnabled", "Enable heuristic pruning during ride extension to avoid combinatorial explosion. Default: true");

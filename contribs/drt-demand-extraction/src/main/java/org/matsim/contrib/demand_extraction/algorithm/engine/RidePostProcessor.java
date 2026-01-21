@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -25,7 +27,6 @@ import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
-import org.matsim.core.utils.misc.Counter;
 
 /**
  * Post-process ExMAS rides to enrich them with:
@@ -248,11 +249,19 @@ public final class RidePostProcessor {
         if (parallelism > 1) {
             stream = stream.parallel();
         }
-        Counter counter = new Counter("      Processed ", " / " + total + " rides...", 2);
+		AtomicInteger processed = new AtomicInteger(0);
+		long routingStartNanos = System.nanoTime();
 
         // Forward search: For each ride i, find successors j
         stream.forEach(i -> {
-            counter.incCounter();
+			int done = processed.incrementAndGet();
+			if (done == total || ((done & (done - 1)) == 0)) {
+				double elapsedSeconds = (System.nanoTime() - routingStartNanos) / 1e9;
+				double remainingSeconds = done <= 0 ? 0.0 : (elapsedSeconds / done) * (total - done);
+				double percent = 100.0 * done / total;
+				log.info("      Predecessor/successor routing progress: {}/{} ({}%), ETA {}",
+						done, total, String.format("%.1f", percent), formatDuration(remainingSeconds));
+			}
             double endTime = endTimes[i];
             double minStartTime = endTime; // Successor must start after predecessor ends
             double maxStartTime = endTime + filterTime;
@@ -375,6 +384,25 @@ public final class RidePostProcessor {
         }
         return configured;
     }
+
+	private static String formatDuration(double seconds) {
+		if (!Double.isFinite(seconds) || seconds <= 0) {
+			return "0s";
+		}
+
+		long totalSeconds = (long) Math.ceil(seconds);
+		long hours = TimeUnit.SECONDS.toHours(totalSeconds);
+		long minutes = TimeUnit.SECONDS.toMinutes(totalSeconds) % 60;
+		long secs = totalSeconds % 60;
+
+		if (hours > 0) {
+			return String.format("%dh%02dm%02ds", hours, minutes, secs);
+		}
+		if (minutes > 0) {
+			return String.format("%dm%02ds", minutes, secs);
+		}
+		return String.format("%ds", secs);
+	}
 
     private double factorial(int n) {
         double result = 1.0;

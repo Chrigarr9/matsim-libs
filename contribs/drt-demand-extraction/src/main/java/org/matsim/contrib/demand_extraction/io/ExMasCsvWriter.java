@@ -3,6 +3,7 @@ package org.matsim.contrib.demand_extraction.io;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 
 import org.matsim.api.core.v01.Id;
@@ -97,7 +98,11 @@ public final class ExMasCsvWriter {
 					"startTime,endTime,rideTravelTime,rideDistance");
 			writer.newLine();
 
-			for (Ride ride : rides) {
+			List<Ride> sortedRides = rides.stream()
+					.sorted(Comparator.comparingInt(Ride::getIndex))
+					.toList();
+
+			for (Ride ride : sortedRides) {
 				// Flatten request attributes using direct object references
 				DrtRequest[] requests = ride.getRequests();
 
@@ -129,7 +134,14 @@ public final class ExMasCsvWriter {
 						: "[]";
 				String maxCosts = ride.getMaxCosts() != null ? formatDoubleArray(ride.getMaxCosts()) : "[]";
 				String shapleyValues = ride.getShapleyValues() != null ? formatDoubleArray(ride.getShapleyValues()) : "[]";
-				String successors = ride.getSuccessors() != null ? formatIntArray(ride.getSuccessors()) : "[]";
+				String successors;
+				if (ride.getSuccessors() != null) {
+					int[] sortedSucc = ride.getSuccessors().clone();
+					Arrays.sort(sortedSucc);
+					successors = formatIntArray(sortedSucc);
+				} else {
+					successors = "[]";
+				}
 				writer.write(String.format(java.util.Locale.US,
 						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f",
 						ride.getIndex(), ride.getDegree(), ride.getKind(),

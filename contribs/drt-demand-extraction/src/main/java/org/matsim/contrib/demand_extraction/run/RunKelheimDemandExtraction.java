@@ -107,6 +107,7 @@ import org.matsim.dsim.Activities;
  */
 public class RunKelheimDemandExtraction {
 	private static final Logger log = LogManager.getLogger(RunKelheimDemandExtraction.class);
+	private static final String OFFLINE_INPUTS_DIRNAME = "input/offline-v3.0";
 	
 	// Base URL for Kelheim scenario plans files (plans are in v3.0 for all sample sizes)
 	private static final String KELHEIM_PLANS_BASE = 
@@ -116,12 +117,30 @@ public class RunKelheimDemandExtraction {
 		// Parse arguments
 		String scenarioPath = null;
 		int sampleSize = 1;
+		boolean deterministic = false;
+		Integer algorithmProcessCountArg = null;
+		Integer heuristicsProcessCountArg = null;
+		boolean cleanup = true;
+		Path archiveDir = null;
+		String archiveLabel = null;
 
 		for (int i = 0; i < args.length; i++) {
 			if ("--scenario-path".equals(args[i]) && i + 1 < args.length) {
 				scenarioPath = args[i + 1];
 			} else if ("--sample".equals(args[i]) && i + 1 < args.length) {
 				sampleSize = Integer.parseInt(args[i + 1]);
+			} else if ("--deterministic".equals(args[i])) {
+				deterministic = true;
+			} else if ("--algorithm-process-count".equals(args[i]) && i + 1 < args.length) {
+				algorithmProcessCountArg = Integer.parseInt(args[i + 1]);
+			} else if ("--heuristics-process-count".equals(args[i]) && i + 1 < args.length) {
+				heuristicsProcessCountArg = Integer.parseInt(args[i + 1]);
+			} else if ("--no-cleanup".equals(args[i])) {
+				cleanup = false;
+			} else if ("--archive-dir".equals(args[i]) && i + 1 < args.length) {
+				archiveDir = Path.of(args[i + 1]);
+			} else if ("--archive-label".equals(args[i]) && i + 1 < args.length) {
+				archiveLabel = args[i + 1];
 			}
 		}
 		
@@ -139,6 +158,7 @@ public class RunKelheimDemandExtraction {
 		log.info("=== Kelheim DRT Demand Extraction ===");
 		log.info("Scenario path: {}", scenarioPath);
 		log.info("Sample size: {}%", sampleSize);
+		log.info("Deterministic mode: {}", deterministic);
 		log.info("Using FULL Kelheim network from matsim-kelheim repository");
 		
 		// Create output directory
@@ -147,9 +167,18 @@ public class RunKelheimDemandExtraction {
 		
 		// Load config
 		Config config = loadKelheimConfig(scenarioPath, sampleSize);
+
+		// Determinism controls (prefer explicit args over --deterministic defaults)
+		int algorithmProcessCount = algorithmProcessCountArg != null ? algorithmProcessCountArg : (deterministic ? 1 : -1);
+		int heuristicsProcessCount = heuristicsProcessCountArg != null ? heuristicsProcessCountArg : (deterministic ? 1 : -1);
+		if (deterministic) {
+			// Reduce MATSim-level concurrency as well.
+			config.global().setNumberOfThreads(1);
+			config.qsim().setNumberOfThreads(1);
+		}
 		
 		// Configure for demand extraction
-		configureForDemandExtraction(config, outputDir, sampleSize);
+		configureForDemandExtraction(config, outputDir, sampleSize, algorithmProcessCount, heuristicsProcessCount, deterministic);
 		
 		// Validate and prepare config
 		DemandExtractionConfigValidator.prepareConfigForDemandExtraction(config);
@@ -170,12 +199,19 @@ public class RunKelheimDemandExtraction {
 		controler.addOverridingModule(new DemandExtractionModule());
 		
 		controler.run();
+
+		String runId = config.controller().getRunId();
+		archiveOutputsIfRequested(outputDir, runId, archiveDir, archiveLabel);
 		
 		// Clean up output directory - keep only config and demand extraction files
-		cleanupOutputDirectory(outputDir, config.controller().getRunId());
+		if (cleanup) {
+			cleanupOutputDirectory(outputDir, runId);
+		} else {
+			log.info("Skipping output cleanup (--no-cleanup)");
+		}
 
 		// Print output summary
-		String runId = config.controller().getRunId();
+		// Print output summary
 		log.info("\n=== Demand Extraction Complete ===");
 		log.info("Output directory: {}", outputDir.toAbsolutePath());
 	log.info("Demand extraction files in: {}/drt_demand/", outputDir.toAbsolutePath());
@@ -191,6 +227,41 @@ public class RunKelheimDemandExtraction {
 	}
 	log.info("===================================\n");
 }
+
+	private static void archiveOutputsIfRequested(Path outputDir, String runId, Path archiveDir, String archiveLabel) {
+		if (archiveDir == null) {
+			return;
+		}
+		try {
+			String label = (archiveLabel == null || archiveLabel.isBlank())
+					? java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
+					: archiveLabel;
+			Path sourceDir = outputDir.resolve("drt_demand");
+			Path destDir = archiveDir.resolve(runId).resolve(label);
+			Files.createDirectories(destDir);
+
+			String[] demandFiles = new String[] {
+				runId + ".drt_requests.csv",
+				runId + ".exmas_rides.csv",
+				runId + ".person_attributes.csv",
+				runId + ".mode_cache.csv",
+				runId + ".connection_cache.csv"
+			};
+
+			int copied = 0;
+			for (String name : demandFiles) {
+				Path src = sourceDir.resolve(name);
+				if (Files.exists(src)) {
+					Files.copy(src, destDir.resolve(name), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+					copied++;
+				}
+			}
+
+			log.info("Archived {} output file(s) to {}", copied, destDir.toAbsolutePath());
+		} catch (IOException e) {
+			log.warn("Failed to archive outputs: {}", e.getMessage());
+		}
+	}
 
 /**
  * Clean up output directory after simulation.
@@ -292,20 +363,109 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize) {
 		config.qsim().setFlowCapFactor(sampleFactor);
 		config.qsim().setStorageCapFactor(sampleFactor);
 		
-		// Set sample-specific plans file from SVN (v3.0 has all sample sizes)
-		String plansFile = KELHEIM_PLANS_BASE + "kelheim-v3.0-" + sampleSize + "pct-plans.xml.gz";
-		config.plans().setInputFile(plansFile);
+		// Prefer local/offline inputs if present (avoids corporate SSL/PKIX issues)
+		boolean usingOfflineInputs = applyOfflineKelheimInputsIfPresent(config, scenarioPath, sampleSize);
+
+		// Set sample-specific plans file from SVN (v3.0 has all sample sizes) unless offline inputs override it
+		if (!usingOfflineInputs) {
+			String plansFile = KELHEIM_PLANS_BASE + "kelheim-v3.0-" + sampleSize + "pct-plans.xml.gz";
+			config.plans().setInputFile(plansFile);
+			log.info("Plans file: {}", plansFile);
+		}
 		
-		log.info("Plans file: {}", plansFile);
 		log.info("Flow/storage capacity factor: {}", sampleFactor);
 		
 		return config;
+	}
+
+	/**
+	 * If a local offline input set exists under matsim-kelheim, prefer it to avoid HTTPS downloads.
+	 *
+	 * Expected files in ${scenarioPath}/input/offline-v3.0 (based on matsim-libs example scenario):
+	 * - network-with-pt.xml.gz
+	 * - transitSchedule.xml.gz
+	 * - transitVehicles.xml.gz
+	 * - vehicle-types-with-drt.xml
+	 * - drt-stops.xml
+	 * - av-stops.xml (optional)
+	 * - 1pct.plans.xml.gz
+	 */
+	private static boolean applyOfflineKelheimInputsIfPresent(Config config, String scenarioPath, int sampleSize) {
+		Path offlineDir = Path.of(scenarioPath).resolve(OFFLINE_INPUTS_DIRNAME);
+		if (!Files.isDirectory(offlineDir)) {
+			return false;
+		}
+
+		log.info("Offline inputs directory detected: {}", offlineDir.toAbsolutePath());
+
+		Path networkFile = offlineDir.resolve("network-with-pt.xml.gz");
+		if (Files.exists(networkFile)) {
+			config.network().setInputFile(networkFile.toAbsolutePath().toString());
+			log.info("Using offline network: {}", networkFile);
+		}
+
+		Path vehiclesFile = offlineDir.resolve("vehicle-types-with-drt.xml");
+		if (Files.exists(vehiclesFile)) {
+			config.vehicles().setVehiclesFile(vehiclesFile.toAbsolutePath().toString());
+			log.info("Using offline vehicles: {}", vehiclesFile);
+		}
+
+		Path transitSchedule = offlineDir.resolve("transitSchedule.xml.gz");
+		if (Files.exists(transitSchedule)) {
+			config.transit().setTransitScheduleFile(transitSchedule.toAbsolutePath().toString());
+			log.info("Using offline transit schedule: {}", transitSchedule);
+		}
+
+		Path transitVehicles = offlineDir.resolve("transitVehicles.xml.gz");
+		if (Files.exists(transitVehicles)) {
+			config.transit().setVehiclesFile(transitVehicles.toAbsolutePath().toString());
+			log.info("Using offline transit vehicles: {}", transitVehicles);
+		}
+
+		// Sample-specific plans
+		String plansName = sampleSize + "pct.plans.xml.gz";
+		Path plans = offlineDir.resolve(plansName);
+		if (Files.exists(plans)) {
+			config.plans().setInputFile(plans.toAbsolutePath().toString());
+			log.info("Using offline plans: {}", plans);
+		} else {
+			Path plans1pct = offlineDir.resolve("1pct.plans.xml.gz");
+			if (sampleSize == 1 && Files.exists(plans1pct)) {
+				config.plans().setInputFile(plans1pct.toAbsolutePath().toString());
+				log.info("Using offline plans: {}", plans1pct);
+			}
+		}
+
+		// DRT/AV stops (if present)
+		MultiModeDrtConfigGroup multiModeDrt = ConfigUtils.addOrGetModule(config, MultiModeDrtConfigGroup.class);
+		if (multiModeDrt != null) {
+			Path drtStops = offlineDir.resolve("drt-stops.xml");
+			Path avStops = offlineDir.resolve("av-stops.xml");
+			for (org.matsim.contrib.drt.run.DrtConfigGroup drtConfig : multiModeDrt.getModalElements()) {
+				if ("drt".equals(drtConfig.getMode()) && Files.exists(drtStops)) {
+					drtConfig.setTransitStopFile(drtStops.toAbsolutePath().toString());
+					log.info("Using offline DRT stops: {}", drtStops);
+				}
+				if ("av".equals(drtConfig.getMode()) && Files.exists(avStops)) {
+					drtConfig.setTransitStopFile(avStops.toAbsolutePath().toString());
+					log.info("Using offline AV stops: {}", avStops);
+				}
+			}
+		}
+
+		return true;
 	}
 	
 	/**
 	 * Configure MATSim for demand extraction.
 	 */
-	private static void configureForDemandExtraction(Config config, Path outputDir, int sampleSize) {
+	private static void configureForDemandExtraction(
+			Config config,
+			Path outputDir,
+			int sampleSize,
+			int algorithmProcessCount,
+			int heuristicsProcessCount,
+			boolean deterministic) {
 		log.info("Configuring for demand extraction...");
 		
 		// Disable VSP config consistency checker - we're not running a full simulation
@@ -324,7 +484,7 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize) {
 		config.controller().setWritePlansInterval(0);
 		
 		// Configure ExMAS
-		configureExMas(config);
+		configureExMas(config, algorithmProcessCount, heuristicsProcessCount, deterministic);
 		
 		// Add activity scoring parameters (required for Kelheim's duration-specific activities)
 		// Kelheim uses SnzActivities naming convention (home_7200, work_28800, etc.)
@@ -339,7 +499,7 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize) {
 	 * Configure ExMAS algorithm parameters.
 	 * Settings aligned with ExMasKelheimE2ETest for consistency.
 	 */
-	private static void configureExMas(Config config) {
+	private static void configureExMas(Config config, int algorithmProcessCount, int heuristicsProcessCount, boolean deterministic) {
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		
 		// DRT mode must match Kelheim config
@@ -355,6 +515,12 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize) {
 		
 		// DRT routing uses car network
 		exMasConfig.setDrtRoutingMode(TransportMode.car);
+
+		exMasConfig.setAlgorithmProcessCount(algorithmProcessCount);
+		exMasConfig.setHeuristicsProcessCount(heuristicsProcessCount);
+		if (deterministic) {
+			exMasConfig.setUseDeterministicNetworkRouting(true);
+		}
 		
 		// Private vehicle modes (create subtour dependencies)
 		Set<String> privateVehicles = new HashSet<>();
@@ -382,16 +548,18 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize) {
 		exMasConfig.setMinDrtAccessEgressDistance(100.0);  // Changed from 100.0 to match test
 		
 		// ExMAS algorithm parameters (aligned with E2E test)
-		exMasConfig.setSearchHorizon(0.0); // unlimited
+		exMasConfig.setSearchHorizon(3600.0); // unlimited
 		exMasConfig.setMaxDetourFactor(1.5);  // Max 50% longer than direct
+		exMasConfig.setMaxAbsoluteDetour(3600); // Max 1 hour absolute detour
 		exMasConfig.setMaxPoolingDegree(10);  // Allow up to 10 passengers (aligned with test)
 
 		// Enable predecessor calculation for connection_cache.csv output
 		// This is needed for optimization empty vehicle kilometer calculations
 		exMasConfig.setCalcPredecessors(true);
 		exMasConfig.setPredecessorsFilterDistanceFactor(1.0);
-		// Only consider predecessors that ended within 2 hours before successor starts
-		exMasConfig.setPredecessorsFilterTime(1800.0);
+		// Only consider predecessors that ended within 0.5 hours before successor
+		// starts
+		exMasConfig.setPredecessorsFilterTime(30.0 * 60);
 		exMasConfig.setCalcShapleyValues(true);
 
 		// Pruning settings
@@ -420,6 +588,9 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize) {
 		log.info("  Max pooling degree: {}", exMasConfig.getMaxPoolingDegree());
 		log.info("  Max detour factor: {}", exMasConfig.getMaxDetourFactor());
 		log.info("  Calc predecessors: {}", exMasConfig.isCalcPredecessors());
+		log.info("  algorithmProcessCount: {}", exMasConfig.getAlgorithmProcessCount());
+		log.info("  heuristicsProcessCount: {}", exMasConfig.getHeuristicsProcessCount());
+		log.info("  deterministicNetworkRouting: {}", exMasConfig.isUseDeterministicNetworkRouting());
 		log.info("  Include opportunity cost: {}", exMasConfig.isIncludeOpportunityCost());
 	}
 	
