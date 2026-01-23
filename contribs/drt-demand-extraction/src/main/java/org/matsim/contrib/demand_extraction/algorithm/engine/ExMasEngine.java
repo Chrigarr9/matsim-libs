@@ -128,11 +128,16 @@ public final class ExMasEngine {
 		log.info("Graph built: {} edges, {} nodes in {}s",
 				graph.getEdgeCount(), graph.getNodeCount(), String.format("%.1f", graphElapsed / 1000.0));
 
+		// Optional: prune which degree-2 rides are used as extension bases AFTER the shareability graph
+		// is constructed. This keeps the shareability graph complete (built from all pair rides) and keeps
+		// full pair-ride support available via allRides/rideMap. It only reduces which pair rides we try
+		// to extend to higher degrees.
+		List<Ride> currentDegreeRides = maybePrunePairRidesAfterGraph(pairRides);
+
         // Phase 4: Iteratively extend rides with budget validation
 		log.info("");
 		log.info("PHASE 4: Iterative Ride Extension");
 		log.info("======================================================================");
-        List<Ride> currentDegreeRides = pairRides;
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
 													 requests, allRides, exMasConfig);
@@ -142,6 +147,66 @@ public final class ExMasEngine {
 				log.info("No extensions possible at degree {}. Stopping.", (degree + 1));
                 break;
             }
+
+			private List<Ride> maybePrunePairRidesAfterGraph(List<Ride> pairRides) {
+				if (exMasConfig == null || pairRides.isEmpty()) {
+					return pairRides;
+				}
+				double scale = exMasConfig.getPruningDistanceSavingsLogScale();
+				if (scale < 0) {
+					return pairRides;
+				}
+				int minDegree = Math.max(2, exMasConfig.getPruningDistanceSavingsMinDegree());
+				// If the user wants minDegree=2, they explicitly allow pruning of degree-2 rides.
+				// Only do it here (after graph construction) to keep the graph complete.
+				if (minDegree > 2) {
+					return pairRides;
+				}
+
+				double maxSaving = exMasConfig.getPruningDistanceSavingsMax();
+				if (!(maxSaving >= 0)) {
+					maxSaving = 0.0;
+				}
+				maxSaving = Math.min(0.99, maxSaving);
+				double requiredSaving = computeRequiredSavingForDegree(2, scale, maxSaving, minDegree);
+
+				int before = pairRides.size();
+				List<Ride> kept = pairRides.stream().filter(r -> {
+					if (r.getDegree() != 2) {
+						return true;
+					}
+					double sumDistances = Arrays.stream(r.getRequests()).mapToDouble(DrtRequest::getDistance).sum();
+					if (!(sumDistances > 0)) {
+						return true;
+					}
+					double maxRideDistance = (1.0 - requiredSaving) * sumDistances;
+					return r.getRideDistance() <= maxRideDistance;
+				}).toList();
+
+				int after = kept.size();
+				int removed = before - after;
+				log.info("Pair-ride base pruning (after graph): kept {}/{} (removed {}); distance-savings gate for degree 2: requiredSaving>={}%% (scale={}, maxSaving={})",
+						after,
+						before,
+						removed,
+						String.format(java.util.Locale.ROOT, "%.1f", 100.0 * requiredSaving),
+						String.format(java.util.Locale.ROOT, "%.3f", scale),
+						String.format(java.util.Locale.ROOT, "%.2f", maxSaving));
+
+				return kept;
+			}
+
+			private static double computeRequiredSavingForDegree(int degree, double scale, double maxSaving, int minDegree) {
+				if (scale < 0) {
+					return 0.0;
+				}
+				if (degree < Math.max(2, minDegree)) {
+					return 0.0;
+				}
+				double requiredSaving = scale * (Math.log(degree) / Math.log(2.0));
+				requiredSaving = Math.max(0.0, Math.min(Math.min(0.99, maxSaving), requiredSaving));
+				return requiredSaving;
+			}
 
             allRides.addAll(extended);
 			currentDegreeRides = extended;

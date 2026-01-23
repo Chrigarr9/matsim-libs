@@ -128,12 +128,37 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	// Heuristic pruning (to control combinatorial growth during ride extension)
 	private boolean pruningEnabled = true;
-	private double pruningFraction = 0.5; // keep top fraction per request-set group (0..1]
-	private int pruningMinToKeep = 3; // minimum rides to keep per group
-	private boolean pruningRemoveNonImproving = true; // drop rides where rideDistance > sum(passengerDistances)
+	// Fraction of rides KEPT (not pruned) within each request-set group. Range
+	// (0,1].
+	// Grouping key is the request index set (same passengers) and objective ranking
+	// is applied within each group.
+	private double pruningFraction = 0.5;
+	// Lower bound on how many rides to keep per request-set group (if that many
+	// exist).
+	private int pruningMinToKeep = 3;
+	// Optional hard cap on how many rides to keep per request-set group (0
+	// disables).
+	private int pruningMaxRidesToKeepPerRequestSet = 0;
+	// Degree-aware distance savings pruning (applied vs serving requests separately)
+	// requiredSaving(d) = min(maxSaving, max(0, pruningDistanceSavingsLogScale * log2(d)))
+	// Keep ride iff: rideDistance <= (1 - requiredSaving(d)) * sum(request distances)
+	// Semantics:
+	// - scale < 0 : disable this pruning gate
+	// - scale = 0 : legacy behavior (non-improving filter): rideDistance <= sum(request distances)
+	// - scale > 0 : require additional distance savings that increases with degree
+	private double pruningDistanceSavingsLogScale = 0.0;
+	// Clamp for requiredSaving(d) to avoid impossible constraints at high degrees.
+	private double pruningDistanceSavingsMax = 0.9;
+	// Apply distance-savings pruning only for rides with degree >= this value.
+	// Default 3 ensures paired rides (degree 2) are not removed, which is important
+	// for shareability graph connectivity.
+	private int pruningDistanceSavingsMinDegree = 3;
 	private String pruningObjective = "rideDistance"; // rideDistance | passengerTravelTime | passengerUtility
 	private String pruningGoal = "minimize"; // minimize | maximize
-	private int pruningTopNPerBase = 0; // if >0, limit per-base extensions to top-N by objective
+	// If >0, limit per-base extension candidates (for each base ride, keep only the
+	// top-N extensions by objective).
+	// This is applied before the per-request-set group pruning.
+	private int pruningTopNPerBase = 0;
 
 	// Calculate Shapley values for rides (distance contribution per passenger)
 	private boolean calcShapleyValues = true;
@@ -490,47 +515,105 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.heuristicsProcessCount = heuristicsProcessCount;
 	}
 
-	@StringGetter("pruningEnabled")
-	public boolean isPruningEnabled() { return pruningEnabled; }
+	@StringGetter("heuristicPruningEnabled")
+	public boolean isHeuristicPruningEnabled() {
+		return pruningEnabled;
+	}
 
-	@StringSetter("pruningEnabled")
-	public void setPruningEnabled(boolean pruningEnabled) { this.pruningEnabled = pruningEnabled; }
+	@StringSetter("heuristicPruningEnabled")
+	public void setHeuristicPruningEnabled(boolean heuristicPruningEnabled) {
+		this.pruningEnabled = heuristicPruningEnabled;
+	}
 
-	@StringGetter("pruningFraction")
-	public double getPruningFraction() { return pruningFraction; }
+	@StringGetter("pruningKeepTopFractionPerRequestSet")
+	public double getPruningKeepTopFractionPerRequestSet() {
+		return pruningFraction;
+	}
 
-	@StringSetter("pruningFraction")
-	public void setPruningFraction(double pruningFraction) { this.pruningFraction = pruningFraction; }
+	@StringSetter("pruningKeepTopFractionPerRequestSet")
+	public void setPruningKeepTopFractionPerRequestSet(double pruningKeepTopFractionPerRequestSet) {
+		this.pruningFraction = pruningKeepTopFractionPerRequestSet;
+	}
 
-	@StringGetter("pruningMinToKeep")
-	public int getPruningMinToKeep() { return pruningMinToKeep; }
+	@StringGetter("pruningMinRidesToKeepPerRequestSet")
+	public int getPruningMinRidesToKeepPerRequestSet() {
+		return pruningMinToKeep;
+	}
 
-	@StringSetter("pruningMinToKeep")
-	public void setPruningMinToKeep(int pruningMinToKeep) { this.pruningMinToKeep = pruningMinToKeep; }
+	@StringSetter("pruningMinRidesToKeepPerRequestSet")
+	public void setPruningMinRidesToKeepPerRequestSet(int pruningMinRidesToKeepPerRequestSet) {
+		this.pruningMinToKeep = pruningMinRidesToKeepPerRequestSet;
+	}
 
-	@StringGetter("pruningRemoveNonImproving")
-	public boolean isPruningRemoveNonImproving() { return pruningRemoveNonImproving; }
+	@StringGetter("pruningMaxRidesToKeepPerRequestSet")
+	public int getPruningMaxRidesToKeepPerRequestSet() {
+		return pruningMaxRidesToKeepPerRequestSet;
+	}
 
-	@StringSetter("pruningRemoveNonImproving")
-	public void setPruningRemoveNonImproving(boolean pruningRemoveNonImproving) { this.pruningRemoveNonImproving = pruningRemoveNonImproving; }
+	@StringSetter("pruningMaxRidesToKeepPerRequestSet")
+	public void setPruningMaxRidesToKeepPerRequestSet(int pruningMaxRidesToKeepPerRequestSet) {
+		this.pruningMaxRidesToKeepPerRequestSet = pruningMaxRidesToKeepPerRequestSet;
+	}
 
-	@StringGetter("pruningObjective")
-	public String getPruningObjective() { return pruningObjective; }
+	@StringGetter("pruningDistanceSavingsLogScale")
+	public double getPruningDistanceSavingsLogScale() {
+		return pruningDistanceSavingsLogScale;
+	}
 
-	@StringSetter("pruningObjective")
-	public void setPruningObjective(String pruningObjective) { this.pruningObjective = pruningObjective; }
+	@StringSetter("pruningDistanceSavingsLogScale")
+	public void setPruningDistanceSavingsLogScale(double pruningDistanceSavingsLogScale) {
+		this.pruningDistanceSavingsLogScale = pruningDistanceSavingsLogScale;
+	}
 
-	@StringGetter("pruningGoal")
-	public String getPruningGoal() { return pruningGoal; }
+	@StringGetter("pruningDistanceSavingsMax")
+	public double getPruningDistanceSavingsMax() {
+		return pruningDistanceSavingsMax;
+	}
 
-	@StringSetter("pruningGoal")
-	public void setPruningGoal(String pruningGoal) { this.pruningGoal = pruningGoal; }
+	@StringSetter("pruningDistanceSavingsMax")
+	public void setPruningDistanceSavingsMax(double pruningDistanceSavingsMax) {
+		this.pruningDistanceSavingsMax = pruningDistanceSavingsMax;
+	}
 
-	@StringGetter("pruningTopNPerBase")
-	public int getPruningTopNPerBase() { return pruningTopNPerBase; }
+	@StringGetter("pruningDistanceSavingsMinDegree")
+	public int getPruningDistanceSavingsMinDegree() {
+		return pruningDistanceSavingsMinDegree;
+	}
 
-	@StringSetter("pruningTopNPerBase")
-	public void setPruningTopNPerBase(int pruningTopNPerBase) { this.pruningTopNPerBase = pruningTopNPerBase; }
+	@StringSetter("pruningDistanceSavingsMinDegree")
+	public void setPruningDistanceSavingsMinDegree(int pruningDistanceSavingsMinDegree) {
+		this.pruningDistanceSavingsMinDegree = pruningDistanceSavingsMinDegree;
+	}
+
+	@StringGetter("pruningRankingObjective")
+	public String getPruningRankingObjective() {
+		return pruningObjective;
+	}
+
+	@StringSetter("pruningRankingObjective")
+	public void setPruningRankingObjective(String pruningRankingObjective) {
+		this.pruningObjective = pruningRankingObjective;
+	}
+
+	@StringGetter("pruningRankingGoal")
+	public String getPruningRankingGoal() {
+		return pruningGoal;
+	}
+
+	@StringSetter("pruningRankingGoal")
+	public void setPruningRankingGoal(String pruningRankingGoal) {
+		this.pruningGoal = pruningRankingGoal;
+	}
+
+	@StringGetter("pruningKeepTopNExtensionsPerBaseRide")
+	public int getPruningKeepTopNExtensionsPerBaseRide() {
+		return pruningTopNPerBase;
+	}
+
+	@StringSetter("pruningKeepTopNExtensionsPerBaseRide")
+	public void setPruningKeepTopNExtensionsPerBaseRide(int pruningKeepTopNExtensionsPerBaseRide) {
+		this.pruningTopNPerBase = pruningKeepTopNExtensionsPerBaseRide;
+	}
 
 	@StringGetter("calcShapleyValues")
 	public boolean isCalcShapleyValues() {
@@ -657,13 +740,25 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Parallelism for core ExMAS pair generation and ride extension. -1 = all processors, 1 = sequential (more deterministic). Default: -1");
 		map.put("heuristicsProcessCount",
 				"Parallelism for Shapley/predecessor calculations. -1 = all processors, 1 = sequential. Default: -1");
-		map.put("pruningEnabled", "Enable heuristic pruning during ride extension to avoid combinatorial explosion. Default: true");
-		map.put("pruningFraction", "Keep top fraction of rides per request-set group after each extension. Range (0,1]. Default: 0.5");
-		map.put("pruningMinToKeep", "Minimum number of rides to keep per request-set group regardless of fraction. Default: 3");
-		map.put("pruningRemoveNonImproving", "Remove rides where route distance exceeds sum of individual passenger distances. Default: true");
-		map.put("pruningObjective", "Objective for ranking rides within groups: rideDistance | passengerTravelTime | passengerUtility. Default: rideDistance");
-		map.put("pruningGoal", "Ranking goal for pruning objective: minimize | maximize. Default: minimize");
-		map.put("pruningTopNPerBase", "Limit number of extensions per base ride to top N by objective (0 disables). Default: 0");
+		map.put("heuristicPruningEnabled",
+				"Enable heuristic pruning during ride extension to avoid combinatorial explosion. Default: true");
+		map.put("pruningKeepTopFractionPerRequestSet",
+				"Keep top fraction of rides per request-set group after each extension. Range (0,1]. Default: 0.5");
+		map.put("pruningMinRidesToKeepPerRequestSet",
+				"Minimum number of rides to keep per request-set group regardless of fraction. Default: 3");
+		map.put("pruningMaxRidesToKeepPerRequestSet",
+				"Maximum number of rides to keep per request-set group (0 disables). Default: 0");
+		map.put("pruningDistanceSavingsLogScale",
+				"Degree-aware distance savings pruning: requiredSaving(d)=scale*log2(d), clamped; keep iff rideDistance <= (1-requiredSaving)*sum(request distances). scale<0 disables; scale=0 matches legacy non-improving (rideDistance <= sumDistances). Default: 0.0");
+		map.put("pruningDistanceSavingsMax",
+				"Maximum requiredSaving(d) clamp for distance savings pruning (0-0.99). Default: 0.9");
+		map.put("pruningDistanceSavingsMinDegree",
+				"Minimum pooling degree for applying distance savings pruning. Default: 3 (do not prune paired rides). ");
+		map.put("pruningRankingObjective",
+				"Objective for ranking rides within groups: rideDistance | passengerTravelTime | passengerUtility. Default: rideDistance");
+		map.put("pruningRankingGoal", "Ranking goal for pruning objective: minimize | maximize. Default: minimize");
+		map.put("pruningKeepTopNExtensionsPerBaseRide",
+				"Limit number of extensions per base ride to top N by objective (0 disables). Default: 0");
 		map.put("calcShapleyValues", "Calculate Shapley values for each ride (distance contribution per passenger). Default: true");
 		map.put("calcPredecessors",
 				"Calculate predecessor/successor relationships between rides. When enabled, connection cache is automatically written. Default: true");

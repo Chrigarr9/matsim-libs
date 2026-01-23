@@ -5,8 +5,10 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -73,6 +75,7 @@ public final class RideExtender {
 	public List<Ride> extendRides(List<Ride> ridesToExtend, int nextRideIndex) {
 		int targetDegree = ridesToExtend.isEmpty() ? 0 : ridesToExtend.get(0).getDegree() + 1;
 		boolean useParallel = exMasConfig == null || exMasConfig.getAlgorithmProcessCount() != 1;
+		ExtensionAttemptStats stats = new ExtensionAttemptStats(targetDegree, exMasConfig);
 		log.info("Extending {} rides from degree {} to {} [{}]...",
 				ridesToExtend.size(), targetDegree - 1, targetDegree, useParallel ? "parallel" : "sequential");
 		long startTime = System.currentTimeMillis();
@@ -98,10 +101,12 @@ public final class RideExtender {
 						log.info("  Extension progress: {}/{} ({}%), ETA {}",
 								processed, total, String.format("%.1f", percent), formatDuration(remainingSeconds));
 					}
-					return generateExtensionsForRide(ridesToExtend.get(i));
+					return generateExtensionsForRide(ridesToExtend.get(i), stats);
 				})
 				.flatMap(List::stream)
 				.collect(Collectors.toList());
+
+		stats.logSummary(candidates.size());
 
 		// Phase 2: Sort by (baseRideIndex, newRequestIndex) for deterministic order
 		candidates.sort(ExtensionCandidate.COMPARATOR);
@@ -122,6 +127,105 @@ public final class RideExtender {
 				pruned.size(), targetDegree, String.format("%.1f", seconds));
 
 		return pruned;
+	}
+
+	private static final class ExtensionAttemptStats {
+		private final int targetDegree;
+		private final ExMasConfigGroup config;
+
+		private final LongAdder baseRides = new LongAdder();
+		private final LongAdder neighborRequestsConsidered = new LongAdder();
+		private final LongAdder duplicatePersonSkipped = new LongAdder();
+		private final LongAdder missingPairRidesSkipped = new LongAdder();
+		private final LongAdder tryExtendFailed = new LongAdder();
+		private final LongAdder budgetValidationFailed = new LongAdder();
+		private final LongAdder distanceSavingsPrunedEarly = new LongAdder();
+		private final LongAdder candidatesAdded = new LongAdder();
+		private final LongAdder prunedByTopNPerBase = new LongAdder();
+
+		private ExtensionAttemptStats(int targetDegree, ExMasConfigGroup config) {
+			this.targetDegree = targetDegree;
+			this.config = config;
+		}
+
+		void logSummary(int totalCandidatesAfterGeneration) {
+			long bases = baseRides.sum();
+			if (bases == 0) {
+				bases = 0;
+			}
+
+			long neighborCandidates = neighborRequestsConsidered.sum();
+			long added = candidatesAdded.sum();
+			long prunedSavings = distanceSavingsPrunedEarly.sum();
+			long prunedTopN = prunedByTopNPerBase.sum();
+			long dup = duplicatePersonSkipped.sum();
+			long missingPairs = missingPairRidesSkipped.sum();
+			long failedExtend = tryExtendFailed.sum();
+			long failedBudget = budgetValidationFailed.sum();
+			double denom = neighborCandidates > 0 ? neighborCandidates : 1.0;
+
+			log.info("  Extension generation summary (targetDegree={}):", targetDegree);
+			log.info("    base rides processed: {}", bases);
+			log.info("    neighbor candidates considered: {}", neighborCandidates);
+			String outcomes = String.format(Locale.ROOT,
+					"    outcomes (of %,d neighbor candidates):%n" +
+					"      added: %,d (%.2f%%)%n" +
+					"      pruned (distance-savings): %,d (%.2f%%)%n" +
+					"      failed: tryExtend %,d (%.2f%%), budgetValidation %,d (%.2f%%)%n" +
+					"      skipped: missingPairSupport %,d (%.2f%%), duplicatePerson %,d (%.2f%%)%n" +
+					"      pruned (top-N per base): %,d (%.2f%%)",
+					neighborCandidates,
+					added, 100.0 * added / denom,
+					prunedSavings, 100.0 * prunedSavings / denom,
+					failedExtend, 100.0 * failedExtend / denom,
+					failedBudget, 100.0 * failedBudget / denom,
+					missingPairs, 100.0 * missingPairs / denom,
+					dup, 100.0 * dup / denom,
+					prunedTopN, 100.0 * prunedTopN / denom);
+			log.info(outcomes);
+
+			if (config != null && config.getPruningDistanceSavingsLogScale() >= 0) {
+				double scale = config.getPruningDistanceSavingsLogScale();
+				double maxSaving = Math.min(0.99, Math.max(0.0, config.getPruningDistanceSavingsMax()));
+				int minDegree = Math.max(2, config.getPruningDistanceSavingsMinDegree());
+				double requiredSaving = requiredSavingForDegree(targetDegree, scale, maxSaving, minDegree);
+				String scaleStr = String.format(Locale.ROOT, "%.3f", scale);
+				String maxSavingStr = String.format(Locale.ROOT, "%.2f", maxSaving);
+				String requiredPctStr = String.format(Locale.ROOT, "%.1f", 100.0 * requiredSaving);
+				log.info(
+						"    distance-savings gate (early): scale={}, minDegree={}, maxSaving={} -> requiredSaving(degree={})>={}%",
+						scaleStr,
+						minDegree,
+						maxSavingStr,
+						targetDegree,
+						requiredPctStr);
+			} else {
+				log.info("    distance-savings gate (early): disabled");
+			}
+
+			if (totalCandidatesAfterGeneration == 0) {
+				long wouldBeFeasible = neighborCandidates - missingPairs - dup - failedExtend - failedBudget;
+
+				String likelyCause;
+				if (neighborCandidates == 0) {
+					likelyCause = "no eligible neighbors found (shareability graph empty or too restrictive)";
+				} else if (prunedSavings > 0 && candidatesAdded.sum() == 0 && wouldBeFeasible == prunedSavings) {
+					likelyCause = "distance-savings pruning eliminated all feasible candidates (all others failed tryExtend/budget/graph checks)";
+				} else if (missingPairs > 0 && prunedSavings == 0 && failedExtend == 0 && failedBudget == 0) {
+					likelyCause = "no complete pair-ride support for any 3rd request (shareability graph edges missing)";
+				} else if ((failedExtend > 0 || failedBudget > 0) && prunedSavings == 0 && missingPairs == 0) {
+					likelyCause = "feasibility/budget validation rejected all candidates";
+				} else {
+					likelyCause = String.format(
+							"mixed causes (distance-savings pruned %.1f%%, tryExtend failed %.1f%%, budget validation failed %.1f%%, missing pair support %.1f%%)",
+							100.0 * prunedSavings / denom,
+							100.0 * failedExtend / denom,
+							100.0 * failedBudget / denom,
+							100.0 * missingPairs / denom);
+				}
+				log.info("    RESULT: 0 candidates generated -> {}.", likelyCause);
+			}
+		}
 	}
 
 	private static boolean isPowerOfTwo(int value) {
@@ -146,10 +250,20 @@ public final class RideExtender {
 	 * Generate all valid extensions for a single base ride.
 	 */
 	private List<ExtensionCandidate> generateExtensionsForRide(Ride ride) {
+		return generateExtensionsForRide(ride, null);
+	}
+
+	private List<ExtensionCandidate> generateExtensionsForRide(Ride ride, ExtensionAttemptStats stats) {
 		List<ExtensionCandidate> results = new ArrayList<>();
 		int[] neighbors = graph.findCommonNeighborsSorted(ride.getRequestIndices());
+		if (stats != null) {
+			stats.baseRides.increment();
+		}
 
 		for (int candidateReq : neighbors) {
+			if (stats != null) {
+				stats.neighborRequestsConsidered.increment();
+			}
 			DrtRequest newRequest = requestMap.get(candidateReq);
 
 			// Check for duplicate person
@@ -160,65 +274,100 @@ public final class RideExtender {
 					break;
 				}
 			}
-			if (duplicatePerson) continue;
+			if (duplicatePerson) {
+				if (stats != null) {
+					stats.duplicatePersonSkipped.increment();
+				}
+				continue;
+			}
 
 			int[] pairRides = getPairRides(ride.getRequestIndices(), candidateReq);
-			if (pairRides == null) continue;
+			if (pairRides == null) {
+				if (stats != null) {
+					stats.missingPairRidesSkipped.increment();
+				}
+				continue;
+			}
 
 			// Use temp index (will be reassigned later)
 			Ride ext = tryExtend(ride, newRequest, pairRides, 0);
-			if (ext != null) {
-				Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
-				if (validated != null) {
-					results.add(new ExtensionCandidate(ride.getIndex(), candidateReq, validated));
+			if (ext == null) {
+				if (stats != null) {
+					stats.tryExtendFailed.increment();
 				}
+				continue;
+			}
+
+			Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
+			if (validated == null) {
+				if (stats != null) {
+					stats.budgetValidationFailed.increment();
+				}
+				continue;
+			}
+
+			// Early pruning: drop candidates that don't meet required distance savings
+			if (exMasConfig != null && exMasConfig.getPruningDistanceSavingsLogScale() >= 0
+					&& !passesDistanceSavingsPruning(validated)) {
+				if (stats != null) {
+					stats.distanceSavingsPrunedEarly.increment();
+				}
+				continue;
+			}
+			results.add(new ExtensionCandidate(ride.getIndex(), candidateReq, validated));
+			if (stats != null) {
+				stats.candidatesAdded.increment();
 			}
 		}
 
 		// Optional per-base top-N pruning of extensions by objective
-		int topN = exMasConfig != null ? exMasConfig.getPruningTopNPerBase() : 0;
-		if (topN > 0 && results.size() > topN) {
-			boolean minimize = exMasConfig.getPruningGoal() == null
-					|| exMasConfig.getPruningGoal().equalsIgnoreCase("minimize");
+		int maxExtensionsPerBaseRide = exMasConfig != null ? exMasConfig.getPruningKeepTopNExtensionsPerBaseRide() : 0;
+		if (maxExtensionsPerBaseRide > 0 && results.size() > maxExtensionsPerBaseRide) {
+			if (stats != null) {
+				stats.prunedByTopNPerBase.add(results.size() - maxExtensionsPerBaseRide);
+			}
+			boolean minimize = exMasConfig.getPruningRankingGoal() == null
+					|| exMasConfig.getPruningRankingGoal().equalsIgnoreCase("minimize");
 			Comparator<ExtensionCandidate> cmp = Comparator.comparingDouble(c -> objectiveValue(c.validatedRide));
 			if (!minimize)
 				cmp = cmp.reversed();
 			results.sort(cmp);
-			return new ArrayList<>(results.subList(0, Math.min(topN, results.size())));
+			return new ArrayList<>(results.subList(0, Math.min(maxExtensionsPerBaseRide, results.size())));
 		}
 
 		return results;
 	}
 
 	private List<Ride> applyHeuristicPruning(List<Ride> rides) {
-		if (exMasConfig == null || !exMasConfig.isPruningEnabled() || rides.isEmpty()) {
+		if (exMasConfig == null || !exMasConfig.isHeuristicPruningEnabled() || rides.isEmpty()) {
+			return rides;
+		}
+
+		// Never prune paired rides (degree 2): they are required as building blocks for
+		// higher-degree extensions (getPairRides/tryExtend) and for shareability graph
+		// connectivity.
+		if (rides.get(0).getDegree() == 2) {
 			return rides;
 		}
 
 		int initialTotal = rides.size();
-		int nonImprovingRemoved = 0;
+		double keepTopFractionPerRequestSet = Math.max(0.0,
+				Math.min(1.0, exMasConfig.getPruningKeepTopFractionPerRequestSet()));
+		int minRidesToKeepPerRequestSet = Math.max(0, exMasConfig.getPruningMinRidesToKeepPerRequestSet());
+		int maxRidesToKeepPerRequestSet = Math.max(0, exMasConfig.getPruningMaxRidesToKeepPerRequestSet());
+		boolean minimizeObjective = exMasConfig.getPruningRankingGoal() == null
+				|| exMasConfig.getPruningRankingGoal().equalsIgnoreCase("minimize");
 
-		// Remove non-improving rides (rideDistance > sum of passenger distances)
-		if (exMasConfig.isPruningRemoveNonImproving()) {
-			rides = rides.stream()
-					.filter(r -> r.getRideDistance() <= sumRequestDistances(r))
-					.collect(Collectors.toList());
-			nonImprovingRemoved = initialTotal - rides.size();
-		}
-
-		double fraction = Math.max(0.0, Math.min(1.0, exMasConfig.getPruningFraction()));
-		int minKeep = Math.max(0, exMasConfig.getPruningMinToKeep());
-		boolean minimize = exMasConfig.getPruningGoal() == null
-				|| exMasConfig.getPruningGoal().equalsIgnoreCase("minimize");
-
-		if (fraction >= 1.0 && minKeep <= 0 && nonImprovingRemoved == 0) {
+		if (keepTopFractionPerRequestSet >= 1.0 && minRidesToKeepPerRequestSet <= 0
+				&& maxRidesToKeepPerRequestSet <= 0) {
 			return rides;
 		}
 
 		int beforeFractional = rides.size();
 		List<Ride> kept;
 
-		if (fraction >= 1.0 && minKeep <= 0) {
+		if (keepTopFractionPerRequestSet >= 1.0 && minRidesToKeepPerRequestSet <= 0
+				&& maxRidesToKeepPerRequestSet <= 0) {
 			kept = rides;
 		} else {
 			Map<String, List<Ride>> byGroup = new HashMap<>();
@@ -233,29 +382,94 @@ public final class RideExtender {
 			for (Map.Entry<String, List<Ride>> e : byGroup.entrySet()) {
 				List<Ride> group = e.getValue();
 				Comparator<Ride> cmp = Comparator.comparingDouble(this::objectiveValue);
-				if (!minimize)
+				if (!minimizeObjective)
 					cmp = cmp.reversed();
 				group.sort(cmp);
 
 				int size = group.size();
-				int keep = (int) Math.ceil(size * fraction);
-				keep = Math.max(keep, minKeep);
+				int keep = (int) Math.ceil(size * keepTopFractionPerRequestSet);
+				keep = Math.max(keep, minRidesToKeepPerRequestSet);
+				if (maxRidesToKeepPerRequestSet > 0) {
+					keep = Math.min(keep, maxRidesToKeepPerRequestSet);
+				}
 				keep = Math.min(keep, size);
 				kept.addAll(group.subList(0, keep));
 			}
 		}
 
 		int fractionalRemoved = beforeFractional - kept.size();
-		int totalRemoved = nonImprovingRemoved + fractionalRemoved;
+		log.info(
+				"  Post-generation pruning (per-request-set): candidatesBefore={}, candidatesAfter={}, removed={}",
+				initialTotal,
+				kept.size(),
+				fractionalRemoved);
 
-		log.info("  Pruning stats: Total candidates: {}, Pruned: {} ({} non-improving, {} fractional), Remaining: {}",
-				initialTotal, totalRemoved, nonImprovingRemoved, fractionalRemoved, kept.size());
+		String objective = exMasConfig.getPruningRankingObjective();
+		if (objective == null || objective.isBlank()) {
+			objective = "rideDistance";
+		}
+		String goal = exMasConfig.getPruningRankingGoal();
+		if (goal == null || goal.isBlank()) {
+			goal = "minimize";
+		}
+
+		log.info(
+				"  Pruning settings (per-request-set): keepTopFraction={}, minToKeep={}, maxToKeep={}, objective={}, goal={}",
+				String.format(Locale.ROOT, "%.3f", keepTopFractionPerRequestSet),
+				minRidesToKeepPerRequestSet,
+				maxRidesToKeepPerRequestSet,
+				objective,
+				goal);
 
 		return kept;
 	}
 
+	private boolean passesDistanceSavingsPruning(Ride ride) {
+		if (exMasConfig == null) {
+			return true;
+		}
+		double scale = exMasConfig.getPruningDistanceSavingsLogScale();
+		if (scale < 0) {
+			return true;
+		}
+
+		int degree = ride.getRequests() != null ? ride.getRequests().length : 0;
+		int minDegree = Math.max(2, exMasConfig.getPruningDistanceSavingsMinDegree());
+		if (degree < minDegree) {
+			return true;
+		}
+
+		double sumDistances = sumRequestDistances(ride);
+		if (!(sumDistances > 0)) {
+			return true;
+		}
+
+		double maxSaving = exMasConfig.getPruningDistanceSavingsMax();
+		if (!(maxSaving >= 0)) {
+			maxSaving = 0.0;
+		}
+		maxSaving = Math.min(0.99, maxSaving);
+
+		double requiredSaving = requiredSavingForDegree(degree, scale, maxSaving, minDegree);
+		double maxRideDistance = (1.0 - requiredSaving) * sumDistances;
+		return ride.getRideDistance() <= maxRideDistance;
+	}
+
+	private static double requiredSavingForDegree(int degree, double scale, double maxSaving, int minDegree) {
+		if (scale < 0) {
+			return 0.0;
+		}
+		if (degree < Math.max(2, minDegree)) {
+			return 0.0;
+		}
+		// requiredSaving = scale * log2(degree)
+		double requiredSaving = scale * (Math.log(degree) / Math.log(2.0));
+		requiredSaving = Math.max(0.0, Math.min(Math.min(0.99, maxSaving), requiredSaving));
+		return requiredSaving;
+	}
+
 	private double objectiveValue(Ride r) {
-		String obj = exMasConfig.getPruningObjective();
+		String obj = exMasConfig.getPruningRankingObjective();
 		if (obj == null)
 			obj = "rideDistance";
 		switch (obj) {
