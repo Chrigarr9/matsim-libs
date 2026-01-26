@@ -335,6 +335,14 @@ public class MatsimNetworkCache {
 	public int getCacheSize() {
 		return cache.size();
 	}
+
+	/**
+	 * Get the underlying network.
+	 * Used by stop-based pooling to look up links by ID.
+	 */
+	public Network getNetwork() {
+		return network;
+	}
 	
 	/**
 	 * Get routing statistics.

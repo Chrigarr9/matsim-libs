@@ -145,6 +145,31 @@ public class BudgetValidator {
 				walkDistance, walkDistance);
 		return actualDrtScore - request.bestModeScore;
 	}
+
+	/**
+	 * Calculate DRT score with explicit walk distances (for stop-based pooling).
+	 *
+	 * This is the public entry point for stop-based ride validation where
+	 * actual walk distances to/from stops are known.
+	 *
+	 * @param request the DRT request
+	 * @param delay departure delay (seconds, positive = late)
+	 * @param actualTravelTime total passenger travel time including walks (seconds)
+	 * @param actualDistance total travel distance including walks (meters)
+	 * @param accessWalkDistance walk distance from origin to pickup stop (meters)
+	 * @param egressWalkDistance walk distance from dropoff stop to destination (meters)
+	 * @return total utility score (includes all legs)
+	 */
+	public double calculateDrtScoreWithWalks(
+			DrtRequest request,
+			double delay,
+			double actualTravelTime,
+			double actualDistance,
+			double accessWalkDistance,
+			double egressWalkDistance) {
+		return calculateDrtScore(request, delay, actualTravelTime, actualDistance,
+				accessWalkDistance, egressWalkDistance);
+	}
 	
 	/**
 	 * Calculate DRT trip utility using MATSim scoring function.
