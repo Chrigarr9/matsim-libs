@@ -16,10 +16,10 @@ Integrate the HyperPool algorithm for stop-based ride-pooling, enabling passenge
 | 8.3 Stop-to-Stop Ride Generation | ✅ Complete | 7/7 | StopBasedRideGenerator created |
 | 8.4 Budget Validation Extensions | ✅ Complete | 5/5 | calculateDrtScoreWithWalks added |
 | 8.5 Engine Integration (Stage 1) | ✅ Complete | 4/4 | Phase 5 added to ExMasEngine |
-| 8.6 Output Extensions | ⏳ Pending | 0/6 | |
+| 8.6 Output Extensions | ✅ Complete | 6/6 | CSV columns extended |
 | 8.7 Hyper-Pooling (Stage 2) | ⏳ Pending | 0/38 | |
 
-**Overall Progress**: 32/77 tasks (42%)
+**Overall Progress**: 38/77 tasks (49%) - **Stage 1 Complete!**
 
 ## Activation
 
@@ -250,6 +250,48 @@ Output: D2D rides + S2S rides + HyperPooled rides
 **Fixes**:
 - Moved maybePrunePairRidesAfterGraph to proper class method (was incorrectly nested)
 - Added facilities parameter to support PREDEFINED stop finder
+
+### Phase 8.6: Output Extensions (Completed)
+
+**Date**: 2026-01-26
+
+**Tasks Completed**:
+1. ✅ 6.1 Add variant column to rides CSV
+2. ✅ 6.2 Add pickup stop columns (linkId, X, Y, snappingPenalty)
+3. ✅ 6.3 Add dropoff stop columns (linkId, X, Y, snappingPenalty)
+4. ✅ 6.4 Add accessWalkDistances array column
+5. ✅ 6.5 Add egressWalkDistances array column
+6. ✅ 6.6 Add writeStopBasedStatistics() method
+
+**Modified Files**:
+- `io/ExMasCsvWriter.java` - Extended writeRides(), added writeStopBasedStatistics()
+
+**New CSV Columns**:
+- `variant`: DOOR_TO_DOOR, STOP_TO_STOP, or HYPER_POOLED
+- `pickupStopLinkId`, `pickupStopX`, `pickupStopY`, `pickupSnappingPenalty`
+- `dropoffStopLinkId`, `dropoffStopX`, `dropoffStopY`, `dropoffSnappingPenalty`
+- `accessWalkDistances`: [dist1 | dist2 | ...] per passenger
+- `egressWalkDistances`: [dist1 | dist2 | ...] per passenger
+
+**Statistics Output**:
+- Count and average degree per variant
+- Average access/egress/total walk distances for S2S rides
+
+---
+
+## Stage 1 Complete! 🎉
+
+**Summary**: Stop-based pooling is fully implemented. To enable:
+
+```xml
+<module name="exMas">
+    <param name="enableStopBased" value="true"/>
+    <param name="maxWalkDistanceMeters" value="500.0"/>
+    <param name="stopFindingStrategy" value="GEOMETRIC"/>
+</module>
+```
+
+Stage 2 (Hyper-Pooling) is pending and will build on this foundation.
 
 ## References
 
