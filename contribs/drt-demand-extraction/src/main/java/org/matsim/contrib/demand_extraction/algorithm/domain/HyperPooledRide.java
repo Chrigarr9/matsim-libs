@@ -1,6 +1,9 @@
 package org.matsim.contrib.demand_extraction.algorithm.domain;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -51,6 +54,14 @@ public final class HyperPooledRide {
     private final double startTime;
     private final double endTime;
 
+    // HyperPool Stage 2 extensions
+    private final List<Ride> sourceRides;
+    private final StopSequence orderedStopSequence;
+    private final double[] passengerTotalWalkDistances;
+    private final int[] passengerBoardingStopIndices;
+    private final int[] passengerAlightingStopIndices;
+    private final double[] passengerInVehicleTimes;
+
     /**
      * Private constructor - use {@link Builder} to create instances.
      */
@@ -72,6 +83,38 @@ public final class HyperPooledRide {
         this.totalRideDistance = builder.totalRideDistance;
         this.startTime = builder.startTime;
         this.endTime = builder.endTime;
+
+        // HyperPool Stage 2 extensions
+        this.sourceRides = builder.sourceRides != null
+            ? Collections.unmodifiableList(new ArrayList<>(builder.sourceRides))
+            : Collections.emptyList();
+        this.orderedStopSequence = builder.orderedStopSequence;
+        this.passengerTotalWalkDistances = builder.passengerTotalWalkDistances != null
+            ? builder.passengerTotalWalkDistances.clone()
+            : computeTotalWalkDistances(builder.accessWalkDistances, builder.egressWalkDistances);
+        this.passengerBoardingStopIndices = builder.passengerBoardingStopIndices != null
+            ? builder.passengerBoardingStopIndices.clone()
+            : builder.boardingStopIndices.clone();
+        this.passengerAlightingStopIndices = builder.passengerAlightingStopIndices != null
+            ? builder.passengerAlightingStopIndices.clone()
+            : builder.alightingStopIndices.clone();
+        this.passengerInVehicleTimes = builder.passengerInVehicleTimes != null
+            ? builder.passengerInVehicleTimes.clone()
+            : builder.inVehicleTimes.clone();
+    }
+
+    /**
+     * Helper to compute total walk distances from access and egress arrays.
+     */
+    private static double[] computeTotalWalkDistances(double[] access, double[] egress) {
+        if (access == null || egress == null) {
+            return new double[0];
+        }
+        double[] total = new double[access.length];
+        for (int i = 0; i < access.length; i++) {
+            total[i] = access[i] + egress[i];
+        }
+        return total;
     }
 
     // ==================== Getters ====================
@@ -259,6 +302,116 @@ public final class HyperPooledRide {
         return endTime;
     }
 
+    // ==================== HyperPool Stage 2 Extension Getters ====================
+
+    /**
+     * Returns the source rides that were bundled into this hyper-pooled ride.
+     * These are the original stop-to-stop rides from Stage 1.
+     *
+     * @return an unmodifiable list of source rides
+     */
+    public List<Ride> getSourceRides() {
+        return sourceRides;
+    }
+
+    /**
+     * Returns the ordered stop sequence for this hyper-pooled ride.
+     * The StopSequence provides the vehicle's route through all pickup and dropoff stops.
+     *
+     * @return the stop sequence, or null if not set
+     */
+    public StopSequence getOrderedStopSequence() {
+        return orderedStopSequence;
+    }
+
+    /**
+     * Returns a defensive copy of total walk distances per passenger.
+     * Each value is the sum of access walk distance (origin to pickup stop) and
+     * egress walk distance (dropoff stop to destination) in meters.
+     */
+    public double[] getPassengerTotalWalkDistances() {
+        return passengerTotalWalkDistances.clone();
+    }
+
+    /**
+     * Returns the total walk distance for the given passenger.
+     */
+    public double getPassengerTotalWalkDistance(int passengerIndex) {
+        return passengerTotalWalkDistances[passengerIndex];
+    }
+
+    /**
+     * Returns a defensive copy of in-vehicle times per passenger.
+     * Each value is the time spent in the vehicle from boarding to alighting (seconds).
+     */
+    public double[] getPassengerInVehicleTimes() {
+        return passengerInVehicleTimes.clone();
+    }
+
+    /**
+     * Returns the in-vehicle time for the given passenger (seconds).
+     */
+    public double getPassengerInVehicleTime(int passengerIndex) {
+        return passengerInVehicleTimes[passengerIndex];
+    }
+
+    /**
+     * Returns a defensive copy of boarding stop indices per passenger.
+     * Each value is the index into the stop sequence where that passenger boards.
+     */
+    public int[] getPassengerBoardingStopIndices() {
+        return passengerBoardingStopIndices.clone();
+    }
+
+    /**
+     * Returns the boarding stop index for the given passenger.
+     */
+    public int getPassengerBoardingStopIndex(int passengerIndex) {
+        return passengerBoardingStopIndices[passengerIndex];
+    }
+
+    /**
+     * Returns a defensive copy of alighting stop indices per passenger.
+     * Each value is the index into the stop sequence where that passenger alights.
+     */
+    public int[] getPassengerAlightingStopIndices() {
+        return passengerAlightingStopIndices.clone();
+    }
+
+    /**
+     * Returns the alighting stop index for the given passenger.
+     */
+    public int getPassengerAlightingStopIndex(int passengerIndex) {
+        return passengerAlightingStopIndices[passengerIndex];
+    }
+
+    /**
+     * Returns the total number of passengers across all source rides.
+     * This sums up the degree (passenger count) of each source ride that was bundled.
+     *
+     * @return total passenger count, or the degree if no source rides are set
+     */
+    public int getTotalPassengerCount() {
+        if (sourceRides.isEmpty()) {
+            return getDegree();
+        }
+        int total = 0;
+        for (Ride ride : sourceRides) {
+            total += ride.getDegree();
+        }
+        return total;
+    }
+
+    /**
+     * Returns the total vehicle kilometers for this hyper-pooled ride.
+     * This is the total distance traveled by the vehicle, converted from meters to kilometers.
+     *
+     * @return total VKT (vehicle kilometers traveled)
+     */
+    public double getTotalVehicleKilometers() {
+        return totalRideDistance / 1000.0;
+    }
+
     // ==================== Builder ====================
 
     /**
@@ -286,7 +439,14 @@ public final class HyperPooledRide {
             .totalRideTime(this.totalRideTime)
             .totalRideDistance(this.totalRideDistance)
             .startTime(this.startTime)
-            .endTime(this.endTime);
+            .endTime(this.endTime)
+            // HyperPool Stage 2 extensions
+            .sourceRides(new ArrayList<>(this.sourceRides))
+            .orderedStopSequence(this.orderedStopSequence)
+            .passengerTotalWalkDistances(this.passengerTotalWalkDistances)
+            .passengerBoardingStopIndices(this.passengerBoardingStopIndices)
+            .passengerAlightingStopIndices(this.passengerAlightingStopIndices)
+            .passengerInVehicleTimes(this.passengerInVehicleTimes);
     }
 
     /**
@@ -306,6 +466,14 @@ public final class HyperPooledRide {
         private double totalRideDistance;
         private double startTime;
         private double endTime;
+
+        // HyperPool Stage 2 extension fields
+        private List<Ride> sourceRides;
+        private StopSequence orderedStopSequence;
+        private double[] passengerTotalWalkDistances;
+        private int[] passengerBoardingStopIndices;
+        private int[] passengerAlightingStopIndices;
+        private double[] passengerInVehicleTimes;
 
         private Builder() {}
 
@@ -371,6 +539,38 @@ public final class HyperPooledRide {
 
         public Builder endTime(double endTime) {
             this.endTime = endTime;
+            return this;
+        }
+
+        // HyperPool Stage 2 extension setters
+
+        public Builder sourceRides(List<Ride> sourceRides) {
+            this.sourceRides = sourceRides;
+            return this;
+        }
+
+        public Builder orderedStopSequence(StopSequence orderedStopSequence) {
+            this.orderedStopSequence = orderedStopSequence;
+            return this;
+        }
+
+        public Builder passengerTotalWalkDistances(double[] passengerTotalWalkDistances) {
+            this.passengerTotalWalkDistances = passengerTotalWalkDistances;
+            return this;
+        }
+
+        public Builder passengerBoardingStopIndices(int[] passengerBoardingStopIndices) {
+            this.passengerBoardingStopIndices = passengerBoardingStopIndices;
+            return this;
+        }
+
+        public Builder passengerAlightingStopIndices(int[] passengerAlightingStopIndices) {
+            this.passengerAlightingStopIndices = passengerAlightingStopIndices;
+            return this;
+        }
+
+        public Builder passengerInVehicleTimes(double[] passengerInVehicleTimes) {
+            this.passengerInVehicleTimes = passengerInVehicleTimes;
             return this;
         }
 
