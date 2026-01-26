@@ -13,13 +13,13 @@ Integrate the HyperPool algorithm for stop-based ride-pooling, enabling passenge
 |-----------|--------|------------|-------|
 | 8.1 Configuration & Domain Model | ✅ Complete | 8/8 | All classes created, config extended |
 | 8.2 Stop Finding Algorithm | ✅ Complete | 8/8 | All stop finders implemented |
-| 8.3 Stop-to-Stop Ride Generation | ⏳ Pending | 0/7 | |
-| 8.4 Budget Validation Extensions | ⏳ Pending | 0/5 | |
+| 8.3 Stop-to-Stop Ride Generation | ✅ Complete | 7/7 | StopBasedRideGenerator created |
+| 8.4 Budget Validation Extensions | ✅ Complete | 5/5 | calculateDrtScoreWithWalks added |
 | 8.5 Engine Integration (Stage 1) | ⏳ Pending | 0/4 | |
 | 8.6 Output Extensions | ⏳ Pending | 0/6 | |
 | 8.7 Hyper-Pooling (Stage 2) | ⏳ Pending | 0/38 | |
 
-**Overall Progress**: 16/77 tasks (21%)
+**Overall Progress**: 28/77 tasks (36%)
 
 ## Activation
 
@@ -188,6 +188,44 @@ Output: D2D rides + S2S rides + HyperPooled rides
 - GeometricStopFinder weights by inverse of max walk distance (tighter constraints = more weight)
 - Statistics tracking in WalkingDistanceCalculator for analysis
 - Mode and length filtering in LinkCandidateFinder
+
+### Phase 8.3: Stop-to-Stop Ride Generation (Completed)
+
+**Date**: 2026-01-26
+
+**Tasks Completed**:
+1. ✅ 3.1 Create StopBasedRideGenerator main class
+2. ✅ 3.2 Implement pickup stop finding
+3. ✅ 3.3 Implement dropoff stop finding
+4. ✅ 3.4 Calculate per-passenger walk distances
+5. ✅ 3.5 Generate stop-to-stop routes (via MatsimNetworkCache)
+6. ✅ 3.6 Handle infeasible conversions with statistics
+7. ✅ 3.7 Parallel processing support
+
+**New Files Created**:
+- `algorithm/generation/StopBasedRideGenerator.java` - Main S2S ride generator
+
+**Key Implementation Details**:
+- Only converts rides with degree >= 2 (single rides stay door-to-door)
+- Uses StopFinder interface for pluggable stop finding strategies
+- Validates walk distances against hard cap before budget validation
+- Detailed statistics: conversion rate, failure reasons, average walks
+- Parallel processing with deterministic output ordering
+
+### Phase 8.4: Budget Validation Extensions (Completed)
+
+**Date**: 2026-01-26
+
+**Tasks Completed**:
+1. ✅ 4.1 Extend BudgetValidator with calculateDrtScoreWithWalks()
+2. ✅ 4.2 Update to use actual walk distances
+3. ✅ 4.3 Add walk distance hard cap validation
+4. ✅ 4.4 Budget calculation in StopBasedRideGenerator
+5. ✅ 4.5 Validation statistics tracking
+
+**Modified Files**:
+- `algorithm/validation/BudgetValidator.java` - Added public calculateDrtScoreWithWalks()
+- `algorithm/network/MatsimNetworkCache.java` - Added getNetwork() accessor
 
 ## References
 
