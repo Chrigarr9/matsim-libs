@@ -9,6 +9,7 @@ import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.api.core.v01.population.Route;
+import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
@@ -170,7 +171,176 @@ public class BudgetValidator {
 		return calculateDrtScore(request, delay, actualTravelTime, actualDistance,
 				accessWalkDistance, egressWalkDistance);
 	}
-	
+
+	// ===========================================
+	// Hyper-Pooling (Stage 2) Validation Methods
+	// ===========================================
+
+	/**
+	 * Validate a hyper-pooled ride against budget constraints.
+	 *
+	 * Budget validation for hyper-pooled rides calculates remaining budget against
+	 * the base score (best alternative mode score), NOT the S2S ride's remaining budget.
+	 *
+	 * @param ride the HyperPooledRide to validate
+	 * @return ride with populated budgets, or null if any passenger fails validation
+	 */
+	public HyperPooledRide validateHyperPooledRide(HyperPooledRide ride) {
+		// First validate walk distances - if any exceed max, ride is infeasible
+		if (!validateWalkDistances(ride)) {
+			log.debug("Hyper-pooled ride {} failed walk distance validation", ride.getIndex());
+			return null;
+		}
+
+		// Calculate remaining budgets for all passengers
+		DrtRequest[] requests = ride.getRequests();
+		double[] remainingBudgets = new double[ride.getDegree()];
+
+		for (int i = 0; i < ride.getDegree(); i++) {
+			DrtRequest request = requests[i];
+
+			// Calculate actual DRT score for this passenger in the hyper-pooled ride
+			double actualDrtScore = calculateHyperPoolDrtScore(ride, i);
+
+			// Budget is calculated against the base score (best alternative mode),
+			// NOT against the S2S ride's remaining budget
+			remainingBudgets[i] = actualDrtScore - request.bestModeScore;
+
+			// If any passenger has negative budget, ride is infeasible
+			if (remainingBudgets[i] < 0) {
+				log.debug("Hyper-pooled ride {} failed budget validation for passenger {} (budget: {})",
+						ride.getIndex(), request.index, remainingBudgets[i]);
+				return null;
+			}
+		}
+
+		// All passengers have non-negative budgets - create validated ride
+		return ride.toBuilder()
+				.remainingBudgets(remainingBudgets)
+				.build();
+	}
+
+	/**
+	 * Calculate DRT score for a passenger in a hyper-pooled ride.
+	 *
+	 * This includes:
+	 * - Total walk distance (access from origin to boarding stop + egress from alighting stop to destination)
+	 * - In-vehicle time from boarding to alighting
+	 * - Any fare discount for hyper-pooling (if configured)
+	 *
+	 * @param ride the HyperPooledRide containing the passenger
+	 * @param passengerIndex index of the passenger within the ride
+	 * @return total utility score for this passenger's trip
+	 */
+	public double calculateHyperPoolDrtScore(HyperPooledRide ride, int passengerIndex) {
+		DrtRequest request = ride.getRequest(passengerIndex);
+
+		// Get walk distances for this passenger
+		double accessWalkDistance = ride.getAccessWalkDistance(passengerIndex);
+		double egressWalkDistance = ride.getEgressWalkDistance(passengerIndex);
+
+		// Get in-vehicle time for this passenger (time from boarding to alighting)
+		double inVehicleTime = ride.getInVehicleTime(passengerIndex);
+
+		// Calculate delay based on ride start time vs passenger's request time
+		// In hyper-pooled rides, start time is when vehicle departs first stop
+		// Each passenger's delay depends on when they board relative to their request time
+		double accessWalkTime = accessWalkDistance / walkSpeed;
+		double passengerBoardingTime = ride.getStartTime() + calculateTimeToStop(ride, passengerIndex);
+		double passengerReadyTime = request.requestTime + accessWalkTime;
+		double delay = passengerBoardingTime - passengerReadyTime;
+
+		// For distance, use the direct distance (fare is based on direct route)
+		// The actual distance includes detours but fare calculation uses direct
+		double distance = request.directDistance;
+
+		// Calculate DRT score using the standard scoring method
+		// This properly handles walk legs, DRT leg, waiting time, etc.
+		return calculateDrtScore(
+				request,
+				delay,
+				inVehicleTime,
+				distance,
+				accessWalkDistance,
+				egressWalkDistance);
+	}
+
+	/**
+	 * Calculate time from ride start to when a specific passenger boards.
+	 *
+	 * This traverses the stop sequence from start to the passenger's boarding stop,
+	 * summing up travel times between stops.
+	 *
+	 * @param ride the HyperPooledRide
+	 * @param passengerIndex index of the passenger
+	 * @return time in seconds from ride start to passenger's boarding
+	 */
+	private double calculateTimeToStop(HyperPooledRide ride, int passengerIndex) {
+		int boardingStopIndex = ride.getBoardingStopIndex(passengerIndex);
+
+		// If passenger boards at first stop, time is 0
+		if (boardingStopIndex == 0) {
+			return 0.0;
+		}
+
+		// Calculate cumulative time to reach the boarding stop
+		// This uses the ordered stop sequence and travel times between stops
+		// For now, approximate using the ride's total time proportionally
+		// (A more precise calculation would require inter-stop travel times)
+		double fractionOfStops = (double) boardingStopIndex / (ride.getStopCount() - 1);
+		return fractionOfStops * ride.getTotalRideTime();
+	}
+
+	/**
+	 * Validate walk distances for all passengers in a hyper-pooled ride.
+	 *
+	 * Ensures no passenger's total walk exceeds maxWalkDistanceMeters.
+	 * Total walk includes:
+	 * - Original S2S access walk (origin to original pickup stop)
+	 * - Any relocation distance (if stop was merged/moved in hyper-pooling)
+	 * - Original S2S egress walk (original dropoff stop to destination)
+	 * - Any relocation distance for egress
+	 *
+	 * @param ride the HyperPooledRide to validate
+	 * @return true if all passengers' walks are within limits, false otherwise
+	 */
+	public boolean validateWalkDistances(HyperPooledRide ride) {
+		double maxWalkDistance = exMasConfig.getMaxWalkDistanceMeters();
+
+		for (int i = 0; i < ride.getDegree(); i++) {
+			// Get total walk distance for this passenger
+			// This already includes access + egress + any relocation
+			double totalWalkDistance = ride.getPassengerTotalWalkDistance(i);
+
+			// Also check individual components if they exceed max
+			double accessWalk = ride.getAccessWalkDistance(i);
+			double egressWalk = ride.getEgressWalkDistance(i);
+
+			// Validate total walk distance
+			if (totalWalkDistance > maxWalkDistance) {
+				log.debug("Passenger {} total walk distance ({} m) exceeds max ({} m)",
+						ride.getRequest(i).index, totalWalkDistance, maxWalkDistance);
+				return false;
+			}
+
+			// Also validate individual walks (access and egress separately)
+			// Some configurations may want stricter per-leg limits
+			if (accessWalk > maxWalkDistance) {
+				log.debug("Passenger {} access walk distance ({} m) exceeds max ({} m)",
+						ride.getRequest(i).index, accessWalk, maxWalkDistance);
+				return false;
+			}
+
+			if (egressWalk > maxWalkDistance) {
+				log.debug("Passenger {} egress walk distance ({} m) exceeds max ({} m)",
+						ride.getRequest(i).index, egressWalk, maxWalkDistance);
+				return false;
+			}
+		}
+
+		return true;
+	}
+
 	/**
 	 * Calculate DRT trip utility using MATSim scoring function.
 	 * 

@@ -8,6 +8,7 @@ import java.util.List;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
+import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
 import org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation;
@@ -358,9 +359,146 @@ public final class ExMasCsvWriter {
 						avgAccessWalk, avgEgressWalk, avgAccessWalk + avgEgressWalk));
 				writer.newLine();
 			}
+
+			// Add HYPER_POOLED summary if we have any (separate from individual Ride variants)
+			List<Ride> hyperPooledRides = variantGroups.getOrDefault(RideVariant.HYPER_POOLED, List.of());
+			if (!hyperPooledRides.isEmpty()) {
+				double avgSourceRides = hyperPooledRides.stream()
+						.mapToInt(Ride::getDegree)
+						.average()
+						.orElse(0.0);
+				double avgRideTravelTime = hyperPooledRides.stream()
+						.mapToDouble(Ride::getRideTravelTime)
+						.average()
+						.orElse(0.0);
+				double avgRideDistance = hyperPooledRides.stream()
+						.mapToDouble(Ride::getRideDistance)
+						.average()
+						.orElse(0.0);
+
+				writer.newLine();
+				writer.write("# HYPER_POOLED additional metrics:");
+				writer.newLine();
+				writer.write(String.format(java.util.Locale.US,
+						"# avgSourceRidesPerBundle=%.2f, avgRideTravelTime=%.2f, avgRideDistance=%.2f",
+						avgSourceRides, avgRideTravelTime, avgRideDistance));
+				writer.newLine();
+			}
 		} catch (IOException e) {
 			throw new RuntimeException("Could not write stop-based statistics CSV: " + filename, e);
 		}
+	}
+
+	/**
+	 * Write hyper-pooled rides to CSV file.
+	 *
+	 * @param filename output file path
+	 * @param hyperPooledRides list of hyper-pooled rides
+	 * @throws RuntimeException if writing fails
+	 */
+	public static void writeHyperPooledRides(String filename, List<HyperPooledRide> hyperPooledRides) {
+		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
+			// Header with all hyper-pooled ride attributes
+			writer.write("rideIndex,degree," +
+					"sourceRideIndices," +
+					"stopSequence,stopSequenceX,stopSequenceY," +
+					"passengerBoardingStopIndices,passengerAlightingStopIndices," +
+					"passengerTotalWalkDistances,passengerInVehicleTimes," +
+					"totalTravelTime,totalDistance,totalVKT," +
+					"passengerDelays,remainingBudgets");
+			writer.newLine();
+
+			List<HyperPooledRide> sortedRides = hyperPooledRides.stream()
+					.sorted(Comparator.comparingInt(HyperPooledRide::getIndex))
+					.toList();
+
+			for (HyperPooledRide ride : sortedRides) {
+				// Format source ride indices
+				int[] sourceIndices = ride.getSourceRides().stream()
+						.mapToInt(Ride::getIndex)
+						.toArray();
+				String sourceRideIndicesStr = formatIntArray(sourceIndices);
+
+				// Format stop sequence (link IDs, X coords, Y coords)
+				StopLocation[] stops = ride.getStopSequence();
+				String[] stopLinkIds = Arrays.stream(stops)
+						.map(s -> s.getLinkId().toString())
+						.toArray(String[]::new);
+				double[] stopX = Arrays.stream(stops)
+						.mapToDouble(s -> s.getCoord().getX())
+						.toArray();
+				double[] stopY = Arrays.stream(stops)
+						.mapToDouble(s -> s.getCoord().getY())
+						.toArray();
+
+				String stopSequenceStr = formatStringArray(stopLinkIds);
+				String stopSequenceXStr = formatDoubleArray(stopX);
+				String stopSequenceYStr = formatDoubleArray(stopY);
+
+				// Format passenger boarding/alighting stop indices
+				String boardingIndices = formatIntArray(ride.getPassengerBoardingStopIndices());
+				String alightingIndices = formatIntArray(ride.getPassengerAlightingStopIndices());
+
+				// Format passenger walk distances and in-vehicle times
+				String totalWalkDistances = formatDoubleArray(ride.getPassengerTotalWalkDistances());
+				String inVehicleTimes = formatDoubleArray(ride.getPassengerInVehicleTimes());
+
+				// Format aggregated metrics
+				double totalTravelTime = ride.getTotalRideTime();
+				double totalDistance = ride.getTotalRideDistance();
+				double totalVKT = ride.getTotalVehicleKilometers();
+
+				// Calculate passenger delays from source rides
+				double[] passengerDelays = computePassengerDelaysFromSourceRides(ride);
+				String delaysStr = formatDoubleArray(passengerDelays);
+
+				// Format remaining budgets
+				String remainingBudgetsStr = formatDoubleArray(ride.getRemainingBudgets());
+
+				writer.write(String.format(java.util.Locale.US,
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.4f,%s,%s",
+						ride.getIndex(), ride.getDegree(),
+						sourceRideIndicesStr,
+						stopSequenceStr, stopSequenceXStr, stopSequenceYStr,
+						boardingIndices, alightingIndices,
+						totalWalkDistances, inVehicleTimes,
+						totalTravelTime, totalDistance, totalVKT,
+						delaysStr, remainingBudgetsStr));
+				writer.newLine();
+			}
+		} catch (IOException e) {
+			throw new RuntimeException("Could not write hyper-pooled rides CSV: " + filename, e);
+		}
+	}
+
+	/**
+	 * Compute passenger delays from source rides bundled in a hyper-pooled ride.
+	 * Aggregates delays from all passengers across all source rides.
+	 */
+	private static double[] computePassengerDelaysFromSourceRides(HyperPooledRide hyperRide) {
+		List<Ride> sourceRides = hyperRide.getSourceRides();
+		if (sourceRides == null || sourceRides.isEmpty()) {
+			// Return zeros matching the degree if no source rides available
+			return new double[hyperRide.getDegree()];
+		}
+
+		// Collect delays from all source rides
+		java.util.List<Double> allDelays = new java.util.ArrayList<>();
+		for (Ride source : sourceRides) {
+			double[] sourceDelays = source.getDelays();
+			if (sourceDelays != null) {
+				for (double delay : sourceDelays) {
+					allDelays.add(delay);
+				}
+			}
+		}
+
+		// Convert to array
+		double[] result = new double[allDelays.size()];
+		for (int i = 0; i < allDelays.size(); i++) {
+			result[i] = allDelays.get(i);
+		}
+		return result;
 	}
 
 	/**

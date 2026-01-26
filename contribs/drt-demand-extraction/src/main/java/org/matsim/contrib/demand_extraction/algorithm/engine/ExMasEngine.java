@@ -2,12 +2,15 @@ package org.matsim.contrib.demand_extraction.algorithm.engine;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.network.Network;
+import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
@@ -16,7 +19,11 @@ import org.matsim.contrib.demand_extraction.algorithm.generation.PairGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.generation.SingleRideGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.generation.StopBasedRideGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
+import org.matsim.contrib.demand_extraction.algorithm.hyperpool.HyperPoolGenerator;
+import org.matsim.contrib.demand_extraction.algorithm.hyperpool.StopCompatibilityChecker;
+import org.matsim.contrib.demand_extraction.algorithm.hyperpool.StopRelocator;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.stops.LinkCandidateFinder;
 import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinder;
 import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinderFactory;
 import org.matsim.contrib.demand_extraction.algorithm.stops.WalkingDistanceCalculator;
@@ -44,6 +51,7 @@ public final class ExMasEngine {
 
 	private List<DrtRequest> requests;
 	private List<Ride> allRides;
+	private List<HyperPooledRide> hyperPooledRides;
 	private ShareabilityGraph graph;
 
 	public ExMasEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
@@ -81,6 +89,7 @@ public final class ExMasEngine {
 
         this.requests = drtRequests;
         this.allRides = new ArrayList<>();
+        this.hyperPooledRides = new ArrayList<>();
         
         DrtRequest[] reqArray = drtRequests.toArray(new DrtRequest[0]);
 
@@ -187,15 +196,31 @@ public final class ExMasEngine {
 
 		// Phase 5: Stop-Based Ride Generation (HyperPool Stage 1)
 		// Only runs if enableStopBased = true
+		List<Ride> stopBasedRides = new ArrayList<>();
 		if (exMasConfig != null && exMasConfig.isEnableStopBased()) {
 			log.info("");
 			log.info("PHASE 5: Stop-Based Ride Generation (HyperPool Stage 1)");
 			log.info("======================================================================");
 
-			List<Ride> stopBasedRides = generateStopBasedRides(allRides);
+			stopBasedRides = generateStopBasedRides(allRides);
 			if (!stopBasedRides.isEmpty()) {
 				allRides.addAll(stopBasedRides);
 				log.info("Added {} stop-to-stop ride variants", stopBasedRides.size());
+			}
+		}
+
+		// Phase 6: Hyper-Pooling (HyperPool Stage 2)
+		// Only runs if enableHyperPooling = true (and enableStopBased = true)
+		if (exMasConfig != null && exMasConfig.isEnableHyperPooling()) {
+			if (!exMasConfig.isEnableStopBased()) {
+				log.warn("Hyper-pooling requires stop-based pooling to be enabled. Skipping Phase 6.");
+			} else {
+				log.info("");
+				log.info("PHASE 6: Hyper-Pooling (HyperPool Stage 2)");
+				log.info("======================================================================");
+
+				hyperPooledRides = generateHyperPooledRides(stopBasedRides);
+				log.info("Generated {} hyper-pooled rides", hyperPooledRides.size());
 			}
 		}
 
@@ -224,10 +249,19 @@ public final class ExMasEngine {
 			long s2sCount = allRides.stream().filter(r -> r.getVariant() == RideVariant.STOP_TO_STOP).count();
 			log.info("");
 			log.info("======================================================================");
-			log.info("Final Summary (with Stop-Based Pooling)");
-			log.info("  Door-to-Door rides: {}", d2dCount);
-			log.info("  Stop-to-Stop rides: {}", s2sCount);
-			log.info("  Total rides: {}", allRides.size());
+			if (exMasConfig.isEnableHyperPooling()) {
+				log.info("Final Summary (with Stop-Based Pooling and Hyper-Pooling)");
+				log.info("  Door-to-Door rides: {}", d2dCount);
+				log.info("  Stop-to-Stop rides: {}", s2sCount);
+				log.info("  Hyper-Pooled rides: {}", hyperPooledRides.size());
+				log.info("  Total Ride objects: {}", allRides.size());
+				log.info("  Total HyperPooledRide objects: {}", hyperPooledRides.size());
+			} else {
+				log.info("Final Summary (with Stop-Based Pooling)");
+				log.info("  Door-to-Door rides: {}", d2dCount);
+				log.info("  Stop-to-Stop rides: {}", s2sCount);
+				log.info("  Total rides: {}", allRides.size());
+			}
 			log.info("======================================================================");
 		}
 
@@ -281,6 +315,102 @@ public final class ExMasEngine {
 		// Generate stop-based rides (indices will be assigned after the main algorithm)
 		int startIndex = doorToDoorRides.size();
 		return generator.generateStopBasedRides(d2dRides, startIndex);
+	}
+
+	/**
+	 * Generate hyper-pooled rides from stop-to-stop rides using HyperPool Stage 2.
+	 *
+	 * <p>Bundles multiple stop-to-stop rides together where passengers walk to/from
+	 * designated stop locations. Creates higher-occupancy rides by allowing nearby
+	 * stops to be served by the same vehicle.
+	 *
+	 * @param stopBasedRides the stop-to-stop rides from Phase 5 (Stage 1)
+	 * @return list of hyper-pooled rides
+	 */
+	private List<HyperPooledRide> generateHyperPooledRides(List<Ride> stopBasedRides) {
+		if (stopBasedRides == null || stopBasedRides.isEmpty()) {
+			log.info("No stop-to-stop rides available for hyper-pooling");
+			return Collections.emptyList();
+		}
+
+		// Filter to S2S rides only
+		List<Ride> s2sRides = stopBasedRides.stream()
+				.filter(r -> r.getVariant() == RideVariant.STOP_TO_STOP)
+				.collect(Collectors.toList());
+
+		if (s2sRides.isEmpty()) {
+			log.info("No STOP_TO_STOP rides found for hyper-pooling");
+			return Collections.emptyList();
+		}
+
+		log.info("Processing {} stop-to-stop rides for hyper-pooling", s2sRides.size());
+
+		// Create StopCompatibilityChecker adapter that implements HyperPoolGenerator.StopCompatibilityChecker
+		StopCompatibilityChecker externalChecker = new StopCompatibilityChecker(exMasConfig);
+		HyperPoolGenerator.StopCompatibilityChecker compatibilityChecker =
+				(r1, r2) -> externalChecker.areCompatible(r1, r2);
+
+		// Create StopRelocator adapter that implements HyperPoolGenerator.StopRelocator
+		Network matsimNetwork = network.getNetwork();
+		Set<String> allowedModes = Collections.singleton("car"); // Default to car mode
+		double maxLinkLength = Double.MAX_VALUE; // No link length filter
+		LinkCandidateFinder linkCandidateFinder = new LinkCandidateFinder(matsimNetwork, allowedModes, maxLinkLength);
+		StopRelocator externalRelocator = new StopRelocator(matsimNetwork, linkCandidateFinder, exMasConfig);
+
+		// Create adapter for StopRelocator interface
+		// The HyperPoolGenerator.StopRelocator interface requires:
+		// - areStopsNearby(stop1, stop2, proximityMeters)
+		// - findMergedStop(stop, existingStops, proximityMeters)
+		// - calculateRelocationDistance(originalStop, mergedStop)
+		// We use the external StopRelocator's methods where possible
+		HyperPoolGenerator.StopRelocator stopRelocator = new HyperPoolGenerator.StopRelocator() {
+			@Override
+			public boolean areStopsNearby(
+					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop1,
+					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop2,
+					double proximityMeters) {
+				// Use Euclidean distance between stop coordinates
+				double distance = org.matsim.core.utils.geometry.CoordUtils.calcEuclideanDistance(
+						stop1.getCoord(), stop2.getCoord());
+				return distance <= proximityMeters;
+			}
+
+			@Override
+			public org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation findMergedStop(
+					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop,
+					List<org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation> existingStops,
+					double proximityMeters) {
+				// Find the first existing stop that is nearby, or return the original stop
+				for (org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation existing : existingStops) {
+					if (areStopsNearby(stop, existing, proximityMeters)) {
+						return existing;
+					}
+				}
+				return stop;
+			}
+
+			@Override
+			public double calculateRelocationDistance(
+					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation originalStop,
+					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation mergedStop) {
+				return org.matsim.core.utils.geometry.CoordUtils.calcEuclideanDistance(
+						originalStop.getCoord(), mergedStop.getCoord());
+			}
+		};
+
+		// Create HyperPoolGenerator
+		HyperPoolGenerator generator = new HyperPoolGenerator(
+				network, stopRelocator, compatibilityChecker, exMasConfig, budgetValidator);
+
+		// Generate hyper-pooled rides
+		// Start index is based on total rides (will be used for HyperPooledRide indexing)
+		int startIndex = allRides.size();
+		List<HyperPooledRide> result = generator.generate(s2sRides, network, startIndex);
+
+		// Log statistics
+		generator.logStatistics();
+
+		return result;
 	}
 
 	/**
@@ -353,5 +483,18 @@ public final class ExMasEngine {
 
 	public List<Ride> getAllRides() {
 		return allRides;
+	}
+
+	/**
+	 * Returns the list of hyper-pooled rides generated in Phase 6.
+	 *
+	 * <p>Hyper-pooled rides are kept in a separate list since they have a different
+	 * structure than regular Ride objects. They bundle multiple stop-to-stop rides
+	 * together where passengers walk to/from designated stop locations.
+	 *
+	 * @return list of hyper-pooled rides, or empty list if hyper-pooling is disabled
+	 */
+	public List<HyperPooledRide> getHyperPooledRides() {
+		return hyperPooledRides != null ? hyperPooledRides : Collections.emptyList();
 	}
 }
