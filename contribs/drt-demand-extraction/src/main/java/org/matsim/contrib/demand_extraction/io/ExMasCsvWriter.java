@@ -9,6 +9,8 @@ import java.util.List;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
+import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
+import org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.core.utils.io.IOUtils;
 
@@ -91,11 +93,15 @@ public final class ExMasCsvWriter {
 		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
 			// Header with all ride attributes and flattened request attributes
 			// Note: predecessors removed (not needed for optimization), successors kept for path cover
-			writer.write("rideIndex,degree,kind," +
+			// Stop-based columns added at the end for backward compatibility
+			writer.write("rideIndex,degree,kind,variant," +
 					"requestIndices,personIds,groupIds,requestTimes,isCommutes," +
 					"originsOrdered,destinationsOrdered," +
 					"passengerTravelTimes,passengerDistances,delays,detours,remainingBudgets,maxCosts,shapleyValues,successors," +
-					"startTime,endTime,rideTravelTime,rideDistance");
+					"startTime,endTime,rideTravelTime,rideDistance," +
+					"pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty," +
+					"dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty," +
+					"accessWalkDistances,egressWalkDistances");
 			writer.newLine();
 
 			List<Ride> sortedRides = rides.stream()
@@ -142,14 +148,48 @@ public final class ExMasCsvWriter {
 				} else {
 					successors = "[]";
 				}
+
+				// Format stop-based columns
+				String variant = ride.getVariant().name();
+				String pickupLinkId = "", dropoffLinkId = "";
+				double pickupX = 0, pickupY = 0, dropoffX = 0, dropoffY = 0;
+				double pickupPenalty = 0, dropoffPenalty = 0;
+				String accessWalks = "[]", egressWalks = "[]";
+
+				if (ride.getVariant() == RideVariant.STOP_TO_STOP || ride.getVariant() == RideVariant.HYPER_POOLED) {
+					StopLocation pickup = ride.getPickupStop();
+					StopLocation dropoff = ride.getDropoffStop();
+
+					if (pickup != null) {
+						pickupLinkId = pickup.getLinkId().toString();
+						pickupX = pickup.getCoord().getX();
+						pickupY = pickup.getCoord().getY();
+						pickupPenalty = pickup.getSnappingPenalty();
+					}
+					if (dropoff != null) {
+						dropoffLinkId = dropoff.getLinkId().toString();
+						dropoffX = dropoff.getCoord().getX();
+						dropoffY = dropoff.getCoord().getY();
+						dropoffPenalty = dropoff.getSnappingPenalty();
+					}
+
+					double[] accessArr = ride.getAccessWalkDistances();
+					double[] egressArr = ride.getEgressWalkDistances();
+					accessWalks = accessArr != null ? formatDoubleArray(accessArr) : "[]";
+					egressWalks = egressArr != null ? formatDoubleArray(egressArr) : "[]";
+				}
+
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f",
-						ride.getIndex(), ride.getDegree(), ride.getKind(),
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s",
+						ride.getIndex(), ride.getDegree(), ride.getKind(), variant,
 						reqIndices, personIds, groupIds, requestTimes, isCommutes,
 						origins, destinations,
 						pttimes, pdists, delays, detours, budgets, maxCosts, shapleyValues, successors,
 						ride.getStartTime(), ride.getEndTime(),
-						ride.getRideTravelTime(), ride.getRideDistance()));
+						ride.getRideTravelTime(), ride.getRideDistance(),
+						pickupLinkId, pickupX, pickupY, pickupPenalty,
+						dropoffLinkId, dropoffX, dropoffY, dropoffPenalty,
+						accessWalks, egressWalks));
 				writer.newLine();
 			}
 		} catch (IOException e) {
@@ -250,6 +290,77 @@ public final class ExMasCsvWriter {
 		}
 		sb.append("]");
 		return sb.toString();
+	}
+
+	/**
+	 * Write stop-based ride statistics summary.
+	 *
+	 * @param filename output file path
+	 * @param rides list of all rides
+	 * @throws RuntimeException if writing fails
+	 */
+	public static void writeStopBasedStatistics(String filename, List<Ride> rides) {
+		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
+			writer.write("variant,count,avgDegree,avgAccessWalk,avgEgressWalk,avgTotalWalk");
+			writer.newLine();
+
+			// Group by variant
+			var variantGroups = rides.stream()
+					.collect(java.util.stream.Collectors.groupingBy(Ride::getVariant));
+
+			for (RideVariant variant : RideVariant.values()) {
+				List<Ride> variantRides = variantGroups.getOrDefault(variant, List.of());
+				int count = variantRides.size();
+
+				if (count == 0) {
+					writer.write(String.format(java.util.Locale.US,
+							"%s,%d,0.0,0.0,0.0,0.0", variant.name(), count));
+					writer.newLine();
+					continue;
+				}
+
+				double avgDegree = variantRides.stream()
+						.mapToInt(Ride::getDegree)
+						.average()
+						.orElse(0.0);
+
+				// Calculate walk distances for stop-based variants
+				double avgAccessWalk = 0.0;
+				double avgEgressWalk = 0.0;
+
+				if (variant == RideVariant.STOP_TO_STOP || variant == RideVariant.HYPER_POOLED) {
+					int totalPassengers = 0;
+					double totalAccess = 0;
+					double totalEgress = 0;
+
+					for (Ride ride : variantRides) {
+						double[] accessWalks = ride.getAccessWalkDistances();
+						double[] egressWalks = ride.getEgressWalkDistances();
+
+						if (accessWalks != null && egressWalks != null) {
+							for (int i = 0; i < accessWalks.length; i++) {
+								totalAccess += accessWalks[i];
+								totalEgress += egressWalks[i];
+								totalPassengers++;
+							}
+						}
+					}
+
+					if (totalPassengers > 0) {
+						avgAccessWalk = totalAccess / totalPassengers;
+						avgEgressWalk = totalEgress / totalPassengers;
+					}
+				}
+
+				writer.write(String.format(java.util.Locale.US,
+						"%s,%d,%.2f,%.2f,%.2f,%.2f",
+						variant.name(), count, avgDegree,
+						avgAccessWalk, avgEgressWalk, avgAccessWalk + avgEgressWalk));
+				writer.newLine();
+			}
+		} catch (IOException e) {
+			throw new RuntimeException("Could not write stop-based statistics CSV: " + filename, e);
+		}
 	}
 
 	/**
