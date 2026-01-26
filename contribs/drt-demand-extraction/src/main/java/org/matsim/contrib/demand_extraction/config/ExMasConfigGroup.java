@@ -184,6 +184,56 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// 0.833333333 m/s = 3 km/h (typical walking speed)
 	public static final double DEFAULT_WALK_SPEED = 0.833333333;
 
+	// ===========================================
+	// Stop-Based Pooling (Stage 1) Settings
+	// ===========================================
+
+	/** Master switch to enable stop-based ride generation */
+	private boolean enableStopBased = false;
+
+	/** Hard cap on walking distance (meters) - regardless of budget */
+	private double maxWalkDistanceMeters = 500.0;
+
+	/** Radius to search for optimal stops around passenger origins/destinations */
+	private double stopSearchRadiusMeters = 300.0;
+
+	/** Stop finding strategy: GEOMETRIC, NETWORK_NODE, NETWORK_LINK, PREDEFINED */
+	private String stopFindingStrategy = "GEOMETRIC";
+
+	/** Max link length to consider for stops (optional filter). Default: no filter */
+	private double maxLinkLengthForStopMeters = Double.MAX_VALUE;
+
+	/** Walking speed for time calculations (m/s) - default 1.2 m/s = 4.3 km/h */
+	private double walkSpeedMps = 1.2;
+
+	/** Path to predefined stops file (MATSim TransitStops/Facilities XML) */
+	private String predefinedStopsFile = null;
+
+	/** Whether to use MATSim's walk router for distance/time calculations */
+	private boolean useMatsimWalkRouter = true;
+
+	// ===========================================
+	// Hyper-Pooling (Stage 2) Settings
+	// ===========================================
+
+	/** Enable second-stage bundling of stop-to-stop rides */
+	private boolean enableHyperPooling = false;
+
+	/** Max walking distance to relocated stop in hyper-pooling (meters) */
+	private double hyperPoolMaxStopRelocationMeters = 200.0;
+
+	/** Max number of stops in a hyper-pooled ride */
+	private int hyperPoolMaxStops = 6;
+
+	/** Time window for compatible stop-to-stop rides (seconds) */
+	private double hyperPoolTimeWindowSeconds = 900.0;
+
+	/** Minimum occupancy for hyper-pooled rides to be attractive */
+	private int hyperPoolMinOccupancy = 4;
+
+	/** Stop proximity threshold for considering stops as "same" (meters) */
+	private double hyperPoolStopProximityMeters = 100.0;
+
     public ExMasConfigGroup() {
         super(GROUP_NAME);
     }
@@ -685,6 +735,154 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.includeOpportunityCost = includeOpportunityCost;
 	}
 
+	// ===========================================
+	// Stop-Based Pooling (Stage 1) Getters/Setters
+	// ===========================================
+
+	@StringGetter("enableStopBased")
+	public boolean isEnableStopBased() {
+		return enableStopBased;
+	}
+
+	@StringSetter("enableStopBased")
+	public void setEnableStopBased(boolean enableStopBased) {
+		this.enableStopBased = enableStopBased;
+	}
+
+	@StringGetter("maxWalkDistanceMeters")
+	public double getMaxWalkDistanceMeters() {
+		return maxWalkDistanceMeters;
+	}
+
+	@StringSetter("maxWalkDistanceMeters")
+	public void setMaxWalkDistanceMeters(double maxWalkDistanceMeters) {
+		this.maxWalkDistanceMeters = maxWalkDistanceMeters;
+	}
+
+	@StringGetter("stopSearchRadiusMeters")
+	public double getStopSearchRadiusMeters() {
+		return stopSearchRadiusMeters;
+	}
+
+	@StringSetter("stopSearchRadiusMeters")
+	public void setStopSearchRadiusMeters(double stopSearchRadiusMeters) {
+		this.stopSearchRadiusMeters = stopSearchRadiusMeters;
+	}
+
+	@StringGetter("stopFindingStrategy")
+	public String getStopFindingStrategy() {
+		return stopFindingStrategy;
+	}
+
+	@StringSetter("stopFindingStrategy")
+	public void setStopFindingStrategy(String stopFindingStrategy) {
+		this.stopFindingStrategy = stopFindingStrategy;
+	}
+
+	@StringGetter("maxLinkLengthForStopMeters")
+	public double getMaxLinkLengthForStopMeters() {
+		return maxLinkLengthForStopMeters;
+	}
+
+	@StringSetter("maxLinkLengthForStopMeters")
+	public void setMaxLinkLengthForStopMeters(double maxLinkLengthForStopMeters) {
+		this.maxLinkLengthForStopMeters = maxLinkLengthForStopMeters;
+	}
+
+	@StringGetter("walkSpeedMps")
+	public double getWalkSpeedMps() {
+		return walkSpeedMps;
+	}
+
+	@StringSetter("walkSpeedMps")
+	public void setWalkSpeedMps(double walkSpeedMps) {
+		this.walkSpeedMps = walkSpeedMps;
+	}
+
+	@StringGetter("predefinedStopsFile")
+	public String getPredefinedStopsFile() {
+		return predefinedStopsFile;
+	}
+
+	@StringSetter("predefinedStopsFile")
+	public void setPredefinedStopsFile(String predefinedStopsFile) {
+		this.predefinedStopsFile = predefinedStopsFile;
+	}
+
+	@StringGetter("useMatsimWalkRouter")
+	public boolean isUseMatsimWalkRouter() {
+		return useMatsimWalkRouter;
+	}
+
+	@StringSetter("useMatsimWalkRouter")
+	public void setUseMatsimWalkRouter(boolean useMatsimWalkRouter) {
+		this.useMatsimWalkRouter = useMatsimWalkRouter;
+	}
+
+	// ===========================================
+	// Hyper-Pooling (Stage 2) Getters/Setters
+	// ===========================================
+
+	@StringGetter("enableHyperPooling")
+	public boolean isEnableHyperPooling() {
+		return enableHyperPooling;
+	}
+
+	@StringSetter("enableHyperPooling")
+	public void setEnableHyperPooling(boolean enableHyperPooling) {
+		this.enableHyperPooling = enableHyperPooling;
+	}
+
+	@StringGetter("hyperPoolMaxStopRelocationMeters")
+	public double getHyperPoolMaxStopRelocationMeters() {
+		return hyperPoolMaxStopRelocationMeters;
+	}
+
+	@StringSetter("hyperPoolMaxStopRelocationMeters")
+	public void setHyperPoolMaxStopRelocationMeters(double hyperPoolMaxStopRelocationMeters) {
+		this.hyperPoolMaxStopRelocationMeters = hyperPoolMaxStopRelocationMeters;
+	}
+
+	@StringGetter("hyperPoolMaxStops")
+	public int getHyperPoolMaxStops() {
+		return hyperPoolMaxStops;
+	}
+
+	@StringSetter("hyperPoolMaxStops")
+	public void setHyperPoolMaxStops(int hyperPoolMaxStops) {
+		this.hyperPoolMaxStops = hyperPoolMaxStops;
+	}
+
+	@StringGetter("hyperPoolTimeWindowSeconds")
+	public double getHyperPoolTimeWindowSeconds() {
+		return hyperPoolTimeWindowSeconds;
+	}
+
+	@StringSetter("hyperPoolTimeWindowSeconds")
+	public void setHyperPoolTimeWindowSeconds(double hyperPoolTimeWindowSeconds) {
+		this.hyperPoolTimeWindowSeconds = hyperPoolTimeWindowSeconds;
+	}
+
+	@StringGetter("hyperPoolMinOccupancy")
+	public int getHyperPoolMinOccupancy() {
+		return hyperPoolMinOccupancy;
+	}
+
+	@StringSetter("hyperPoolMinOccupancy")
+	public void setHyperPoolMinOccupancy(int hyperPoolMinOccupancy) {
+		this.hyperPoolMinOccupancy = hyperPoolMinOccupancy;
+	}
+
+	@StringGetter("hyperPoolStopProximityMeters")
+	public double getHyperPoolStopProximityMeters() {
+		return hyperPoolStopProximityMeters;
+	}
+
+	@StringSetter("hyperPoolStopProximityMeters")
+	public void setHyperPoolStopProximityMeters(double hyperPoolStopProximityMeters) {
+		this.hyperPoolStopProximityMeters = hyperPoolStopProximityMeters;
+	}
+
     @Override
     public Map<String, String> getComments() {
         Map<String, String> map = super.getComments();
@@ -769,6 +967,39 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("maxSuccessors", "Maximum number of successors to keep per ride (closest by distance). Default: 50");
 		map.put("intermediateWrite",
 				"Write intermediate outputs during heuristics (parity with Python implementation). Default: false");
+
+		// Stop-Based Pooling (Stage 1) comments
+		map.put("enableStopBased",
+				"Master switch to enable stop-based ride generation. When enabled, passengers walk to/from designated stops. Default: false");
+		map.put("maxWalkDistanceMeters",
+				"Hard cap on walking distance (meters) - regardless of budget. Passengers will never walk further than this. Default: 500.0");
+		map.put("stopSearchRadiusMeters",
+				"Radius to search for optimal stops around passenger origins/destinations (meters). Default: 300.0");
+		map.put("stopFindingStrategy",
+				"Stop finding strategy: GEOMETRIC (centroids), NETWORK_NODE (network nodes), NETWORK_LINK (link midpoints), PREDEFINED (from file). Default: GEOMETRIC");
+		map.put("maxLinkLengthForStopMeters",
+				"Maximum link length to consider for stops when using NETWORK_LINK strategy (meters). Default: Double.MAX_VALUE (no filter)");
+		map.put("walkSpeedMps",
+				"Walking speed for time calculations (m/s). Default: 1.2 m/s = 4.3 km/h");
+		map.put("predefinedStopsFile",
+				"Path to predefined stops file (MATSim TransitStops/Facilities XML). Required when stopFindingStrategy=PREDEFINED. Default: null");
+		map.put("useMatsimWalkRouter",
+				"Whether to use MATSim's walk router for distance/time calculations. If false, uses Euclidean distance. Default: true");
+
+		// Hyper-Pooling (Stage 2) comments
+		map.put("enableHyperPooling",
+				"Enable second-stage bundling of stop-to-stop rides. Requires enableStopBased=true. Default: false");
+		map.put("hyperPoolMaxStopRelocationMeters",
+				"Maximum walking distance to relocated stop in hyper-pooling (meters). Passengers may be asked to walk to a different stop for bundling. Default: 200.0");
+		map.put("hyperPoolMaxStops",
+				"Maximum number of stops in a hyper-pooled ride. Limits complexity of multi-stop routes. Default: 6");
+		map.put("hyperPoolTimeWindowSeconds",
+				"Time window for compatible stop-to-stop rides (seconds). Rides within this window can be bundled. Default: 900.0 (15 min)");
+		map.put("hyperPoolMinOccupancy",
+				"Minimum occupancy for hyper-pooled rides to be attractive. Bundles with fewer passengers are not created. Default: 4");
+		map.put("hyperPoolStopProximityMeters",
+				"Stop proximity threshold for considering stops as 'same' (meters). Stops within this distance can be merged. Default: 100.0");
+
         return map;
     }
 }

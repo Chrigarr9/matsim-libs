@@ -6,6 +6,8 @@ import java.util.stream.Collectors;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
+import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
+import org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation;
 
 /**
  * Immutable representation of a shared ride.
@@ -52,6 +54,13 @@ public final class Ride {
     private final int[] predecessors;
     private final int[] successors;
 
+    // Stop-based pooling support (HyperPool integration)
+    private final RideVariant variant;
+    private final StopLocation pickupStop;
+    private final StopLocation dropoffStop;
+    private final double[] accessWalkDistances;
+    private final double[] egressWalkDistances;
+
     // Private constructor - use Builder
     private Ride(Builder builder) {
         this.index = builder.index;
@@ -84,6 +93,13 @@ public final class Ride {
         this.shapleyValues = builder.shapleyValues != null ? builder.shapleyValues.clone() : null;
         this.predecessors = builder.predecessors != null ? builder.predecessors.clone() : null;
         this.successors = builder.successors != null ? builder.successors.clone() : null;
+
+        // Stop-based pooling fields
+        this.variant = builder.variant != null ? builder.variant : RideVariant.DOOR_TO_DOOR;
+        this.pickupStop = builder.pickupStop;
+        this.dropoffStop = builder.dropoffStop;
+        this.accessWalkDistances = builder.accessWalkDistances != null ? builder.accessWalkDistances.clone() : null;
+        this.egressWalkDistances = builder.egressWalkDistances != null ? builder.egressWalkDistances.clone() : null;
     }
 
     private static double sum(double[] array) {
@@ -183,6 +199,13 @@ public final class Ride {
     public int[] getPredecessors() { return predecessors != null ? predecessors.clone() : null; }
     public int[] getSuccessors() { return successors != null ? successors.clone() : null; }
 
+    // Stop-based pooling getters
+    public RideVariant getVariant() { return variant; }
+    public StopLocation getPickupStop() { return pickupStop; }
+    public StopLocation getDropoffStop() { return dropoffStop; }
+    public double[] getAccessWalkDistances() { return accessWalkDistances != null ? accessWalkDistances.clone() : null; }
+    public double[] getEgressWalkDistances() { return egressWalkDistances != null ? egressWalkDistances.clone() : null; }
+
     // Builder pattern
     public static Builder builder() {
         return new Builder();
@@ -214,7 +237,12 @@ public final class Ride {
             .startTime(this.startTime)
             .shapleyValues(this.shapleyValues)
             .predecessors(this.predecessors)
-            .successors(this.successors);
+            .successors(this.successors)
+            .variant(this.variant)
+            .pickupStop(this.pickupStop)
+            .dropoffStop(this.dropoffStop)
+            .accessWalkDistances(this.accessWalkDistances)
+            .egressWalkDistances(this.egressWalkDistances);
     }
 
     public static final class Builder {
@@ -238,6 +266,13 @@ public final class Ride {
         private double[] shapleyValues;
         private int[] predecessors;
         private int[] successors;
+
+        // Stop-based pooling fields
+        private RideVariant variant;
+        private StopLocation pickupStop;
+        private StopLocation dropoffStop;
+        private double[] accessWalkDistances;
+        private double[] egressWalkDistances;
 
         private Builder() {}
 
@@ -338,6 +373,31 @@ public final class Ride {
 
         public Builder successors(int[] successors) {
             this.successors = successors;
+            return this;
+        }
+
+        public Builder variant(RideVariant variant) {
+            this.variant = variant;
+            return this;
+        }
+
+        public Builder pickupStop(StopLocation pickupStop) {
+            this.pickupStop = pickupStop;
+            return this;
+        }
+
+        public Builder dropoffStop(StopLocation dropoffStop) {
+            this.dropoffStop = dropoffStop;
+            return this;
+        }
+
+        public Builder accessWalkDistances(double[] accessWalkDistances) {
+            this.accessWalkDistances = accessWalkDistances;
+            return this;
+        }
+
+        public Builder egressWalkDistances(double[] egressWalkDistances) {
+            this.egressWalkDistances = egressWalkDistances;
             return this;
         }
 

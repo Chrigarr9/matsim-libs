@@ -54,6 +54,14 @@ public class DrtRequest {
     public final double directDistance; // Direct distance without sharing (meters)
 	public final double maxDetourFactor; // Maximum detour factor (e.g., 1.5 means 50% longer than direct)
 
+    /**
+     * Maximum acceptable walking distance for stop-based pooling (meters).
+     * Calculated from the person's remaining budget using BudgetToConstraintsCalculator.
+     * This constrains how far a passenger can walk to/from a shared stop.
+     * A value of 0 or negative means the passenger cannot participate in stop-based pooling.
+     */
+    public final double maxWalkDistance;
+
     // Activity types (for downstream analysis grouping)
     public final String originActivityType; // Type of origin activity (e.g., "home", "work")
     public final String destinationActivityType; // Type of destination activity
@@ -87,6 +95,7 @@ public class DrtRequest {
         this.directTravelTime = builder.directTravelTime;
         this.directDistance = builder.directDistance;
         this.maxDetourFactor = builder.maxDetourFactor;
+        this.maxWalkDistance = builder.maxWalkDistance;
         this.originActivityType = builder.originActivityType;
         this.destinationActivityType = builder.destinationActivityType;
         this.carTravelTime = builder.carTravelTime;
@@ -121,6 +130,7 @@ public class DrtRequest {
             .directTravelTime(this.directTravelTime)
             .directDistance(this.directDistance)
             .maxDetourFactor(this.maxDetourFactor)
+            .maxWalkDistance(this.maxWalkDistance)
             .originActivityType(this.originActivityType)
             .destinationActivityType(this.destinationActivityType)
             .carTravelTime(this.carTravelTime)
@@ -210,6 +220,7 @@ public class DrtRequest {
         private double directTravelTime;
         private double directDistance;
 		private double maxDetourFactor;
+        private double maxWalkDistance = 0.0;
         private String originActivityType;
         private String destinationActivityType;
         private double carTravelTime;
@@ -241,6 +252,7 @@ public class DrtRequest {
 			this.maxDetourFactor = maxDetourFactor;
 			return this;
 		}
+        public Builder maxWalkDistance(double maxWalkDistance) { this.maxWalkDistance = maxWalkDistance; return this; }
         public Builder originActivityType(String originActivityType) { this.originActivityType = originActivityType; return this; }
         public Builder destinationActivityType(String destinationActivityType) { this.destinationActivityType = destinationActivityType; return this; }
         public Builder carTravelTime(double carTravelTime) { this.carTravelTime = carTravelTime; return this; }

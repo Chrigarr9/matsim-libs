@@ -1,11 +1,25 @@
 # Phase 8: HyperPool Integration
 
-**Status**: Planned
+**Status**: In Progress
 **Full Plan**: [../docs/HYPERPOOL_INTEGRATION_PLAN.md](../docs/HYPERPOOL_INTEGRATION_PLAN.md)
 
 ## Overview
 
 Integrate the HyperPool algorithm for stop-based ride-pooling, enabling passengers to walk to shared pickup/dropoff points.
+
+## Progress Summary
+
+| Sub-Phase | Status | Tasks Done | Notes |
+|-----------|--------|------------|-------|
+| 8.1 Configuration & Domain Model | ✅ Complete | 8/8 | All classes created, config extended |
+| 8.2 Stop Finding Algorithm | ⏳ Pending | 0/9 | |
+| 8.3 Stop-to-Stop Ride Generation | ⏳ Pending | 0/7 | |
+| 8.4 Budget Validation Extensions | ⏳ Pending | 0/5 | |
+| 8.5 Engine Integration (Stage 1) | ⏳ Pending | 0/4 | |
+| 8.6 Output Extensions | ⏳ Pending | 0/6 | |
+| 8.7 Hyper-Pooling (Stage 2) | ⏳ Pending | 0/38 | |
+
+**Overall Progress**: 8/77 tasks (10%)
 
 ## Activation
 
@@ -111,6 +125,38 @@ Output: D2D rides + S2S rides + HyperPooled rides
 
 - MATSim core (TripRouter, CoordUtils, Facilities)
 - Existing ExMAS infrastructure (Ride, BudgetValidator, MatsimNetworkCache)
+
+## Implementation Log
+
+### Phase 8.1: Configuration & Domain Model (Completed)
+
+**Date**: 2026-01-26
+
+**Tasks Completed**:
+1. ✅ 1.1 Add stop-based config parameters to ExMasConfigGroup
+2. ✅ 1.2 Add hyper-pool config parameters to ExMasConfigGroup
+3. ✅ 1.3 Create StopLocation domain class
+4. ✅ 1.4 Create StopFindingStrategy enum
+5. ✅ 1.5 Extend Ride class for stops (variant, pickupStop, dropoffStop, walkDistances)
+6. ✅ 1.6 Create RideVariant enum
+7. ✅ 1.7 Extend DrtRequest with maxWalkDistance
+8. ✅ 1.8 Create HyperPooledRide domain class
+
+**New Files Created**:
+- `config/StopFindingStrategy.java` - Enum for stop finding strategies
+- `algorithm/domain/StopLocation.java` - Immutable stop location class
+- `algorithm/domain/RideVariant.java` - Enum for ride variants
+- `algorithm/domain/HyperPooledRide.java` - Domain class for hyper-pooled rides
+
+**Modified Files**:
+- `config/ExMasConfigGroup.java` - Added 14 new config parameters
+- `algorithm/domain/Ride.java` - Added stop-related fields and builder methods
+- `demand/DrtRequest.java` - Added maxWalkDistance field
+
+**Notes**:
+- Maven build cannot be verified due to network connectivity issues
+- Code structure follows existing patterns in the codebase
+- All new classes use immutable design with Builder pattern where appropriate
 
 ## References
 
