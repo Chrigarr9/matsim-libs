@@ -15,11 +15,11 @@ Integrate the HyperPool algorithm for stop-based ride-pooling, enabling passenge
 | 8.2 Stop Finding Algorithm | ✅ Complete | 8/8 | All stop finders implemented |
 | 8.3 Stop-to-Stop Ride Generation | ✅ Complete | 7/7 | StopBasedRideGenerator created |
 | 8.4 Budget Validation Extensions | ✅ Complete | 5/5 | calculateDrtScoreWithWalks added |
-| 8.5 Engine Integration (Stage 1) | ⏳ Pending | 0/4 | |
+| 8.5 Engine Integration (Stage 1) | ✅ Complete | 4/4 | Phase 5 added to ExMasEngine |
 | 8.6 Output Extensions | ⏳ Pending | 0/6 | |
 | 8.7 Hyper-Pooling (Stage 2) | ⏳ Pending | 0/38 | |
 
-**Overall Progress**: 28/77 tasks (36%)
+**Overall Progress**: 32/77 tasks (42%)
 
 ## Activation
 
@@ -226,6 +226,30 @@ Output: D2D rides + S2S rides + HyperPooled rides
 **Modified Files**:
 - `algorithm/validation/BudgetValidator.java` - Added public calculateDrtScoreWithWalks()
 - `algorithm/network/MatsimNetworkCache.java` - Added getNetwork() accessor
+
+### Phase 8.5: Engine Integration (Completed)
+
+**Date**: 2026-01-26
+
+**Tasks Completed**:
+1. ✅ 5.1 Add stop-based phase (Phase 5) to ExMasEngine
+2. ✅ 5.2 Conditional execution when enableStopBased = true
+3. ✅ 5.3 Output both D2D and S2S variants
+4. ✅ 5.4 Add stop-based statistics logging
+
+**Modified Files**:
+- `algorithm/engine/ExMasEngine.java` - Added Phase 5 stop-based generation
+
+**Key Implementation Details**:
+- Phase 5 runs after standard ExMAS algorithm completes
+- Creates StopFinderFactory based on configured strategy
+- Generates S2S variants for rides with degree >= 2
+- Final output sorted by variant (D2D first), then degree
+- Summary shows D2D/S2S breakdown
+
+**Fixes**:
+- Moved maybePrunePairRidesAfterGraph to proper class method (was incorrectly nested)
+- Added facilities parameter to support PREDEFINED stop finder
 
 ## References
 
