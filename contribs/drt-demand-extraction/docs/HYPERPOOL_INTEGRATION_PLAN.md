@@ -67,38 +67,70 @@ For a 4-person ride: up to 1000m total additional walking
 
 **Mitigation Strategies**:
 
-1. **Closest Point on Link**: Instead of link centroid, use the closest point on the link geometry to the optimal location
-2. **Link Length Filter**: Exclude links longer than a threshold from candidate set
-3. **Node-Based Fallback**: For long links, use nearest node instead
-4. **Statistics Logging**: Track and log the "snapping penalty" for analysis
+1. **Use MATSim's existing utilities**: MATSim already provides `CoordUtils.distancePointLinesegment()` and `CoordUtils.orthogonalProjectionOnLineSegment()` for calculating the shortest distance to a link
+2. **"Teleporting" along link**: In MATSim's conceptual model, once an agent reaches a link, they can board anywhere on it. Walking distance = perpendicular distance to link, not to link centroid
+3. **Link Length Filter**: Optionally exclude very long links from candidate set
+4. **Statistics Logging**: Track and log actual walk distances vs what centroid-based would have been
+
+### MATSim's Existing Utilities
 
 ```java
-// Pseudo-code for smart snapping
-public StopLocation snapToNetwork(Coord optimalPoint, Network network) {
-    Link nearestLink = NetworkUtils.getNearestLink(network, optimalPoint);
+// MATSim already has these in CoordUtils:
 
-    // Calculate snapping penalty
-    Coord linkCentroid = nearestLink.getCoord();
-    double centroidDistance = CoordUtils.calcEuclideanDistance(optimalPoint, linkCentroid);
+// Get shortest distance from point to line segment (the link)
+double walkDistance = CoordUtils.distancePointLinesegment(
+    link.getFromNode().getCoord(),
+    link.getToNode().getCoord(),
+    passengerOrigin
+);
 
-    // Try closest point on link geometry instead
-    Coord closestPointOnLink = findClosestPointOnLinkGeometry(nearestLink, optimalPoint);
-    double closestPointDistance = CoordUtils.calcEuclideanDistance(optimalPoint, closestPointOnLink);
+// Get the actual closest point on the link (if needed for visualization)
+Coord closestPoint = CoordUtils.orthogonalProjectionOnLineSegment(
+    link.getFromNode().getCoord(),
+    link.getToNode().getCoord(),
+    passengerOrigin
+);
+```
 
-    // Log statistics for analysis
-    // TODO: Track these stats aggregated across all rides:
-    //   - Average snapping penalty (centroid vs closest point)
-    //   - Max snapping penalty
-    //   - Distribution of penalties by link length
-    log.debug("Snapping penalty: centroid={}m, closestPoint={}m, linkLength={}m",
-              centroidDistance, closestPointDistance, nearestLink.getLength());
+### Simplified Approach: Walk-to-Link Model
 
-    // Use closest point if it reduces walking significantly
-    if (closestPointDistance < centroidDistance * 0.8) {
-        return new StopLocation(nearestLink.getId(), closestPointOnLink, closestPointDistance);
-    }
-    return new StopLocation(nearestLink.getId(), linkCentroid, centroidDistance);
+In MATSim, the travel model is inherently link-based:
+- **Walking**: Agent walks from their activity location to the nearest point on the link
+- **Boarding**: Agent can board the vehicle anywhere on the link (conceptually "teleports" to vehicle)
+- **Routing**: Vehicle travel times are computed link-to-link via `MatsimNetworkCache`
+
+This means we don't need complex snapping logic. For stop-based pooling:
+
+```java
+// Pseudo-code for walk distance calculation
+public double calculateWalkDistanceToLink(Coord origin, Link link) {
+    // MATSim's existing utility handles all the math
+    return CoordUtils.distancePointLinesegment(
+        link.getFromNode().getCoord(),
+        link.getToNode().getCoord(),
+        origin
+    );
 }
+
+// The StopLocation only needs the link ID for routing
+// The walk distance is calculated separately per passenger
+public record StopLocation(Id<Link> linkId, Coord representativeCoord) {}
+```
+
+### Statistics Logging (for analysis)
+
+```java
+// Track how much we save vs naive centroid approach
+double centroidDistance = CoordUtils.calcEuclideanDistance(origin, link.getCoord());
+double actualWalkDistance = CoordUtils.distancePointLinesegment(...);
+double savingsVsCentroid = centroidDistance - actualWalkDistance;
+
+// Log aggregate stats:
+//   - Average savings vs centroid approach
+//   - Cases where link length > walk distance (long links)
+//   - Distribution of walk distances
+log.debug("Walk to link {}: {}m (centroid would be {}m, saved {}m)",
+          link.getId(), actualWalkDistance, centroidDistance, savingsVsCentroid);
 ```
 
 ---
@@ -130,17 +162,22 @@ private double stopSearchRadiusMeters = 300.0;
  */
 private StopFindingStrategy stopFindingStrategy = StopFindingStrategy.GEOMETRIC;
 
-/** Max link length to consider when snapping (longer links excluded) */
-private double maxLinkLengthForStopMeters = 200.0;
+/**
+ * Max link length to consider for stops (optional filter).
+ * Note: With MATSim's walk-to-link model, long links are not problematic
+ * since we use CoordUtils.distancePointLinesegment() to calculate the
+ * perpendicular (shortest) distance to the link.
+ */
+private double maxLinkLengthForStopMeters = Double.MAX_VALUE;  // No filter by default
 
 /** Walking speed for time calculations (m/s) - default 1.2 m/s = 4.3 km/h */
 private double walkSpeedMps = 1.2;
 
-/** Whether to use closest point on link vs link centroid when snapping */
-private boolean useClosestPointOnLink = true;
-
 /** Path to predefined stops file (if strategy = PREDEFINED) */
 private String predefinedStopsFile = null;
+
+/** Beeline distance factor for walk distance (1.0 = Euclidean, 1.3 = typical urban) */
+private double walkBeelineDistanceFactor = 1.3;
 
 // ===========================================
 // Hyper-Pooling (Stage 2) Settings
@@ -209,9 +246,9 @@ When `enableHyperPooling = true` (requires `enableStopBased = true`):
 | 2.3 | Implement NetworkNodeStopFinder | Search network nodes within radius, select min-walk valid node | `algorithm/stops/NetworkNodeStopFinder.java` (new) |
 | 2.4 | Implement NetworkLinkStopFinder | Search links within radius, use closest point on link geometry | `algorithm/stops/NetworkLinkStopFinder.java` (new) |
 | 2.5 | Implement PredefinedStopFinder | Load stops from file, find nearest valid predefined stop | `algorithm/stops/PredefinedStopFinder.java` (new) |
-| 2.6 | Create NetworkSnapper | Snap geometric point to network with smart link selection | `algorithm/stops/NetworkSnapper.java` (new) |
-| 2.7 | Implement snapping penalty tracking | Track/log average, max, distribution of snapping penalties | Part of NetworkSnapper |
-| 2.8 | Create WalkingDistanceCalculator | Euclidean distance with optional beeline factor | `algorithm/stops/WalkingDistanceCalculator.java` (new) |
+| 2.6 | Create WalkingDistanceCalculator | Use MATSim's `CoordUtils.distancePointLinesegment()` for walk-to-link distances | `algorithm/stops/WalkingDistanceCalculator.java` (new) |
+| 2.7 | Implement walk statistics tracking | Track avg walk distance, savings vs centroid approach | Part of WalkingDistanceCalculator |
+| 2.8 | Create LinkCandidateFinder | Find candidate links within search radius using spatial index | `algorithm/stops/LinkCandidateFinder.java` (new) |
 | 2.9 | Create StopFinderFactory | Create appropriate StopFinder based on config strategy | `algorithm/stops/StopFinderFactory.java` (new) |
 
 ### Phase 3: Stop-to-Stop Ride Generation
@@ -587,106 +624,109 @@ Phase 7: Generate Hyper-Pooled Rides
 
 ## Key Implementation Details
 
-### 1. Smart Network Snapping
+### 1. Walk Distance Calculation Using MATSim Utilities
 
 ```java
 /**
- * Snaps a geometric stop location to the network, avoiding the centroid
- * problem with long links.
- *
- * IMPORTANT: For long links, using the link centroid can add significant
- * walking distance. This implementation uses the closest point on the link
- * geometry instead.
+ * Calculates walking distances to network links using MATSim's existing
+ * CoordUtils. This follows MATSim's walk-to-link model where agents walk
+ * to the nearest point on a link, then "teleport" along the link to board.
  */
-public class NetworkSnapper {
+public class WalkingDistanceCalculator {
 
     // Statistics tracking
-    private final AtomicLong totalSnaps = new AtomicLong();
-    private final AtomicDouble totalSnappingPenalty = new AtomicDouble();
-    private final AtomicDouble maxSnappingPenalty = new AtomicDouble();
+    private final AtomicLong totalCalculations = new AtomicLong();
+    private final AtomicDouble totalWalkDistance = new AtomicDouble();
+    private final AtomicDouble totalSavingsVsCentroid = new AtomicDouble();
 
-    public StopLocation snap(Coord optimalPoint, Network network, ExMasConfigGroup config) {
-        // Find candidate links within search radius
-        Collection<Link> candidates = NetworkUtils.getLinksWithin(
-            network, optimalPoint, config.getStopSearchRadiusMeters());
+    /**
+     * Calculate walk distance from a point to a link.
+     * Uses MATSim's CoordUtils.distancePointLinesegment() which calculates
+     * the perpendicular distance (shortest path) to the link.
+     */
+    public double calculateWalkDistance(Coord origin, Link link) {
+        double walkDistance = CoordUtils.distancePointLinesegment(
+            link.getFromNode().getCoord(),
+            link.getToNode().getCoord(),
+            origin
+        );
 
-        // Filter out links that are too long
-        candidates = candidates.stream()
-            .filter(link -> link.getLength() <= config.getMaxLinkLengthForStopMeters())
-            .toList();
+        // Track statistics: compare with naive centroid approach
+        double centroidDistance = CoordUtils.calcEuclideanDistance(origin, link.getCoord());
+        double savings = centroidDistance - walkDistance;
 
-        if (candidates.isEmpty()) {
-            // Fallback: find nearest link regardless of length
-            Link nearest = NetworkUtils.getNearestLink(network, optimalPoint);
-            candidates = Collections.singletonList(nearest);
+        totalCalculations.incrementAndGet();
+        totalWalkDistance.addAndGet(walkDistance);
+        totalSavingsVsCentroid.addAndGet(savings);
+
+        // Note: For long links, the savings can be significant
+        // e.g., 500m link with origin at perpendicular midpoint:
+        //   - Centroid distance: ~250m
+        //   - Actual walk distance: 0m (if origin is on the link line)
+        if (savings > 50.0) {
+            log.debug("Significant walk savings: {}m vs centroid {}m (saved {}m) for link {} (length={}m)",
+                      String.format("%.1f", walkDistance),
+                      String.format("%.1f", centroidDistance),
+                      String.format("%.1f", savings),
+                      link.getId(),
+                      String.format("%.1f", link.getLength()));
         }
 
-        // Find best candidate: minimize walk distance from optimal point
+        return walkDistance;
+    }
+
+    /**
+     * Find the best link for a stop given multiple passenger origins.
+     * Returns the link that minimizes total walking for all passengers
+     * while respecting individual walk distance constraints.
+     */
+    public Optional<Link> findBestStopLink(
+            List<Coord> passengerOrigins,
+            double[] maxWalkDistances,
+            Collection<Link> candidateLinks) {
+
         Link bestLink = null;
-        Coord bestPoint = null;
-        double bestDistance = Double.MAX_VALUE;
+        double bestTotalWalk = Double.MAX_VALUE;
 
-        for (Link link : candidates) {
-            Coord closestPoint;
-            if (config.isUseClosestPointOnLink()) {
-                closestPoint = findClosestPointOnLink(link, optimalPoint);
-            } else {
-                closestPoint = link.getCoord(); // centroid
+        for (Link link : candidateLinks) {
+            double totalWalk = 0;
+            boolean allWithinConstraints = true;
+
+            for (int i = 0; i < passengerOrigins.size(); i++) {
+                double walk = CoordUtils.distancePointLinesegment(
+                    link.getFromNode().getCoord(),
+                    link.getToNode().getCoord(),
+                    passengerOrigins.get(i)
+                );
+
+                if (walk > maxWalkDistances[i]) {
+                    allWithinConstraints = false;
+                    break;
+                }
+                totalWalk += walk;
             }
 
-            double distance = CoordUtils.calcEuclideanDistance(optimalPoint, closestPoint);
-            if (distance < bestDistance) {
-                bestDistance = distance;
+            if (allWithinConstraints && totalWalk < bestTotalWalk) {
+                bestTotalWalk = totalWalk;
                 bestLink = link;
-                bestPoint = closestPoint;
             }
         }
 
-        // Track statistics
-        totalSnaps.incrementAndGet();
-        totalSnappingPenalty.addAndGet(bestDistance);
-        maxSnappingPenalty.accumulateAndGet(bestDistance, Math::max);
-
-        // Log warning for large penalties
-        if (bestDistance > 50.0) { // > 50m snapping penalty
-            log.warn("Large snapping penalty: {}m for link {} (length={}m)",
-                     String.format("%.1f", bestDistance),
-                     bestLink.getId(),
-                     String.format("%.1f", bestLink.getLength()));
-        }
-
-        return new StopLocation(bestLink.getId(), bestPoint, bestDistance);
+        return Optional.ofNullable(bestLink);
     }
 
     public void logStatistics() {
-        long snaps = totalSnaps.get();
-        if (snaps > 0) {
-            double avgPenalty = totalSnappingPenalty.get() / snaps;
-            log.info("Network snapping statistics:");
-            log.info("  Total snaps: {}", snaps);
-            log.info("  Average snapping penalty: {}m", String.format("%.1f", avgPenalty));
-            log.info("  Maximum snapping penalty: {}m", String.format("%.1f", maxSnappingPenalty.get()));
+        long calcs = totalCalculations.get();
+        if (calcs > 0) {
+            double avgWalk = totalWalkDistance.get() / calcs;
+            double avgSavings = totalSavingsVsCentroid.get() / calcs;
+            log.info("Walking distance statistics:");
+            log.info("  Total calculations: {}", calcs);
+            log.info("  Average walk distance: {}m", String.format("%.1f", avgWalk));
+            log.info("  Average savings vs centroid: {}m", String.format("%.1f", avgSavings));
+            log.info("  Total savings vs centroid approach: {}m",
+                     String.format("%.0f", totalSavingsVsCentroid.get()));
         }
-    }
-
-    private Coord findClosestPointOnLink(Link link, Coord point) {
-        // Project point onto link line segment
-        Coord from = link.getFromNode().getCoord();
-        Coord to = link.getToNode().getCoord();
-
-        double dx = to.getX() - from.getX();
-        double dy = to.getY() - from.getY();
-        double lengthSq = dx * dx + dy * dy;
-
-        if (lengthSq == 0) {
-            return from; // Degenerate link
-        }
-
-        // Parameter t: 0 = from node, 1 = to node
-        double t = ((point.getX() - from.getX()) * dx + (point.getY() - from.getY()) * dy) / lengthSq;
-        t = Math.max(0, Math.min(1, t)); // Clamp to [0, 1]
-
-        return new Coord(from.getX() + t * dx, from.getY() + t * dy);
     }
 }
 ```
@@ -810,8 +850,8 @@ contribs/drt-demand-extraction/src/main/java/org/matsim/contrib/demand_extractio
 |   |   |-- NetworkLinkStopFinder.java (new)
 |   |   |-- PredefinedStopFinder.java  (new)
 |   |   |-- StopFinderFactory.java     (new)
-|   |   |-- NetworkSnapper.java        (new)
-|   |   +-- WalkingDistanceCalculator.java (new)
+|   |   |-- LinkCandidateFinder.java   (new)
+|   |   +-- WalkingDistanceCalculator.java (new - uses CoordUtils.distancePointLinesegment)
 |   +-- validation/
 |       +-- BudgetValidator.java       (extended)
 |-- config/
@@ -835,7 +875,7 @@ contribs/drt-demand-extraction/src/main/java/org/matsim/contrib/demand_extractio
    - Configuration parameters (1.1, 1.2)
    - StopLocation domain class (1.3)
    - Ride extension for stops (1.5)
-   - NetworkSnapper with smart snapping (2.6, 2.7)
+   - WalkingDistanceCalculator using MATSim's CoordUtils (2.6, 2.7)
    - GeometricStopFinder (2.2)
    - StopBasedRideGenerator (3.1-3.7)
    - BudgetValidator extension (4.1-4.5)
