@@ -11,6 +11,25 @@ This document outlines the integration plan for the HyperPool algorithm into the
 
 ---
 
+## Design Decisions
+
+The following design decisions have been made for this integration:
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| D1 | Output strategy | **Output BOTH** door-to-door AND stop-to-stop variants | Different remaining budgets make both valuable for analysis |
+| D2 | Single rides (degree 1) | **Door-to-door only** | Single rides have no sharing benefit from stops |
+| D3 | Ride extension order | **D2D extension first**, then convert to stop-based | Simpler implementation, follows paper approach |
+| D4 | Budget validation basis | Validate against **best mode score** (base score) | Consistent with existing ExMAS budget model |
+| D5 | Walk distance calculation | Use **MATSim's walk router** (beeline factor from config) | Adapts automatically to user's MATSim configuration |
+| D6 | Hyper-pool stop structure | **Multi-stop sequences** (like paper) | Paper uses sequences of pickup/dropoff stops |
+| D7 | Predefined stops format | **MATSim TransitStops/Facilities XML** | Native MATSim format, reusable |
+| D8 | Max walk constraint | `min(budgetBased, hardCap)` | Budget-derived limit with safety cap |
+| D9 | S2S ride references | **No reference to source D2D ride** | S2S rides are independent entities |
+| D10 | Degree filter | **All rides with degree > 1** | Convert all shared rides to stop-based |
+
+---
+
 ## Algorithm Understanding
 
 ### HyperPool Overview
@@ -173,11 +192,19 @@ private double maxLinkLengthForStopMeters = Double.MAX_VALUE;  // No filter by d
 /** Walking speed for time calculations (m/s) - default 1.2 m/s = 4.3 km/h */
 private double walkSpeedMps = 1.2;
 
-/** Path to predefined stops file (if strategy = PREDEFINED) */
+/**
+ * Path to predefined stops file (if strategy = PREDEFINED).
+ * Supports MATSim TransitStops or Facilities XML format.
+ */
 private String predefinedStopsFile = null;
 
-/** Beeline distance factor for walk distance (1.0 = Euclidean, 1.3 = typical urban) */
-private double walkBeelineDistanceFactor = 1.3;
+/**
+ * Whether to use MATSim's walk router for distance/time calculations.
+ * When true: Uses the bound walk router which respects beeline factor from config.
+ * When false: Uses Euclidean distance (for testing/debugging only).
+ * Default: true - automatically adapts to user's MATSim configuration.
+ */
+private boolean useMatsimWalkRouter = true;
 
 // ===========================================
 // Hyper-Pooling (Stage 2) Settings
@@ -245,7 +272,7 @@ When `enableHyperPooling = true` (requires `enableStopBased = true`):
 | 2.2 | Implement GeometricStopFinder | Find optimal point using weighted centroid, constraint adjustment | `algorithm/stops/GeometricStopFinder.java` (new) |
 | 2.3 | Implement NetworkNodeStopFinder | Search network nodes within radius, select min-walk valid node | `algorithm/stops/NetworkNodeStopFinder.java` (new) |
 | 2.4 | Implement NetworkLinkStopFinder | Search links within radius, use closest point on link geometry | `algorithm/stops/NetworkLinkStopFinder.java` (new) |
-| 2.5 | Implement PredefinedStopFinder | Load stops from file, find nearest valid predefined stop | `algorithm/stops/PredefinedStopFinder.java` (new) |
+| 2.5 | Implement PredefinedStopFinder | Load stops from MATSim TransitStops/Facilities XML, find nearest valid predefined stop | `algorithm/stops/PredefinedStopFinder.java` (new) |
 | 2.6 | Create WalkingDistanceCalculator | Use MATSim's `CoordUtils.distancePointLinesegment()` for walk-to-link distances | `algorithm/stops/WalkingDistanceCalculator.java` (new) |
 | 2.7 | Implement walk statistics tracking | Track avg walk distance, savings vs centroid approach | Part of WalkingDistanceCalculator |
 | 2.8 | Create LinkCandidateFinder | Find candidate links within search radius using spatial index | `algorithm/stops/LinkCandidateFinder.java` (new) |
@@ -300,6 +327,24 @@ When `enableHyperPooling = true` (requires `enableStopBased = true`):
 ### Overview
 
 Hyper-pooling bundles multiple stop-to-stop rides that have compatible pickup and/or dropoff stops into single high-occupancy rides resembling public transit. The key insight is that stop-to-stop rides can be treated as "pseudo-requests" with their stops as origins/destinations.
+
+### Multi-Stop Sequences (Paper Approach)
+
+Per the [HyperPool paper](https://www.nature.com/articles/s44333-024-00006-4): *"Travellers of hyper-pooled rides walk to common pick-up points, travel with a shared vehicle **along a sequence of stops** and are dropped off at stops"*. The paper uses `O_r` and `D_r` as **sequences** of pickup and drop-off locations.
+
+**Implementation**: We implement multi-stop sequences as described in the paper:
+```
+Hyper-pooled ride example:
+  Pickup_A → Pickup_B → Pickup_C → Dropoff_A → Dropoff_B → Dropoff_C
+```
+
+Each passenger:
+1. Walks to their assigned pickup stop in the sequence
+2. Rides the vehicle (potentially passing through other stops)
+3. Alights at their assigned dropoff stop
+4. Walks to their final destination
+
+**Note**: The stop sequence is optimized for routing efficiency (typically FIFO for pickups, then FIFO for dropoffs, but may be optimized further).
 
 ### Algorithm Flow
 
@@ -384,12 +429,14 @@ Hyper-pooling bundles multiple stop-to-stop rides that have compatible pickup an
 
 #### Phase 7.6: Budget Validation for Hyper-Pooling
 
+**Important**: Budget validation for hyper-pooled rides calculates remaining budget against the **base score** (best alternative mode score), NOT the stop-to-stop ride's remaining budget. This ensures consistent evaluation across all ride variants.
+
 | # | Task | Description | Files to Modify/Create |
 |---|------|-------------|----------------------|
 | 7.6.1 | Extend BudgetValidator for hyper-pooling | Handle relocated stops and multi-stop rides | `BudgetValidator.java` |
-| 7.6.2 | Calculate relocated walk distances | New walk = original walk + relocation distance | Part of BudgetValidator |
+| 7.6.2 | Calculate total walk distances | Total walk = walk to relocated stop (from origin, not from S2S stop) | Part of BudgetValidator |
 | 7.6.3 | Calculate hyper-pool in-vehicle time | Sum of segments between passenger's boarding and alighting stops | Part of BudgetValidator |
-| 7.6.4 | Validate all passengers | Reject hyper-pooled ride if any passenger has negative remaining budget | Part of BudgetValidator |
+| 7.6.4 | Validate against base score | `remainingBudget = hyperPoolDrtScore - request.getBestModeScore()` | Part of BudgetValidator |
 | 7.6.5 | Apply fare discounts | Hyper-pooled rides may have larger fare discounts (configurable) | Part of BudgetValidator |
 
 #### Phase 7.7: Engine Integration (Stage 2)
@@ -406,7 +453,7 @@ Hyper-pooling bundles multiple stop-to-stop rides that have compatible pickup an
 | # | Task | Description | Files to Modify/Create |
 |---|------|-------------|----------------------|
 | 7.8.1 | Extend CSV for hyper-pooled rides | Add stopSequence, boardingStopIndex, alightingStopIndex per passenger | `io/ExMasCsvWriter.java` |
-| 7.8.2 | Write source ride references | Link hyper-pooled rides to their constituent stop-to-stop rides | `io/ExMasCsvWriter.java` |
+| 7.8.2 | Write passenger origins/destinations | Output original passenger O/D coords (hyper-pooled rides are self-contained) | `io/ExMasCsvWriter.java` |
 | 7.8.3 | Write relocation distances | Add relocationDistanceAccess, relocationDistanceEgress per passenger | `io/ExMasCsvWriter.java` |
 | 7.8.4 | Create hyper-pool summary | Aggregate statistics: avg occupancy, VKT savings, passenger-km | `io/HyperPoolStatisticsWriter.java` (new) |
 
@@ -624,66 +671,83 @@ Phase 7: Generate Hyper-Pooled Rides
 
 ## Key Implementation Details
 
-### 1. Walk Distance Calculation Using MATSim Utilities
+### 1. Walk Distance Calculation Using MATSim Walk Router
+
+**Design Decision**: Use MATSim's bound walk router for distance/time calculations. This automatically respects the user's beeline distance factor and walk speed configuration, ensuring consistency with the rest of the MATSim simulation.
 
 ```java
 /**
- * Calculates walking distances to network links using MATSim's existing
- * CoordUtils. This follows MATSim's walk-to-link model where agents walk
- * to the nearest point on a link, then "teleport" along the link to board.
+ * Calculates walking distances using MATSim's walk router.
+ *
+ * This approach automatically adapts to the user's MATSim configuration:
+ * - Beeline distance factor (typically 1.3 for urban areas)
+ * - Walk speed from scoring parameters
+ * - Any custom walk routing logic bound by the user
  */
 public class WalkingDistanceCalculator {
+
+    private final TripRouter tripRouter;
+    private final String walkMode;
 
     // Statistics tracking
     private final AtomicLong totalCalculations = new AtomicLong();
     private final AtomicDouble totalWalkDistance = new AtomicDouble();
-    private final AtomicDouble totalSavingsVsCentroid = new AtomicDouble();
+    private final AtomicDouble totalWalkTime = new AtomicDouble();
+
+    public WalkingDistanceCalculator(TripRouter tripRouter) {
+        this.tripRouter = tripRouter;
+        this.walkMode = TransportMode.walk;
+    }
 
     /**
-     * Calculate walk distance from a point to a link.
-     * Uses MATSim's CoordUtils.distancePointLinesegment() which calculates
-     * the perpendicular distance (shortest path) to the link.
+     * Calculate walk distance from origin to the closest point on a link.
+     * Uses MATSim's walk router which respects beeline factor from config.
+     *
+     * For stop-based pooling:
+     * 1. Calculate Euclidean distance to link (perpendicular)
+     * 2. Apply beeline factor via walk router
      */
-    public double calculateWalkDistance(Coord origin, Link link) {
-        double walkDistance = CoordUtils.distancePointLinesegment(
-            link.getFromNode().getCoord(),
-            link.getToNode().getCoord(),
+    public WalkLegInfo calculateWalkToLink(Coord origin, Link targetLink, double departureTime) {
+        // Get closest point on link for routing
+        Coord closestPoint = CoordUtils.orthogonalProjectionOnLineSegment(
+            targetLink.getFromNode().getCoord(),
+            targetLink.getToNode().getCoord(),
             origin
         );
 
-        // Track statistics: compare with naive centroid approach
-        double centroidDistance = CoordUtils.calcEuclideanDistance(origin, link.getCoord());
-        double savings = centroidDistance - walkDistance;
+        // Use MATSim's walk router - this respects beeline factor
+        Facility fromFacility = FacilitiesUtils.wrapCoord(origin);
+        Facility toFacility = FacilitiesUtils.wrapLink(targetLink);
 
-        totalCalculations.incrementAndGet();
-        totalWalkDistance.addAndGet(walkDistance);
-        totalSavingsVsCentroid.addAndGet(savings);
+        List<? extends PlanElement> walkRoute = tripRouter.calcRoute(
+            walkMode, fromFacility, toFacility, departureTime, null, null);
 
-        // Note: For long links, the savings can be significant
-        // e.g., 500m link with origin at perpendicular midpoint:
-        //   - Centroid distance: ~250m
-        //   - Actual walk distance: 0m (if origin is on the link line)
-        if (savings > 50.0) {
-            log.debug("Significant walk savings: {}m vs centroid {}m (saved {}m) for link {} (length={}m)",
-                      String.format("%.1f", walkDistance),
-                      String.format("%.1f", centroidDistance),
-                      String.format("%.1f", savings),
-                      link.getId(),
-                      String.format("%.1f", link.getLength()));
+        double walkTime = 0;
+        double walkDistance = 0;
+        for (PlanElement pe : walkRoute) {
+            if (pe instanceof Leg leg) {
+                walkTime += leg.getTravelTime().seconds();
+                walkDistance += leg.getRoute().getDistance();
+            }
         }
 
-        return walkDistance;
+        // Track statistics
+        totalCalculations.incrementAndGet();
+        totalWalkDistance.addAndGet(walkDistance);
+        totalWalkTime.addAndGet(walkTime);
+
+        return new WalkLegInfo(walkDistance, walkTime, closestPoint);
     }
 
     /**
      * Find the best link for a stop given multiple passenger origins.
-     * Returns the link that minimizes total walking for all passengers
-     * while respecting individual walk distance constraints.
+     * Uses walk router for accurate distance calculation.
      */
     public Optional<Link> findBestStopLink(
             List<Coord> passengerOrigins,
             double[] maxWalkDistances,
-            Collection<Link> candidateLinks) {
+            Collection<Link> candidateLinks,
+            double departureTime) {
 
         Link bestLink = null;
         double bestTotalWalk = Double.MAX_VALUE;
@@ -693,17 +757,14 @@ public class WalkingDistanceCalculator {
             boolean allWithinConstraints = true;
 
             for (int i = 0; i < passengerOrigins.size(); i++) {
-                double walk = CoordUtils.distancePointLinesegment(
-                    link.getFromNode().getCoord(),
-                    link.getToNode().getCoord(),
-                    passengerOrigins.get(i)
-                );
+                WalkLegInfo walkInfo = calculateWalkToLink(
+                    passengerOrigins.get(i), link, departureTime);
 
-                if (walk > maxWalkDistances[i]) {
+                if (walkInfo.distance() > maxWalkDistances[i]) {
                     allWithinConstraints = false;
                     break;
                 }
-                totalWalk += walk;
+                totalWalk += walkInfo.distance();
             }
 
             if (allWithinConstraints && totalWalk < bestTotalWalk) {
@@ -719,15 +780,16 @@ public class WalkingDistanceCalculator {
         long calcs = totalCalculations.get();
         if (calcs > 0) {
             double avgWalk = totalWalkDistance.get() / calcs;
-            double avgSavings = totalSavingsVsCentroid.get() / calcs;
-            log.info("Walking distance statistics:");
+            double avgTime = totalWalkTime.get() / calcs;
+            log.info("Walking distance statistics (via MATSim walk router):");
             log.info("  Total calculations: {}", calcs);
             log.info("  Average walk distance: {}m", String.format("%.1f", avgWalk));
-            log.info("  Average savings vs centroid: {}m", String.format("%.1f", avgSavings));
-            log.info("  Total savings vs centroid approach: {}m",
-                     String.format("%.0f", totalSavingsVsCentroid.get()));
+            log.info("  Average walk time: {}s", String.format("%.1f", avgTime));
         }
     }
+
+    /** Immutable result of walk calculation */
+    public record WalkLegInfo(double distance, double time, Coord closestPointOnLink) {}
 }
 ```
 
