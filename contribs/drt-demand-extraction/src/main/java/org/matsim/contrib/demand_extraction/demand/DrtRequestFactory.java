@@ -306,6 +306,15 @@ public class DrtRequestFactory {
 		// Calculate budget using BudgetValidator for consistency
 		double budget = budgetValidator.calculateBudget(tempRequest);
 
+		// Filter out requests where DRT is worse than the best baseline mode even for direct trips.
+		// These requests have no potential for pooling benefit - if direct DRT doesn't beat the baseline,
+		// adding detours and delays from pooling will only make it worse.
+		if (budget < 0) {
+			log.debug("Skipping request index {} (person: {}): negative budget {} (DRT worse than baseline {})",
+					requestIndex, person.getId(), String.format("%.4f", budget), bestBaselineMode.getKey());
+			return null;
+		}
+
 		// Calculate max detour factor as minimum of budget-derived and config limit
 		// This determines the maximum acceptable trip duration (e.g., 1.5 means 50%
 		// longer than direct)
