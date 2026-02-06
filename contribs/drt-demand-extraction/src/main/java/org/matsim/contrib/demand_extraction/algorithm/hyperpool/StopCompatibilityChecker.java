@@ -48,6 +48,7 @@ public final class StopCompatibilityChecker {
 
     private final double defaultTimeWindowSeconds;
     private final double defaultProximityMeters;
+    private final boolean enableSpatialFilter;
 
     /**
      * Creates a new compatibility checker with default thresholds from configuration.
@@ -61,6 +62,7 @@ public final class StopCompatibilityChecker {
         }
         this.defaultTimeWindowSeconds = config.getHyperPoolTimeWindowSeconds();
         this.defaultProximityMeters = config.getHyperPoolStopProximityMeters();
+        this.enableSpatialFilter = config.getHyperPoolEnableSpatialFilter();
     }
 
     // ==================== Temporal Compatibility ====================
@@ -355,12 +357,17 @@ public final class StopCompatibilityChecker {
      * <p>Two rides are fully compatible if ALL of the following conditions are met:
      * <ol>
      *   <li>Temporal compatibility: Departure times within time window</li>
-     *   <li>Spatial compatibility: EITHER pickup stops OR dropoff stops within proximity threshold</li>
      *   <li>Directional compatibility: Rides travel in same general direction</li>
+     *   <li>Spatial compatibility (if enabled): EITHER pickup stops OR dropoff stops within proximity threshold</li>
      * </ol>
      *
-     * <p>Note: Only ONE spatial condition needs to be satisfied (pickup OR dropoff).
-     * This allows hyper-pooling for scenarios like:
+     * <p>Spatial filtering behavior (controlled by hyperPoolEnableSpatialFilter config):
+     * <ul>
+     *   <li>If enabled (default): Pre-filters to only nearby stops (pickup OR dropoff), faster but may miss some valid bundles</li>
+     *   <li>If disabled: Uses original utility-based approach, evaluates all ride pairs (slower but comprehensive)</li>
+     * </ul>
+     *
+     * <p>With spatial filtering enabled, supports asymmetric patterns like:
      * <ul>
      *   <li>"Shuttle from downtown" - common pickup, various dropoffs</li>
      *   <li>"Shuttle to airport" - various pickups, common dropoff</li>
@@ -388,14 +395,18 @@ public final class StopCompatibilityChecker {
             return false;
         }
 
-        // Spatial check: Require EITHER pickup OR dropoff compatibility
-        // This allows bundling rides with common origin OR common destination
-        boolean pickupCompatible = checkPickupCompatibility(r1, r2, proximityMeters);
-        boolean dropoffCompatible = checkDropoffCompatibility(r1, r2, proximityMeters);
+        // Spatial check (optional based on configuration)
+        if (enableSpatialFilter) {
+            // Require EITHER pickup OR dropoff compatibility
+            // This allows bundling rides with common origin OR common destination
+            boolean pickupCompatible = checkPickupCompatibility(r1, r2, proximityMeters);
+            boolean dropoffCompatible = checkDropoffCompatibility(r1, r2, proximityMeters);
 
-        if (!pickupCompatible && !dropoffCompatible) {
-            return false;
+            if (!pickupCompatible && !dropoffCompatible) {
+                return false;
+            }
         }
+        // If spatial filter disabled, rely on utility/budget constraints (like original ExMAS HyperPool)
 
         return true;
     }
