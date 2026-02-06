@@ -168,7 +168,7 @@ public final class StopBasedRideGenerator {
 		double hardCap = config.getMaxWalkDistanceMeters();
 
 		for (int i = 0; i < degree; i++) {
-			origins.add(requests[i].origin);
+			origins.add(new Coord(requests[i].originX, requests[i].originY));
 			// Max walk = min(budget-based, hard cap)
 			// Use remaining budget from D2D ride to derive walk budget
 			double budgetBasedMax = deriveBudgetBasedMaxWalk(requests[i], doorToDoor.getRemainingBudgets()[i]);
@@ -189,7 +189,7 @@ public final class StopBasedRideGenerator {
 		// Step 3: Collect passenger destinations
 		List<Coord> destinations = new ArrayList<>(degree);
 		for (int i = 0; i < degree; i++) {
-			destinations.add(requests[i].destination);
+			destinations.add(new Coord(requests[i].destinationX, requests[i].destinationY));
 		}
 
 		// Step 4: Find shared dropoff stop

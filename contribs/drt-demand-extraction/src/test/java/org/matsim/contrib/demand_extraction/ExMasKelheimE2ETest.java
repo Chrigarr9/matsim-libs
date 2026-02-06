@@ -261,11 +261,14 @@ public class ExMasKelheimE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// Updated format (22 fields, predecessors removed):
-				// rideIndex,degree,kind,requestIndices,personIds,groupIds,requestTimes,isCommutes,
+				// Updated format (33 fields, with HyperPool stop-based pooling):
+				// rideIndex,degree,kind,variant,requestIndices,personIds,groupIds,requestTimes,isCommutes,
 				// originsOrdered,destinationsOrdered,passengerTravelTimes,passengerDistances,delays,detours,
-				// remainingBudgets,maxCosts,shapleyValues,successors,startTime,endTime,rideTravelTime,rideDistance
-				Assertions.assertEquals(22, parts.length, "Each ride should have 22 fields (predecessors removed)");
+				// remainingBudgets,maxCosts,shapleyValues,successors,startTime,endTime,rideTravelTime,rideDistance,
+				// pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty,
+				// dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty,
+				// accessWalkDistances,egressWalkDistances
+				Assertions.assertEquals(33, parts.length, "Each ride should have 33 fields (with HyperPool stop fields)");
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();
@@ -274,11 +277,11 @@ public class ExMasKelheimE2ETest {
 
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
 
-				// rideTravelTime is field 20, rideDistance is field 21
-				double duration = Double.parseDouble(parts[20]);
+				// rideTravelTime is field 21 (was 20), rideDistance is field 22 (was 21)
+				double duration = Double.parseDouble(parts[21]);
 				Assertions.assertTrue(duration >= 0, "Duration should be non-negative");
 
-				double distance = Double.parseDouble(parts[21]);
+				double distance = Double.parseDouble(parts[22]);
 				Assertions.assertTrue(distance >= 0, "Distance should be non-negative");
 
 				// Verify remaining budgets are present (field 14)

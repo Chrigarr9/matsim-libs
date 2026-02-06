@@ -355,10 +355,16 @@ public final class StopCompatibilityChecker {
      * <p>Two rides are fully compatible if ALL of the following conditions are met:
      * <ol>
      *   <li>Temporal compatibility: Departure times within time window</li>
-     *   <li>Pickup compatibility: Pickup stops within proximity threshold</li>
-     *   <li>Dropoff compatibility: Dropoff stops within proximity threshold</li>
+     *   <li>Spatial compatibility: EITHER pickup stops OR dropoff stops within proximity threshold</li>
      *   <li>Directional compatibility: Rides travel in same general direction</li>
      * </ol>
+     *
+     * <p>Note: Only ONE spatial condition needs to be satisfied (pickup OR dropoff).
+     * This allows hyper-pooling for scenarios like:
+     * <ul>
+     *   <li>"Shuttle from downtown" - common pickup, various dropoffs</li>
+     *   <li>"Shuttle to airport" - various pickups, common dropoff</li>
+     * </ul>
      *
      * @param r1 the first ride
      * @param r2 the second ride
@@ -382,12 +388,12 @@ public final class StopCompatibilityChecker {
             return false;
         }
 
-        // Spatial checks
-        if (!checkPickupCompatibility(r1, r2, proximityMeters)) {
-            return false;
-        }
+        // Spatial check: Require EITHER pickup OR dropoff compatibility
+        // This allows bundling rides with common origin OR common destination
+        boolean pickupCompatible = checkPickupCompatibility(r1, r2, proximityMeters);
+        boolean dropoffCompatible = checkDropoffCompatibility(r1, r2, proximityMeters);
 
-        if (!checkDropoffCompatibility(r1, r2, proximityMeters)) {
+        if (!pickupCompatible && !dropoffCompatible) {
             return false;
         }
 

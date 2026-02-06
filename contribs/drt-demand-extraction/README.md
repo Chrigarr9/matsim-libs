@@ -41,6 +41,57 @@ ExMas (Exclusive Mode Assignment Service) extracts DRT demand from MATSim popula
    - Configures DRT to ideal service quality for budget calculation
    - Writes `drt_requests.csv` with budget and grouping information
 
+## HyperPool: Two-Stage Ride Optimization
+
+ExMas includes an optional **HyperPool** algorithm that converts traditional door-to-door shared rides into more efficient transit-like services through two stages:
+
+### Stage 1: Stop-Based Pooling
+- Converts door-to-door rides into stop-to-stop rides where passengers walk to shared pickup/dropoff points
+- Uses `GeometricStopFinder` to identify optimal stop locations reachable by all passengers
+- Passengers walk short distances (configurable, e.g., 500m) to minimize vehicle routing distance
+- Reduces vehicle kilometers traveled while maintaining service quality
+
+### Stage 2: Hyper-Pooling
+- Bundles stop-to-stop rides into high-occupancy transit-like services
+- Flexible compatibility: Rides can be bundled if they share **EITHER**:
+  - Common origin (pickup stop) **OR**
+  - Common destination (dropoff stop)
+- Enables realistic scenarios:
+  - "Shuttle from downtown" - common pickup, various dropoffs
+  - "Shuttle to airport" - various pickups, common dropoff
+- Generates `HyperPooledRide` objects with optimized stop sequences
+
+### Configuration Example
+
+```java
+ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
+
+// Stage 1: Enable stop-based pooling
+exMasConfig.setEnableStopBased(true);
+exMasConfig.setMaxWalkDistanceMeters(500.0);  // Max walk to stops
+exMasConfig.setStopSearchRadiusMeters(300.0); // Search radius for finding stops
+
+// Stage 2: Enable hyper-pooling
+exMasConfig.setEnableHyperPooling(true);
+exMasConfig.setHyperPoolMaxStopRelocationMeters(200.0); // Max stop relocation
+exMasConfig.setHyperPoolMinOccupancy(4); // Min passengers per hyper-pooled ride
+exMasConfig.setHyperPoolTimeWindowSeconds(900.0); // 15 min time window
+exMasConfig.setHyperPoolStopProximityMeters(100.0); // Stop proximity threshold
+```
+
+### Performance Tips
+
+For large populations or testing scenarios, enable aggressive pruning to prevent memory issues:
+
+```java
+exMasConfig.setMaxPoolingDegree(5); // Reduce from default 10
+exMasConfig.setPruningKeepTopFractionPerRequestSet(0.3); // Keep top 30%
+exMasConfig.setPruningMaxRidesToKeepPerRequestSet(20); // Hard cap
+exMasConfig.setPruningDistanceSavingsLogScale(0.15); // Enable distance pruning
+```
+
+See `CHANGELOG.md` for detailed configuration guidelines and common pitfalls.
+
 ## Key Concepts
 
 ### Mode Availability Filtering
