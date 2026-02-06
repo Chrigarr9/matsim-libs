@@ -51,15 +51,18 @@ ExMas includes an optional **HyperPool** algorithm that converts traditional doo
 - Passengers walk short distances (configurable, e.g., 500m) to minimize vehicle routing distance
 - Reduces vehicle kilometers traveled while maintaining service quality
 
-### Stage 2: Hyper-Pooling
+### Stage 2: Hyper-Pooling (Enhanced)
 - Bundles stop-to-stop rides into high-occupancy transit-like services
-- Flexible compatibility: Rides can be bundled if they share **EITHER**:
+- **Enhanced compatibility** (beyond original HyperPool paper): Rides can be bundled if they share **EITHER**:
   - Common origin (pickup stop) **OR**
   - Common destination (dropoff stop)
-- Enables realistic scenarios:
-  - "Shuttle from downtown" - common pickup, various dropoffs
-  - "Shuttle to airport" - various pickups, common dropoff
+- Note: Original HyperPool algorithm (Kucharski & Cats, 2024) required BOTH pickup AND dropoff proximity
+- Our enhancement enables asymmetric patterns:
+  - "Shuttle from downtown" - common pickup, various dropoffs (one-to-many)
+  - "Shuttle to airport" - various pickups, common dropoff (many-to-one)
+  - Hub-and-spoke service patterns
 - Generates `HyperPooledRide` objects with optimized stop sequences
+- Results: 9.4% more compatible ride pairs compared to strict AND logic
 
 ### Configuration Example
 

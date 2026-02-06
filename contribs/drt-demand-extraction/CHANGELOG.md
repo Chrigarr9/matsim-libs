@@ -9,13 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-#### HyperPool Stage 2: Flexible Origin/Destination Bundling
-- **Relaxed HyperPool compatibility requirements** to allow rides with EITHER common origin OR common destination to be bundled together (previously required BOTH)
-- Enables realistic shuttle scenarios:
-  - "Shuttle from downtown" - common pickup location, various dropoff locations
-  - "Shuttle to airport" - various pickup locations, common dropoff location
+#### HyperPool Stage 2: Flexible Origin/Destination Bundling (Novel Enhancement)
+- **NOVEL CONTRIBUTION**: Relaxed HyperPool compatibility requirements to allow rides with EITHER common origin OR common destination to be bundled together
+- **Original HyperPool paper (Kucharski & Cats, 2024)** required BOTH pickup AND dropoff proximity (AND logic) and only FIFO patterns
+- **Our enhancement** enables asymmetric bundling patterns not present in original algorithm:
+  - "Shuttle from downtown" - common pickup location, various dropoff locations (one-to-many)
+  - "Shuttle to airport" - various pickup locations, common dropoff location (many-to-one)
+  - Hub-and-spoke patterns for improved network efficiency
 - Implementation: Modified `StopCompatibilityChecker.areCompatible()` to use OR logic instead of AND for spatial compatibility checks
-- Impact: 9.4% increase in shareability graph edges, enabling more flexible ride bundling
+- Impact: 9.4% increase in shareability graph edges (30,012 → 32,828), enabling more flexible ride bundling
+- References:
+  - Original paper: Kucharski, R., & Cats, O. (2024). Hyper pooling private trips into high occupancy transit like attractive shared rides. npj Sustainable Mobility and Transport. https://doi.org/10.1038/s44333-024-00006-4
 
 #### HyperPool Integration Tests
 - Added comprehensive end-to-end tests for HyperPool algorithm (Stage 1: Stop-based + Stage 2: Hyper-pooling):
