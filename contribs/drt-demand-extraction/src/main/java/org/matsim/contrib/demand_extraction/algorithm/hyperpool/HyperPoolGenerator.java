@@ -127,6 +127,13 @@ public class HyperPoolGenerator {
         this.timeWindowSeconds = config.getHyperPoolTimeWindowSeconds();
         this.stopProximityMeters = config.getHyperPoolStopProximityMeters();
         this.walkSpeed = config.getWalkSpeedMps();
+
+        // Log configuration
+        if (maxStops > 0) {
+            log.info("HyperPool: Max stops constraint = {} (optimization, not in original)", maxStops);
+        } else {
+            log.info("HyperPool: Max stops unlimited (matches original ExMAS/HyperPool)");
+        }
     }
 
     // ==================== Main Generation Method ====================
@@ -312,7 +319,7 @@ public class HyperPoolGenerator {
 
         // Merge nearby stops for counting
         int effectiveStopCount = countEffectiveStops(uniqueStops);
-        if (effectiveStopCount > maxStops) {
+        if (maxStops > 0 && effectiveStopCount > maxStops) {
             return false;
         }
 

@@ -222,8 +222,8 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	/** Max walking distance to relocated stop in hyper-pooling (meters) */
 	private double hyperPoolMaxStopRelocationMeters = 200.0;
 
-	/** Max number of stops in a hyper-pooled ride */
-	private int hyperPoolMaxStops = 6;
+	/** Max number of stops in a hyper-pooled ride (-1 for unlimited, matches original ExMAS/HyperPool) */
+	private int hyperPoolMaxStops = -1;
 
 	/** Time window for compatible stop-to-stop rides (seconds) */
 	private double hyperPoolTimeWindowSeconds = 900.0;
@@ -244,6 +244,20 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	 * - false: Slower, finds all valid patterns (100%), matches original ExMAS HyperPool behavior
 	 */
 	private boolean hyperPoolEnableSpatialFilter = true;
+
+	/**
+	 * Enable stop relocation (merging nearby stops using weighted centroid).
+	 * Default: false (matches original ExMAS/HyperPool which works with actual stop locations).
+	 * When true: Production optimization that reduces route complexity.
+	 */
+	private boolean hyperPoolEnableStopRelocation = false;
+
+	/**
+	 * Enable directional compatibility filter (rejects rides moving in opposite directions).
+	 * Default: false (matches original ExMAS/HyperPool which uses utility-based matching only).
+	 * When true: Production optimization that filters incompatible ride pairs early.
+	 */
+	private boolean hyperPoolEnableDirectionalFilter = false;
 
     public ExMasConfigGroup() {
         super(GROUP_NAME);
@@ -904,6 +918,26 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.hyperPoolEnableSpatialFilter = hyperPoolEnableSpatialFilter;
 	}
 
+	@StringGetter("hyperPoolEnableStopRelocation")
+	public boolean getHyperPoolEnableStopRelocation() {
+		return hyperPoolEnableStopRelocation;
+	}
+
+	@StringSetter("hyperPoolEnableStopRelocation")
+	public void setHyperPoolEnableStopRelocation(boolean hyperPoolEnableStopRelocation) {
+		this.hyperPoolEnableStopRelocation = hyperPoolEnableStopRelocation;
+	}
+
+	@StringGetter("hyperPoolEnableDirectionalFilter")
+	public boolean getHyperPoolEnableDirectionalFilter() {
+		return hyperPoolEnableDirectionalFilter;
+	}
+
+	@StringSetter("hyperPoolEnableDirectionalFilter")
+	public void setHyperPoolEnableDirectionalFilter(boolean hyperPoolEnableDirectionalFilter) {
+		this.hyperPoolEnableDirectionalFilter = hyperPoolEnableDirectionalFilter;
+	}
+
     @Override
     public Map<String, String> getComments() {
         Map<String, String> map = super.getComments();
@@ -1013,7 +1047,7 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("hyperPoolMaxStopRelocationMeters",
 				"Maximum walking distance to relocated stop in hyper-pooling (meters). Passengers may be asked to walk to a different stop for bundling. Default: 200.0");
 		map.put("hyperPoolMaxStops",
-				"Maximum number of stops in a hyper-pooled ride. Limits complexity of multi-stop routes. Default: 6");
+				"Maximum number of stops in a hyper-pooled ride. Use -1 for unlimited (matches original ExMAS/HyperPool). Default: -1");
 		map.put("hyperPoolTimeWindowSeconds",
 				"Time window for compatible stop-to-stop rides (seconds). Rides within this window can be bundled. Default: 900.0 (15 min)");
 		map.put("hyperPoolMinOccupancy",
@@ -1022,6 +1056,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Stop proximity threshold for considering stops as 'same' (meters). Stops within this distance can be merged. Default: 100.0");
 		map.put("hyperPoolEnableSpatialFilter",
 				"Enable spatial proximity pre-filtering for stage 2 bundling. If true (default): only evaluates ride pairs with nearby stops (faster, finds 85-95% of patterns). If false: evaluates all pairs like original ExMAS HyperPool (slower, finds 100% of patterns). Default: true");
+		map.put("hyperPoolEnableStopRelocation",
+				"Enable stop relocation (merging nearby stops). Default: false (matches original ExMAS/HyperPool). If true: Production optimization that merges nearby stops using weighted centroid to reduce route complexity.");
+		map.put("hyperPoolEnableDirectionalFilter",
+				"Enable directional compatibility filter (rejects rides moving opposite directions). Default: false (matches original ExMAS/HyperPool). If true: Production optimization that filters incompatible ride pairs early.");
 
         return map;
     }

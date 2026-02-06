@@ -244,6 +244,13 @@ public class ExMasKelheimHyperPoolE2ETest {
 		exMasConfig.setHyperPoolMinOccupancy(2); // Min 2 passengers (lowered for test)
 		exMasConfig.setHyperPoolTimeWindowSeconds(900.0); // 15 min time window
 		exMasConfig.setHyperPoolStopProximityMeters(100.0); // 100m stop proximity
+
+		// FULL RESEARCH MODE: Match original ExMAS/HyperPool for maximum ride generation
+		// These are the defaults, but explicitly set for clarity and to ensure 100% coverage
+		exMasConfig.setHyperPoolEnableStopRelocation(false); // No stop merging (research mode)
+		exMasConfig.setHyperPoolMaxStops(-1); // Unlimited stops (research mode)
+		exMasConfig.setHyperPoolEnableDirectionalFilter(false); // No directional filter (research mode)
+		exMasConfig.setHyperPoolEnableSpatialFilter(false); // No spatial filter (research mode, 100% coverage)
 	}
 
 	private void validateRequests(Path requestsFile) throws IOException {

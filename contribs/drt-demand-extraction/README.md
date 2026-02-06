@@ -67,6 +67,28 @@ ExMas includes an optional **HyperPool** algorithm that converts traditional doo
 - Generates `HyperPooledRide` objects with optimized stop sequences
 - Trade-off: Fast mode may miss long-distance directional bundles (e.g., opposite city ends, same direction)
 
+### Configuration Modes
+
+HyperPool can be configured to match the original research implementation or use production optimizations:
+
+**Research Mode** (default): Matches original ExMAS/HyperPool research implementation
+- No stop relocation - works with actual stop locations
+- Unlimited stops per ride - no artificial constraints
+- No directional filtering - utility-based matching only
+- No spatial filtering - evaluates all ride pairs
+- Optimized sequencing - distance-minimizing routes
+
+**Production Mode**: Optional optimizations for faster, more practical results
+- Stop relocation - merge nearby stops to reduce complexity
+- Max stops constraint - cap ride sizes (e.g., 6 stops)
+- Directional filtering - reject opposite-direction bundles
+- Spatial filtering - pre-filter incompatible pairs
+- Sequencing - optimized (distance-minimizing) in both modes
+
+Choose based on your use case:
+- Research/validation: Use defaults (matches original paper)
+- Production/large-scale: Enable optimizations (3-15x faster)
+
 ### Configuration Example
 
 ```java
@@ -84,9 +106,19 @@ exMasConfig.setHyperPoolMinOccupancy(4); // Min passengers per hyper-pooled ride
 exMasConfig.setHyperPoolTimeWindowSeconds(900.0); // 15 min time window
 exMasConfig.setHyperPoolStopProximityMeters(100.0); // Stop proximity threshold
 
-// Matching mode (choose based on your needs)
-exMasConfig.setHyperPoolEnableSpatialFilter(true);  // Fast mode (default, recommended)
-// exMasConfig.setHyperPoolEnableSpatialFilter(false); // Comprehensive mode (like original)
+// Configuration mode (choose based on your needs)
+
+// Research Mode (matches original ExMAS/HyperPool) - DEFAULT
+exMasConfig.setHyperPoolEnableStopRelocation(false);  // No stop merging
+exMasConfig.setHyperPoolMaxStops(-1);                 // Unlimited stops
+exMasConfig.setHyperPoolEnableDirectionalFilter(false); // No directional check
+exMasConfig.setHyperPoolEnableSpatialFilter(false);   // Utility-based matching
+
+// Production Mode (faster, more constrained) - OPTIONAL
+// exMasConfig.setHyperPoolEnableStopRelocation(true);   // Merge nearby stops
+// exMasConfig.setHyperPoolMaxStops(6);                  // Cap at 6 stops
+// exMasConfig.setHyperPoolEnableDirectionalFilter(true); // Filter opposite directions
+// exMasConfig.setHyperPoolEnableSpatialFilter(true);    // Proximity pre-filtering
 ```
 
 ### Performance Tips

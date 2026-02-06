@@ -350,53 +350,59 @@ public final class ExMasEngine {
 		HyperPoolGenerator.StopCompatibilityChecker compatibilityChecker =
 				(r1, r2) -> externalChecker.areCompatible(r1, r2);
 
-		// Create StopRelocator adapter that implements HyperPoolGenerator.StopRelocator
-		Network matsimNetwork = network.getNetwork();
-		Set<String> allowedModes = Collections.singleton("car"); // Default to car mode
-		double maxLinkLength = Double.MAX_VALUE; // No link length filter
-		LinkCandidateFinder linkCandidateFinder = new LinkCandidateFinder(matsimNetwork, allowedModes, maxLinkLength);
-		StopRelocator externalRelocator = new StopRelocator(matsimNetwork, linkCandidateFinder, exMasConfig);
+		// Create StopRelocator adapter (conditionally) based on config
+		HyperPoolGenerator.StopRelocator stopRelocator = null;
+		if (exMasConfig.getHyperPoolEnableStopRelocation()) {
+			log.info("HyperPool: Stop relocation enabled (optimization, not in original ExMAS/HyperPool)");
+			Network matsimNetwork = network.getNetwork();
+			Set<String> allowedModes = Collections.singleton("car"); // Default to car mode
+			double maxLinkLength = Double.MAX_VALUE; // No link length filter
+			LinkCandidateFinder linkCandidateFinder = new LinkCandidateFinder(matsimNetwork, allowedModes, maxLinkLength);
+			StopRelocator externalRelocator = new StopRelocator(matsimNetwork, linkCandidateFinder, exMasConfig);
 
-		// Create adapter for StopRelocator interface
-		// The HyperPoolGenerator.StopRelocator interface requires:
-		// - areStopsNearby(stop1, stop2, proximityMeters)
-		// - findMergedStop(stop, existingStops, proximityMeters)
-		// - calculateRelocationDistance(originalStop, mergedStop)
-		// We use the external StopRelocator's methods where possible
-		HyperPoolGenerator.StopRelocator stopRelocator = new HyperPoolGenerator.StopRelocator() {
-			@Override
-			public boolean areStopsNearby(
-					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop1,
-					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop2,
-					double proximityMeters) {
-				// Use Euclidean distance between stop coordinates
-				double distance = org.matsim.core.utils.geometry.CoordUtils.calcEuclideanDistance(
-						stop1.getCoord(), stop2.getCoord());
-				return distance <= proximityMeters;
-			}
-
-			@Override
-			public org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation findMergedStop(
-					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop,
-					List<org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation> existingStops,
-					double proximityMeters) {
-				// Find the first existing stop that is nearby, or return the original stop
-				for (org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation existing : existingStops) {
-					if (areStopsNearby(stop, existing, proximityMeters)) {
-						return existing;
-					}
+			// Create adapter for StopRelocator interface
+			// The HyperPoolGenerator.StopRelocator interface requires:
+			// - areStopsNearby(stop1, stop2, proximityMeters)
+			// - findMergedStop(stop, existingStops, proximityMeters)
+			// - calculateRelocationDistance(originalStop, mergedStop)
+			// We use the external StopRelocator's methods where possible
+			stopRelocator = new HyperPoolGenerator.StopRelocator() {
+				@Override
+				public boolean areStopsNearby(
+						org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop1,
+						org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop2,
+						double proximityMeters) {
+					// Use Euclidean distance between stop coordinates
+					double distance = org.matsim.core.utils.geometry.CoordUtils.calcEuclideanDistance(
+							stop1.getCoord(), stop2.getCoord());
+					return distance <= proximityMeters;
 				}
-				return stop;
-			}
 
-			@Override
-			public double calculateRelocationDistance(
-					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation originalStop,
-					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation mergedStop) {
-				return org.matsim.core.utils.geometry.CoordUtils.calcEuclideanDistance(
-						originalStop.getCoord(), mergedStop.getCoord());
-			}
-		};
+				@Override
+				public org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation findMergedStop(
+						org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop,
+						List<org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation> existingStops,
+						double proximityMeters) {
+					// Find the first existing stop that is nearby, or return the original stop
+					for (org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation existing : existingStops) {
+						if (areStopsNearby(stop, existing, proximityMeters)) {
+							return existing;
+						}
+					}
+					return stop;
+				}
+
+				@Override
+				public double calculateRelocationDistance(
+						org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation originalStop,
+						org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation mergedStop) {
+					return org.matsim.core.utils.geometry.CoordUtils.calcEuclideanDistance(
+							originalStop.getCoord(), mergedStop.getCoord());
+				}
+			};
+		} else {
+			log.info("HyperPool: Stop relocation disabled (matches original ExMAS/HyperPool)");
+		}
 
 		// Create HyperPoolGenerator
 		HyperPoolGenerator generator = new HyperPoolGenerator(

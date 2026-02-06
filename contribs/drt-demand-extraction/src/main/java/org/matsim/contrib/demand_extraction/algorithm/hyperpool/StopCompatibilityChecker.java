@@ -46,9 +46,12 @@ import org.matsim.core.utils.geometry.CoordUtils;
  */
 public final class StopCompatibilityChecker {
 
+    private static final org.apache.logging.log4j.Logger LOG = org.apache.logging.log4j.LogManager.getLogger(StopCompatibilityChecker.class);
+
     private final double defaultTimeWindowSeconds;
     private final double defaultProximityMeters;
     private final boolean enableSpatialFilter;
+    private final boolean enableDirectionalFilter;
 
     /**
      * Creates a new compatibility checker with default thresholds from configuration.
@@ -63,6 +66,13 @@ public final class StopCompatibilityChecker {
         this.defaultTimeWindowSeconds = config.getHyperPoolTimeWindowSeconds();
         this.defaultProximityMeters = config.getHyperPoolStopProximityMeters();
         this.enableSpatialFilter = config.getHyperPoolEnableSpatialFilter();
+        this.enableDirectionalFilter = config.getHyperPoolEnableDirectionalFilter();
+
+        LOG.info("HyperPool StopCompatibilityChecker initialized:");
+        LOG.info("  Spatial filter: {} {}", enableSpatialFilter,
+            enableSpatialFilter ? "(optimization, not in original)" : "(matches original via utility)");
+        LOG.info("  Directional filter: {} {}", enableDirectionalFilter,
+            enableDirectionalFilter ? "(optimization, not in original)" : "(matches original)");
     }
 
     // ==================== Temporal Compatibility ====================
@@ -385,8 +395,8 @@ public final class StopCompatibilityChecker {
         // Check all compatibility conditions
         // Order matters for short-circuit evaluation - check faster/more likely to fail first
 
-        // Directional check is fast (just computation)
-        if (!checkDirectionalCompatibility(r1, r2)) {
+        // Directional check is fast (just computation) - only if enabled
+        if (enableDirectionalFilter && !checkDirectionalCompatibility(r1, r2)) {
             return false;
         }
 
