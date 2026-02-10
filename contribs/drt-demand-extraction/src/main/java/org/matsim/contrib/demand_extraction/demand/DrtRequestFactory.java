@@ -306,6 +306,17 @@ public class DrtRequestFactory {
 		// Calculate budget using BudgetValidator for consistency
 		double budget = budgetValidator.calculateBudget(tempRequest);
 
+		// Skip requests with non-positive budget: DRT is not better than the best
+		// alternative mode, so serving this passenger would never be beneficial.
+		if (budget <= 0.0) {
+			log.debug(
+					"Skipping request index {} (person: {}): non-positive budget ({}) — "
+							+ "DRT does not outperform best baseline mode ({})",
+					requestIndex, person.getId(), String.format("%.2f", budget),
+					bestBaselineMode.getKey());
+			return null;
+		}
+
 		// Calculate max detour factor as minimum of budget-derived and config limit
 		// This determines the maximum acceptable trip duration (e.g., 1.5 means 50%
 		// longer than direct)

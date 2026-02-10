@@ -60,7 +60,7 @@ public final class RidePostProcessor {
 
 		log.info("  Computing max costs...");
 		long maxCostStart = System.currentTimeMillis();
-        Map<Integer, double[]> maxCostByRide = computeMaxCosts(rides);
+        Map<Integer, MaxCostResult> maxCostByRide = computeMaxCosts(rides);
 		log.info("  Max costs computed in {} ms", System.currentTimeMillis() - maxCostStart);
 
 		Map<Integer, double[]> shapleyByRide;
@@ -90,10 +90,11 @@ public final class RidePostProcessor {
             double[] shapley = shapleyByRide.get(ride.getIndex());
             int[] preds = predsAndSuccs.predecessors().getOrDefault(ride.getIndex(), new int[0]);
             int[] succs = predsAndSuccs.successors().getOrDefault(ride.getIndex(), new int[0]);
-            double[] maxCosts = maxCostByRide.get(ride.getIndex());
+            MaxCostResult maxCostResult = maxCostByRide.get(ride.getIndex());
 
             Ride rebuilt = ride.toBuilder()
-                    .maxCosts(maxCosts)
+                    .maxCosts(maxCostResult.maxCosts())
+                    .maxCostsPerKm(maxCostResult.maxCostsPerKm())
                     .shapleyValues(shapley)
                     .predecessors(preds)
                     .successors(succs)
@@ -106,35 +107,44 @@ public final class RidePostProcessor {
         return enriched;
     }
 
-    private Map<Integer, double[]> computeMaxCosts(List<Ride> rides) {
-        Map<Integer, double[]> maxCostByRide = new HashMap<>(rides.size());
+    private record MaxCostResult(double[] maxCosts, double[] maxCostsPerKm) {}
+
+    private Map<Integer, MaxCostResult> computeMaxCosts(List<Ride> rides) {
+        Map<Integer, MaxCostResult> maxCostByRide = new HashMap<>(rides.size());
         for (Ride ride : rides) {
             double[] remainingBudgets = ride.getRemainingBudgets();
             double[] maxCosts = new double[ride.getDegree()];
+            double[] maxCostsPerKm = new double[ride.getDegree()];
             DrtRequest[] requests = ride.getRequests();
             double[] travelTimes = ride.getPassengerTravelTimes();
             double[] distances = ride.getPassengerDistances();
-            
+
             for (int i = 0; i < ride.getDegree(); i++) {
                 DrtRequest request = requests[i];
                 Person person = population.getPersons().get(request.personId);
                 double budget = (remainingBudgets != null && remainingBudgets.length > i) ? remainingBudgets[i] : 0.0;
-                
+
                 if (person == null) {
                     maxCosts[i] = 0.0;
+                    maxCostsPerKm[i] = 0.0;
                     continue;
                 }
-                
+
                 // Call budgetToMaxCost for each passenger (aligns with other budget methods)
                 maxCosts[i] = budgetToConstraintsCalculator.budgetToMaxCost(
-                    budget, 
-                    person, 
-                    travelTimes[i], 
+                    budget,
+                    person,
+                    travelTimes[i],
                     distances[i]
                 );
+
+                // Derive per-km cost (source of truth for Python optimization pipeline)
+                maxCostsPerKm[i] = distances[i] > 0
+                    ? maxCosts[i] / (distances[i] / 1000.0)
+                    : Double.MAX_VALUE;
             }
-            
-            maxCostByRide.put(ride.getIndex(), maxCosts);
+
+            maxCostByRide.put(ride.getIndex(), new MaxCostResult(maxCosts, maxCostsPerKm));
         }
         return maxCostByRide;
     }

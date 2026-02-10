@@ -49,12 +49,15 @@ public final class ExMasCsvWriter {
 					"originActivityType,destinationActivityType," +
 					"directTravelTime,directDistance,earliestDeparture,latestArrival," +
 					"maxTravelTime,maxPositiveDelay,maxNegativeDelay,baseModeScore,baseMode," +
-					"carTravelTime,ptTravelTime,ptAccessibility");
+					"carTravelTime,ptTravelTime,ptAccessibility,maxCostPerKm");
 			writer.newLine();
 
 			for (DrtRequest req : requests) {
+				double maxCostPerKm = req.directDistance > 0
+						? req.budget / (req.directDistance / 1000.0)
+						: Double.MAX_VALUE;
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%s,%s,%d,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f",
+						"%d,%s,%s,%d,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f,%.4f",
 						req.index, req.personId, req.groupId, req.tripIndex, req.isCommute,
 						req.budget, req.requestTime,
 						req.originLinkId, req.destinationLinkId,
@@ -65,7 +68,7 @@ public final class ExMasCsvWriter {
 						req.earliestDeparture, req.latestArrival,
 						req.getMaxTravelTime(), req.getMaxPositiveDelay(), req.getMaxNegativeDelay(),
 						req.bestModeScore, req.bestMode != null ? req.bestMode : "",
-						req.carTravelTime, req.ptTravelTime, req.ptAccessibility));
+						req.carTravelTime, req.ptTravelTime, req.ptAccessibility, maxCostPerKm));
 				writer.newLine();
 			}
 		} catch (IOException e) {
@@ -98,7 +101,7 @@ public final class ExMasCsvWriter {
 			writer.write("rideIndex,degree,kind,variant," +
 					"requestIndices,personIds,groupIds,requestTimes,isCommutes," +
 					"originsOrdered,destinationsOrdered," +
-					"passengerTravelTimes,passengerDistances,delays,detours,remainingBudgets,maxCosts,shapleyValues,successors," +
+					"passengerTravelTimes,passengerDistances,delays,detours,remainingBudgets,maxCosts,maxCostsPerKm,shapleyValues,successors," +
 					"startTime,endTime,rideTravelTime,rideDistance," +
 					"pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty," +
 					"dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty," +
@@ -140,6 +143,7 @@ public final class ExMasCsvWriter {
 						? formatDoubleArray(ride.getRemainingBudgets())
 						: "[]";
 				String maxCosts = ride.getMaxCosts() != null ? formatDoubleArray(ride.getMaxCosts()) : "[]";
+				String maxCostsPerKm = ride.getMaxCostsPerKm() != null ? formatDoubleArray(ride.getMaxCostsPerKm()) : "[]";
 				String shapleyValues = ride.getShapleyValues() != null ? formatDoubleArray(ride.getShapleyValues()) : "[]";
 				String successors;
 				if (ride.getSuccessors() != null) {
@@ -181,11 +185,11 @@ public final class ExMasCsvWriter {
 				}
 
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s",
 						ride.getIndex(), ride.getDegree(), ride.getKind(), variant,
 						reqIndices, personIds, groupIds, requestTimes, isCommutes,
 						origins, destinations,
-						pttimes, pdists, delays, detours, budgets, maxCosts, shapleyValues, successors,
+						pttimes, pdists, delays, detours, budgets, maxCosts, maxCostsPerKm, shapleyValues, successors,
 						ride.getStartTime(), ride.getEndTime(),
 						ride.getRideTravelTime(), ride.getRideDistance(),
 						pickupLinkId, pickupX, pickupY, pickupPenalty,

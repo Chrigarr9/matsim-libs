@@ -613,7 +613,7 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 		exMasConfig.setEducationActivityType("educ");
 		
 		// Filter agents by age (e.g. only adults >= 18)
-		exMasConfig.setMinAge(18);
+		exMasConfig.setMinAge(13);
 		
 		// Optional: Filter by person attribute (e.g. "hasLicense")
 		// exMasConfig.setDrtAvailabilityAttribute("hasLicense");
@@ -628,12 +628,12 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 		exMasConfig.setSearchHorizon(3600.0); // unlimited
 		exMasConfig.setMaxDetourFactor(1.5);  // Max 50% longer than direct
 		exMasConfig.setMaxAbsoluteDetour(3600); // Max 1 hour absolute detour
-		exMasConfig.setMaxPoolingDegree(10);  // Allow up to 10 passengers (aligned with test)
+		exMasConfig.setMaxPoolingDegree(16);  // Allow up to 16 passengers (aligned with test)
 
 		// Enable predecessor calculation for connection_cache.csv output
 		// This is needed for optimization empty vehicle kilometer calculations
 		exMasConfig.setCalcPredecessors(true);
-		exMasConfig.setPredecessorsFilterDistanceFactor(0.7);
+		exMasConfig.setPredecessorsFilterDistanceFactor(0.5);
 		// Only consider predecessors that ended within 0.5 hours before successor
 		// starts
 		exMasConfig.setPredecessorsFilterTime(30.0 * 60);
@@ -642,7 +642,7 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 		// Pruning settings: heuristic pruning controls combinatorial growth during ride
 		// extension
 		exMasConfig.setHeuristicPruningEnabled(true);
-		exMasConfig.setPruningKeepTopFractionPerRequestSet(1.0); // 1.0 keeps all per request-set group
+		exMasConfig.setPruningKeepTopFractionPerRequestSet(0.3); // 1.0 keeps all per request-set group
 		exMasConfig.setPruningMinRidesToKeepPerRequestSet(3); // minimum floor per group
 		exMasConfig.setPruningMaxRidesToKeepPerRequestSet(0); // hard cap (0 disables)
 		// Degree-aware distance-savings pruning:
