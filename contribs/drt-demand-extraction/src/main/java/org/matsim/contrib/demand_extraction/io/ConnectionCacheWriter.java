@@ -16,20 +16,21 @@ import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache
 
 /**
  * Utility class for writing network connection cache to CSV files.
- * 
- * Exports only the network connections needed for empty vehicle kilometer
- * calculation in the optimization pipeline. This is a MINIMAL subset of
- * the network - only connections between successor ride destinations
- * and the origins of their following rides.
- * 
+ *
+ * Supports two export modes (configurable via ExMasConfigGroup.connectionCacheExportMode):
+ *
+ * - "all" (default): Exports ALL cached connections from the network cache.
+ *   This provides complete coverage for Python's dynamic successor computation,
+ *   which needs travel times for arbitrary ride pairs (not just pre-computed successors).
+ *
+ * - "successors_only": Exports only connections between successor ride pairs.
+ *   Legacy behavior producing a smaller file, but insufficient for dynamic successor
+ *   computation in Python when the active ride set differs from pre-computed successors.
+ *
  * Format: CSV with columns origin,destination,time_bin,travel_time,distance
- * 
+ *
  * The Python optimization uses this to calculate empty VKT when vehicles
  * travel between rides without passengers.
- * 
- * EFFICIENCY NOTE: Connections are already routed during predecessor calculation
- * in RidePostProcessor, so this class filters the existing network cache instead
- * of re-routing. This is much faster than routing ~1500 connections again.
  */
 public final class ConnectionCacheWriter {
 
@@ -41,38 +42,39 @@ public final class ConnectionCacheWriter {
 
 	/**
 	 * Write connection cache to CSV file.
-	 * 
-	 * This exports network segments between ride destinations and
-	 * successor ride origins - the minimal data needed for empty VKT calculation.
-	 * 
-	 * EFFICIENCY: These connections were already routed during predecessor calculation,
-	 * so we filter them from the existing cache rather than re-routing.
-	 * 
+	 *
+	 * Export mode determines what is written:
+	 * - "all": exports the full network cache (all routed OD pairs)
+	 * - "successors_only": exports only connections between successor ride pairs
+	 *
 	 * @param filename     output file path
 	 * @param rides        list of ExMAS rides with successor relationships
 	 * @param networkCache routing cache containing pre-computed connections
 	 * @param timeBinSize  size of time bins in seconds (e.g. 900 for 15 min)
+	 * @param exportMode   "all" or "successors_only"
 	 * @throws IOException if writing fails
 	 */
 	public static void writeConnectionCache(
 			String filename,
 			List<Ride> rides,
 			MatsimNetworkCache networkCache,
-			int timeBinSize) throws IOException {
+			int timeBinSize,
+			String exportMode) throws IOException {
 
-		// Collect unique connection keys needed for successors
-		Set<String> connectionKeys = collectSuccessorConnections(rides, timeBinSize);
+		// null filter = export all; non-null = export only those keys
+		Set<String> filter = "successors_only".equals(exportMode)
+				? collectSuccessorConnections(rides, timeBinSize)
+				: null;
 
-		// Export filtered cache (these connections are already routed)
-		networkCache.exportFilteredConnectionCache(filename, connectionKeys);
-
-		log.info("Wrote connection cache to: {} ({} unique connections)", filename, connectionKeys.size());
+		networkCache.exportConnectionCache(filename, filter);
+		log.info("Wrote connection cache (mode={}) to: {}", exportMode, filename);
 	}
 
 	/**
 	 * Collect unique connection keys (origin_destination_timeBin) for all successor relationships.
-	 * These are the only connections needed by the Python optimizer for empty vehicle routing.
-	 * 
+	 * These are the only connections needed by the Python optimizer for empty vehicle routing
+	 * when using the "successors_only" export mode.
+	 *
 	 * @param rides       list of rides with successor relationships
 	 * @param timeBinSize size of time bins in seconds
 	 * @return set of connection keys in format "originLinkId_destLinkId_timeBin"
@@ -104,5 +106,6 @@ public final class ConnectionCacheWriter {
 				}
 			}
 		}
-		return connectionKeys;	}
+		return connectionKeys;
+	}
 }

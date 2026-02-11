@@ -167,15 +167,23 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// When enabled, connection cache is automatically written
 	private boolean calcPredecessors = true;
 
-	// Maximum time gap (seconds) between predecessor end and successor start; null => unbounded
+	// Maximum time gap (seconds) between predecessor end and successor start.
+	// null/omitted => unbounded, -1 => unbounded (explicit).
+	// Set to match Python's path_cover_max_time_gap for complete connection cache coverage.
 	private Double predecessorsFilterTime = null;
 
-	// Maximum connection distance as factor of predecessor ride distance; null => unbounded
+	// Maximum connection distance as factor of predecessor ride distance.
+	// null/omitted => unbounded, -1 => unbounded (explicit).
 	private Double predecessorsFilterDistanceFactor = null;
 
-	// Maximum number of successors to keep per ride (closest by distance)
-	// Reduces memory usage and optimization problem size
+	// Maximum number of successors to keep per ride (closest by distance).
+	// 0 or -1 => keep all (no pruning). Default: 50
 	private int maxSuccessors = 50;
+
+	// Connection cache export mode:
+	// - "all": Export ALL cached connections (default — needed for dynamic successor computation in Python)
+	// - "successors_only": Export only connections between successor ride pairs (legacy behavior, smaller file)
+	private String connectionCacheExportMode = "all";
 
 	// Optional intermediate writes (parity with Python, currently unused)
 	private boolean intermediateWrite = false;
@@ -740,6 +748,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.maxSuccessors = maxSuccessors;
 	}
 
+	@StringGetter("connectionCacheExportMode")
+	public String getConnectionCacheExportMode() {
+		return connectionCacheExportMode;
+	}
+
+	@StringSetter("connectionCacheExportMode")
+	public void setConnectionCacheExportMode(String connectionCacheExportMode) {
+		this.connectionCacheExportMode = connectionCacheExportMode;
+	}
+
 	@StringGetter("intermediateWrite")
 	public boolean isIntermediateWrite() {
 		return intermediateWrite;
@@ -1016,10 +1034,18 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("calcPredecessors",
 				"Calculate predecessor/successor relationships between rides. When enabled, connection cache is automatically written. Default: true");
 		map.put("predecessorsFilterTime",
-				"Maximum time gap (seconds) between predecessor end and successor start. Null/omitted => unbounded.");
+				"Maximum time gap (seconds) between predecessor end and successor start. " +
+				"-1 or null/omitted => unbounded (all ride pairs considered, creates complete connection cache). " +
+				"Set to match Python's path_cover_max_time_gap for full cache coverage.");
 		map.put("predecessorsFilterDistanceFactor",
-				"Maximum connection distance as factor of predecessor ride distance. Null/omitted => unbounded.");
-		map.put("maxSuccessors", "Maximum number of successors to keep per ride (closest by distance). Default: 50");
+				"Maximum connection distance as factor of predecessor ride distance. " +
+				"-1 or null/omitted => unbounded.");
+		map.put("maxSuccessors",
+				"Maximum number of successors to keep per ride (closest by distance). " +
+				"0 or -1 => keep all (no pruning). Default: 50");
+		map.put("connectionCacheExportMode",
+				"Connection cache export mode: 'all' exports all cached OD pairs (default, needed for Python dynamic successor computation), " +
+				"'successors_only' exports only connections between successor ride pairs (legacy, smaller file). Default: all");
 		map.put("intermediateWrite",
 				"Write intermediate outputs during heuristics (parity with Python implementation). Default: false");
 

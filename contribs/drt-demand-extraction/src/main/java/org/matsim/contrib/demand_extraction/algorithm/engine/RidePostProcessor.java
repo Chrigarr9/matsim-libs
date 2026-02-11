@@ -241,10 +241,11 @@ public final class RidePostProcessor {
             requestSets.add(Arrays.stream(ride.getRequestIndices()).boxed().collect(Collectors.toSet()));
         }
 
-        double filterTime = config.getPredecessorsFilterTime() != null ? config.getPredecessorsFilterTime() : Double.POSITIVE_INFINITY;
-        double filterDistanceFactor = config.getPredecessorsFilterDistanceFactor() != null
-                ? config.getPredecessorsFilterDistanceFactor()
-                : Double.POSITIVE_INFINITY;
+        // -1 or null => unbounded (no filter)
+        Double rawFilterTime = config.getPredecessorsFilterTime();
+        double filterTime = (rawFilterTime != null && rawFilterTime >= 0) ? rawFilterTime : Double.POSITIVE_INFINITY;
+        Double rawFilterDist = config.getPredecessorsFilterDistanceFactor();
+        double filterDistanceFactor = (rawFilterDist != null && rawFilterDist >= 0) ? rawFilterDist : Double.POSITIVE_INFINITY;
         int maxSuccessors = config.getMaxSuccessors();
 
         Map<Integer, List<Integer>> predecessors = new ConcurrentHashMap<>();
@@ -252,7 +253,15 @@ public final class RidePostProcessor {
 
         int parallelism = resolveParallelism();
 		log.info("    Computing predecessor/successor connections (parallelism: {})...", parallelism);
-		log.info("    This requires routing {} potential connections via network...", total * (total - 1) / 2);
+		log.info("    Filter: time={}, distanceFactor={}, maxSuccessors={}",
+				Double.isInfinite(filterTime) ? "unbounded" : String.format("%.0fs", filterTime),
+				Double.isInfinite(filterDistanceFactor) ? "unbounded" : String.format("%.2f", filterDistanceFactor),
+				maxSuccessors <= 0 ? "all" : maxSuccessors);
+		if (Double.isInfinite(filterTime)) {
+			log.warn("    predecessorsFilterTime is unbounded (-1) — all {} ride pairs will be considered. " +
+					"This creates a complete connection cache but scales O(n²).", (long) total * (total - 1) / 2);
+		}
+		log.info("    This requires routing up to {} potential connections via network...", (long) total * (total - 1) / 2);
 
 		long routingStartTime = System.currentTimeMillis();
         IntStream stream = IntStream.range(0, total);

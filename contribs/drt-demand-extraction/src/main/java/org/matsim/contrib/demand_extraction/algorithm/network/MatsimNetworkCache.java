@@ -216,42 +216,59 @@ public class MatsimNetworkCache {
 	}
 	
 	/**
-	 * Export cache to CSV file.
-	 * Format: originLinkId, destLinkId, timeBin, travelTime, distance, utility
+	 * Export connection cache to CSV file for ExMasCommuter (Python).
+	 * Format: origin,destination,time_bin,travel_time,distance
+	 *
+	 * @param filepath output file path
+	 * @param connectionKeys if non-null, export only these "origin_destination_timeBin" keys;
+	 *                       if null, export all cached connections
 	 */
-	public void exportCache(String filepath) throws IOException {
-		try (BufferedWriter writer = new BufferedWriter(new FileWriter(filepath))) {
-			writer.write("originLinkId,destLinkId,timeBin,travelTime,distance,utility\n");
-			
-			for (Map.Entry<CacheKey, TravelSegment> entry : cache.entrySet()) {
-				CacheKey key = entry.getKey();
-				TravelSegment seg = entry.getValue();
-				
-				if (!seg.isReachable()) {
-					continue; // Skip unreachable segments
-				}
-				
-				writer.write(String.format("%s,%s,%d,%.2f,%.2f,%.4f\n",
-						key.origin, key.destination, key.timeBin,
-						seg.getTravelTime(), seg.getDistance(), seg.getNetworkUtility()));
-			}
+	public void exportConnectionCache(String filepath, java.util.Set<String> connectionKeys) throws IOException {
+		if (connectionKeys == null) {
+			exportAllEntries(filepath);
+		} else {
+			exportFilteredEntries(filepath, connectionKeys);
 		}
 	}
 
-	/**
-	 * Export filtered connection cache to CSV file for ExMasCommuter (Python).
-	 * Format: origin,destination,time_bin,travel_time,distance
-	 * 
-	 * @param filepath output file path
-	 * @param connectionKeys set of "origin_destination_timeBin" string keys to export
-	 */
-	public void exportFilteredConnectionCache(String filepath, java.util.Set<String> connectionKeys) throws IOException {
+	private void exportAllEntries(String filepath) throws IOException {
 		try (BufferedWriter writer = new BufferedWriter(new FileWriter(filepath))) {
 			writer.write("origin,destination,time_bin,travel_time,distance\n");
 
-			// Deterministic output: sort keys and write in that order.
-			// Avoids nondeterminism from HashSet/ConcurrentHashMap iteration.
+			// Deterministic output: sort keys lexicographically
+			List<CacheKey> sortedKeys = cache.keySet().stream()
+					.sorted((a, b) -> {
+						int cmp = a.origin.toString().compareTo(b.origin.toString());
+						if (cmp != 0) return cmp;
+						cmp = a.destination.toString().compareTo(b.destination.toString());
+						if (cmp != 0) return cmp;
+						return Integer.compare(a.timeBin, b.timeBin);
+					})
+					.toList();
+
+			int exported = 0;
+			for (CacheKey key : sortedKeys) {
+				TravelSegment seg = cache.get(key);
+				if (seg == null || !seg.isReachable()) {
+					continue;
+				}
+				writer.write(String.format(java.util.Locale.US, "%s,%s,%d,%.2f,%.2f\n",
+						key.origin, key.destination, key.timeBin,
+						seg.getTravelTime(), seg.getDistance()));
+				exported++;
+			}
+			log.info("Exported connection cache (all): {} reachable entries (from {} total)",
+					exported, cache.size());
+		}
+	}
+
+	private void exportFilteredEntries(String filepath, java.util.Set<String> connectionKeys) throws IOException {
+		try (BufferedWriter writer = new BufferedWriter(new FileWriter(filepath))) {
+			writer.write("origin,destination,time_bin,travel_time,distance\n");
+
+			// Deterministic output: sort keys
 			List<String> sortedKeys = connectionKeys.stream().sorted().toList();
+			int exported = 0;
 			for (String lookupKey : sortedKeys) {
 				int lastUnderscore = lookupKey.lastIndexOf('_');
 				int secondLastUnderscore = lookupKey.lastIndexOf('_', lastUnderscore - 1);
@@ -274,7 +291,7 @@ public class MatsimNetworkCache {
 
 				TravelSegment seg = cache.get(key);
 				if (seg == null) {
-					// Fallback: ensure the segment exists (should already be routed during predecessor calc).
+					// Fallback: route on demand (should already be cached from predecessor calc)
 					double canonicalDepartureTime = (timeBin + 0.5) * timeBinSize;
 					seg = getSegment(origin, destination, canonicalDepartureTime);
 				}
@@ -284,7 +301,10 @@ public class MatsimNetworkCache {
 
 				writer.write(String.format(java.util.Locale.US, "%s,%s,%d,%.2f,%.2f\n",
 						originStr, destStr, timeBin, seg.getTravelTime(), seg.getDistance()));
+				exported++;
 			}
+			log.info("Exported connection cache (filtered): {} entries (from {} requested)",
+					exported, connectionKeys.size());
 		}
 	}
 	

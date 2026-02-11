@@ -160,12 +160,13 @@ public class DemandExtractionListener implements ShutdownListener {
 	ExMasCsvWriter.writeModeCache(modeCacheFilename, modeRoutingCache.getAllModeAttributes());
 	log.info("Wrote mode cache to: {}", modeCacheFilename);
 
-	// 9. Write Connection Cache (only connections needed for successors)
+	// 9. Write Connection Cache
 	if (exMasConfig.isCalcPredecessors()) {
 		String connectionCacheFilename = demandOutputDir + "/" + config.controller().getRunId()
 				+ ".connection_cache.csv";
 		try {
-			ConnectionCacheWriter.writeConnectionCache(connectionCacheFilename, rides, networkCache, exMasConfig.getNetworkTimeBinSize());
+			ConnectionCacheWriter.writeConnectionCache(connectionCacheFilename, rides, networkCache,
+					exMasConfig.getNetworkTimeBinSize(), exMasConfig.getConnectionCacheExportMode());
 		} catch (IOException e) {
 			log.error("Failed to write connection cache", e);
 		}
