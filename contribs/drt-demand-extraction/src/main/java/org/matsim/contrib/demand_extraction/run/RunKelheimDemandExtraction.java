@@ -633,9 +633,9 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 		// Enable predecessor calculation for connection_cache.csv output
 		// This is needed for optimization empty vehicle kilometer calculations
 		exMasConfig.setCalcPredecessors(true);
-		exMasConfig.setPredecessorsFilterDistanceFactor(-1.0);
+		exMasConfig.setPredecessorsFilterDistanceFactor(1.0);
 		// Only consider predecessors that ended within 0.5 hours before successor starts
-		exMasConfig.setPredecessorsFilterTime(-1.0);
+		exMasConfig.setPredecessorsFilterTime(3600.0);
 		exMasConfig.setCalcShapleyValues(true);
 
 		// Pruning settings: heuristic pruning controls combinatorial growth during ride
