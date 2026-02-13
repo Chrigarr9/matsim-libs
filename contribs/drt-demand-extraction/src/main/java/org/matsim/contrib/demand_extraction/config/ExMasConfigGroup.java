@@ -185,11 +185,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// - "successors_only": Export only connections between successor ride pairs (legacy behavior, smaller file)
 	private String connectionCacheExportMode = "all";
 
-	// Depot link ID for path cover fleet sizing.
-	// null/omitted = auto-compute from request gravity center.
-	// Routes to/from depot are exported in the connection cache.
-	private String depotLinkId = null;
-
 	// Optional intermediate writes (parity with Python, currently unused)
 	private boolean intermediateWrite = false;
 
@@ -763,16 +758,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.connectionCacheExportMode = connectionCacheExportMode;
 	}
 
-	@StringGetter("depotLinkId")
-	public String getDepotLinkId() {
-		return depotLinkId;
-	}
-
-	@StringSetter("depotLinkId")
-	public void setDepotLinkId(String depotLinkId) {
-		this.depotLinkId = depotLinkId;
-	}
-
 	@StringGetter("intermediateWrite")
 	public boolean isIntermediateWrite() {
 		return intermediateWrite;
@@ -1061,9 +1046,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("connectionCacheExportMode",
 				"Connection cache export mode: 'all' exports all cached OD pairs (default, needed for Python dynamic successor computation), " +
 				"'successors_only' exports only connections between successor ride pairs (legacy, smaller file). Default: all");
-		map.put("depotLinkId",
-				"Depot link ID for path cover fleet sizing. null/omitted = auto-compute from request gravity center. " +
-				"Routes to/from depot are exported in the connection cache for Python depot-based path cover.");
 		map.put("intermediateWrite",
 				"Write intermediate outputs during heuristics (parity with Python implementation). Default: false");
 
