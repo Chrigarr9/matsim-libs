@@ -135,7 +135,8 @@ public final class RidePostProcessor {
                     budget,
                     person,
                     travelTimes[i],
-                    distances[i]
+                    distances[i],
+                    request
                 );
 
                 // Derive per-km cost (source of truth for Python optimization pipeline)

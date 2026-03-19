@@ -4,6 +4,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithmModule;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.scoring.ScoringAdapterModule;
 import org.matsim.core.config.Config;
 import org.matsim.core.controler.AbstractModule;
 
@@ -28,6 +29,9 @@ public class DemandExtractionModule extends AbstractModule {
 		// 
 		// IMPORTANT: Call DemandExtractionConfigValidator.prepareConfigForDemandExtraction(config)
 		//            BEFORE DrtControlerCreator.createControler() or Controler creation.
+
+		// Install scoring adapter (resolves correct adapter for scoring paradigm)
+		install(new ScoringAdapterModule());
 
 		// Bind demand extraction components
         bind(ModeRoutingCache.class).asEagerSingleton();
