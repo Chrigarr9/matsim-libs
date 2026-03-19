@@ -1,5 +1,6 @@
 package org.matsim.contrib.demand_extraction.demand;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -19,13 +20,15 @@ import org.matsim.api.core.v01.population.PlanElement;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.demand_extraction.algorithm.util.StringUtils;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.TourEvaluationMode;
+import org.matsim.contrib.demand_extraction.scoring.DemandExtractionScoringAdapter;
+import org.matsim.contrib.demand_extraction.scoring.PreviousTripContext;
+import org.matsim.contrib.demand_extraction.scoring.TripScoreRequest;
+import org.matsim.contrib.demand_extraction.scoring.TripScoreResult;
 import org.matsim.core.config.Config;
 import org.matsim.core.population.PersonUtils;
 import org.matsim.core.router.TripRouter;
 import org.matsim.core.router.TripStructureUtils;
-import org.matsim.core.scoring.ScoringFunction;
-import org.matsim.core.scoring.ScoringFunctionFactory;
-import org.matsim.core.scoring.functions.ModeUtilityParameters;
 import org.matsim.core.scoring.functions.ScoringParameters;
 import org.matsim.core.scoring.functions.ScoringParametersForPerson;
 import org.matsim.facilities.ActivityFacilities;
@@ -42,7 +45,7 @@ public class ModeRoutingCache {
 
     private final Provider<TripRouter> tripRouterProvider;
     private final ExMasConfigGroup exMasConfig;
-    private final ScoringFunctionFactory scoringFunctionFactory;
+    private final DemandExtractionScoringAdapter adapter;
     private final ScoringParametersForPerson scoringParametersForPerson;
     private final Config config;
     private final Network network;
@@ -60,12 +63,12 @@ public class ModeRoutingCache {
 
     @Inject
     public ModeRoutingCache(Provider<TripRouter> tripRouterProvider, ExMasConfigGroup exMasConfig,
-            ScoringFunctionFactory scoringFunctionFactory,
+            DemandExtractionScoringAdapter adapter,
             ScoringParametersForPerson scoringParametersForPerson,
             Config config, Network network, ActivityFacilities facilities) {
         this.tripRouterProvider = tripRouterProvider;
         this.exMasConfig = exMasConfig;
-        this.scoringFunctionFactory = scoringFunctionFactory;
+        this.adapter = adapter;
         this.scoringParametersForPerson = scoringParametersForPerson;
         this.config = config;
         this.network = network;
@@ -73,7 +76,8 @@ public class ModeRoutingCache {
     }
 
     public void cacheModes(Population population) {
-		log.info("Starting mode caching for {} persons...", population.getPersons().size());
+		log.info("Starting mode caching for {} persons (adapter: {})...",
+				population.getPersons().size(), adapter.getName());
 		long startTime = System.currentTimeMillis();
 
 		// Thread-safe progress tracking
@@ -96,6 +100,10 @@ public class ModeRoutingCache {
             // Get scoring params for person (needed for opportunity cost)
             ScoringParameters params = scoringParametersForPerson.getScoringParameters(person);
 
+            // GREEDY_PREFIX: accumulate best non-DRT mode per trip for tour context
+            boolean useGreedyPrefix = exMasConfig.getTourEvaluationMode() == TourEvaluationMode.GREEDY_PREFIX;
+            List<PreviousTripContext> previousTrips = useGreedyPrefix ? new ArrayList<>() : List.of();
+
             int tripIndex = 0;
             for (TripStructureUtils.Trip trip : trips) {
                 Map<String, ModeAttributes> modeCache = new ConcurrentHashMap<>();
@@ -106,28 +114,21 @@ public class ModeRoutingCache {
 				Set<String> availableModes = filterAvailableModes(person, allModes);
 
 				for (String mode : availableModes) {
-					// Determine routing mode for this travel mode
-					// DRT: Check if DRT routing module exists, otherwise use configured fallback
-					// (e.g., "car")
-					// Other modes: Use mode name itself as routing mode
+					// Determine routing mode
 					String routingMode;
-					if (mode.equals(exMasConfig.getDrtMode())) {	
-						// For DRT: check if dedicated DRT routing module exists in TripRouter
-						// Routing module name: "direct{DrtMode}Router" (e.g., "directDrtRouter")
+					if (mode.equals(exMasConfig.getDrtMode())) {
 						String drtRouterName = "direct" + StringUtils.capitalize(mode) + "Router";
 						if (tripRouter.getRoutingModule(drtRouterName) != null) {
-							routingMode = drtRouterName; // Use DRT-specific network-filtered routing
+							routingMode = drtRouterName;
 						} else {
-							routingMode = exMasConfig.getDrtRoutingMode(); // Fallback to configured routing (typically
-																			// "car")
+							routingMode = exMasConfig.getDrtRoutingMode();
 						}
 					} else {
-						routingMode = mode; // Standard modes route as themselves
+						routingMode = mode;
 					}
-					
+
                     List<? extends PlanElement> tripElements;
 
-                    // Convert activities to facilities for routing
                     Facility fromFacility = FacilitiesUtils.toFacility(trip.getOriginActivity(), facilities);
                     Facility toFacility = FacilitiesUtils.toFacility(trip.getDestinationActivity(), facilities);
 
@@ -139,10 +140,19 @@ public class ModeRoutingCache {
                             person,
                             trip.getTripAttributes());
 
-
-
                     if (tripElements == null || tripElements.isEmpty())
                         continue;
+
+                    // Fix leg modes when DRT was routed via a different routing mode (e.g., car).
+                    // The routing fallback produces legs with mode "car", but they represent
+                    // DRT trips and must be scored with DRT mode params.
+                    if (!routingMode.equals(mode)) {
+                        for (PlanElement pe : tripElements) {
+                            if (pe instanceof Leg leg && leg.getMode().equals(routingMode)) {
+                                leg.setMode(mode);
+                            }
+                        }
+                    }
 
                     double travelTime = 0.0;
                     double distance = 0.0;
@@ -156,63 +166,58 @@ public class ModeRoutingCache {
                         }
                     }
 
-					// Calculate monetary cost based on mode parameters
-					// Cost = distance * monetaryDistanceRate (in monetary units, e.g., EUR)
-					double cost = calculateTripCost(mode, distance, params);
+					// Score via adapter (with tour context for GREEDY_PREFIX)
+					double score = scoreViaAdapter(person, mode, tripElements, trip,
+							tripIndex, params, previousTrips);
 
-                    // Calculate Score
-                    double score = calculateTripScore(person, trip, tripElements, params);
-
-					// Store mode attributes: travel time, distance, cost, and score
-					// Note: For budget calculation, only 'score' is used to compare modes.
-					// Travel time, distance, and cost are retained for debugging and analytics
-					// to help understand why certain modes have higher/lower utilities.
-					modeCache.put(mode, new ModeAttributes(travelTime, distance, cost, score));
+					modeCache.put(mode, new ModeAttributes(travelTime, distance, score));
 				}
 
 				// Determine best baseline mode (best score excluding DRT)
 				String bestMode = null;
 				double bestScore = Double.NEGATIVE_INFINITY;
+				double bestTravelTime = 0.0;
 				String drtMode = exMasConfig.getDrtMode();
 
 				for (Map.Entry<String, ModeAttributes> entry : modeCache.entrySet()) {
-					if (!entry.getKey().equals(drtMode) && entry.getValue().score > bestScore) {
-						bestScore = entry.getValue().score;
+					if (!entry.getKey().equals(drtMode) && entry.getValue().score() > bestScore) {
+						bestScore = entry.getValue().score();
 						bestMode = entry.getKey();
+						bestTravelTime = entry.getValue().travelTime();
 					}
                 }
 
 				if (bestMode != null) {
 					personCache.put(tripIndex, modeCache);
 					personBestModes.put(tripIndex, Map.entry(bestMode, bestScore));
+
+					// Record best non-DRT mode for next trip's context (GREEDY_PREFIX)
+					if (useGreedyPrefix) {
+						previousTrips.add(new PreviousTripContext(
+								tripIndex, bestMode,
+								trip.getOriginActivity().getEndTime().orElse(0.0),
+								bestTravelTime));
+					}
 				} else {
-					// No valid baseline mode found - skip this trip
 					personCache.put(tripIndex, modeCache);
 				}
 
-				// Calculate PT accessibility metrics (car vs PT travel time)
-				// IMPORTANT: Car travel time is ALWAYS calculated regardless of car availability
-				// This allows comparing PT accessibility even for agents without car access
+				// Calculate PT accessibility metrics
 				double carTravelTime = Double.NaN;
 				double ptTravelTime = Double.NaN;
 
-				// Get car travel time (may already be in modeCache, otherwise route it now)
 				if (modeCache.containsKey(TransportMode.car)) {
-					carTravelTime = modeCache.get(TransportMode.car).travelTime;
+					carTravelTime = modeCache.get(TransportMode.car).travelTime();
 				} else {
-					// Person doesn't have car available - route it anyway for PT accessibility
 					carTravelTime = routeModeForAccessibility(tripRouter, trip, person, TransportMode.car);
 				}
 
-				// Get PT travel time (may already be in modeCache, otherwise route it now)
 				if (modeCache.containsKey(TransportMode.pt)) {
-					ptTravelTime = modeCache.get(TransportMode.pt).travelTime;
+					ptTravelTime = modeCache.get(TransportMode.pt).travelTime();
 				} else if (exMasConfig.getBaseModes().contains(TransportMode.pt)) {
-					// PT is configured but not available - route it anyway
 					ptTravelTime = routeModeForAccessibility(tripRouter, trip, person, TransportMode.pt);
 				}
 
-				// Store PT accessibility metrics: [carTravelTime, ptTravelTime]
 				personPtAccessibility.put(tripIndex, new double[] { carTravelTime, ptTravelTime });
 
                 tripIndex++;
@@ -240,23 +245,44 @@ public class ModeRoutingCache {
 		log.info("Mode caching complete: {} persons processed in {}s", totalPersons, String.format("%.1f", seconds));
     }
 
+	/**
+	 * Score a trip via the adapter, applying opportunity cost if needed.
+	 */
+	private double scoreViaAdapter(Person person, String mode,
+			List<? extends PlanElement> tripElements, TripStructureUtils.Trip trip,
+			int tripIndex, ScoringParameters params,
+			List<PreviousTripContext> previousTrips) {
 
+		TripScoreRequest request = new TripScoreRequest(
+				person, mode, tripElements,
+				trip.getOriginActivity(), trip.getDestinationActivity(),
+				trip.getOriginActivity().getEndTime().orElse(0.0),
+				trip.getTripAttributes(), tripIndex, previousTrips);
+
+		TripScoreResult result = adapter.scoreTrip(request);
+		double score = result.utility();
+
+		// Apply opportunity cost only if adapter doesn't already include it
+		if (exMasConfig.isIncludeOpportunityCost() && !adapter.includesOpportunityCost()) {
+			double totalTravelTime = 0.0;
+			for (PlanElement pe : tripElements) {
+				if (pe instanceof Leg leg) {
+					totalTravelTime += leg.getTravelTime().orElse(0.0);
+				}
+			}
+			score -= totalTravelTime * params.marginalUtilityOfPerforming_s;
+		}
+
+		return score;
+	}
 
 	/**
 	 * Filters modes based on person attributes following MATSim conventions.
-	 * - Car: requires license != "no" AND carAvail != "never" (see PersonUtils)
-	 * - Bike: always available (MATSim has no standard bike availability attribute)
-	 * - PT, Walk, DRT: always available
-	 * 
-	 * This ensures we only route and score modes that the person can actually use,
-	 * avoiding infeasible baseline comparisons in budget calculation.
 	 */
 	private Set<String> filterAvailableModes(Person person, Set<String> modes) {
 		Set<String> availableModes = new java.util.HashSet<>();
 
 		for (String mode : modes) {
-			// Check car availability using MATSim conventions (see CarModeAvailability in
-			// discrete_mode_choice)
 			if (TransportMode.car.equals(mode)) {
 				boolean hasLicense = !"no".equals(PersonUtils.getLicense(person));
 				boolean carAvailable = !"never".equals(PersonUtils.getCarAvail(person));
@@ -264,115 +290,15 @@ public class ModeRoutingCache {
 				if (hasLicense && carAvailable) {
 					availableModes.add(mode);
 				}
-				// If not available, skip this mode entirely (don't route or score it)
 			} else if ("bike".equals(mode)) {
-				// Bike: MATSim has no standard availability attribute, assume always available
 				availableModes.add(mode);
 			} else {
-				// PT, Walk, DRT, and other modes: always available
 				availableModes.add(mode);
 			}
 		}
 
 		return availableModes;
 	}
-
-	/**
-	 * Calculates the monetary cost of a trip based on mode parameters.
-	 * Cost is calculated as: distance * monetaryDistanceRate
-	 * 
-	 * @param mode     The transport mode
-	 * @param distance The trip distance in meters
-	 * @param params   The scoring parameters containing mode-specific cost rates
-	 * @return The monetary cost in currency units (e.g., EUR)
-	 */
-	private double calculateTripCost(String mode, double distance, ScoringParameters params) {
-		ModeUtilityParameters modeParams = params.modeParams.get(mode);
-		if (modeParams == null) {
-			// Fallback for modes without explicit parameters (should rarely happen after
-			// filtering)
-			return 0.0;
-		}
-
-		// MATSim's monetaryDistanceCostRate is the cost per meter (e.g., EUR/m)
-		// Total cost = distance (m) * rate (EUR/m)
-		double cost = distance * modeParams.monetaryDistanceCostRate;
-
-		// Add per-trip constant (not daily constant)
-		// The per-trip constant is applied to every trip regardless of whether it's the
-		// first trip
-		cost += modeParams.constant;
-
-		// TODO: Add daily monetary constant (dailyMonetaryConstant)
-		// This requires tracking which modes have been used today per person
-		// Should only be added once per mode per day
-		// Implementation would need:
-		// 1. Track per person which modes used today (Map<PersonId, Set<Mode>>)
-		// 2. Add dailyMonetaryConstant only for first trip of day per mode
-		// 3. Update tracking after adding the constant
-
-		return cost;
-	}
-
-    private double calculateTripScore(Person person, TripStructureUtils.Trip originalTrip,
-            List<? extends PlanElement> newRoute, ScoringParameters params) {
-        ScoringFunction sf = scoringFunctionFactory.createNewScoringFunction(person);
-
-		// Track which modes are used in this trip to correct for daily constants
-		Set<String> modesInTrip = new HashSet<>();
-
-		// Score only the legs (travel time, distance, monetary cost)
-		// We don't score activities because we're comparing alternatives for the same
-		// trip, which have the same origin and destination activities.
-        for (PlanElement pe : newRoute) {
-			if (pe instanceof Leg leg) {
-				sf.handleLeg(leg);
-				modesInTrip.add(leg.getMode());
-            }
-        }
-
-		sf.finish();
-		double score = sf.getScore();
-
-		// IMPORTANT: Correct for daily constants that were incorrectly added.
-		//
-		// MATSim's CharyparNagelLegScoring adds dailyUtilityConstant and dailyMoneyConstant
-		// the first time a mode is used. Since we create a NEW ScoringFunction for each trip,
-		// these daily constants are added every time, which is incorrect.
-		//
-		// For demand extraction comparing individual trips:
-		// - Daily constants are day-level decisions, not trip-level
-		// - They don't affect the marginal utility of DRT vs other modes for THIS trip
-		// - Including them would over-count (person may make multiple trips per day)
-		//
-		// We subtract them to get the correct trip-level utility.
-		for (String mode : modesInTrip) {
-			ModeUtilityParameters modeParams = params.modeParams.get(mode);
-			if (modeParams != null) {
-				// Subtract daily utility constant
-				score -= modeParams.dailyUtilityConstant;
-				// Subtract daily money constant (converted to utility)
-				score -= modeParams.dailyMoneyConstant * params.marginalUtilityOfMoney;
-			}
-		}
-
-		// Add opportunity cost of time (lost activity time)
-		// In standard MATSim, longer travel means less activity time, reducing the activity score.
-		// Since we only score legs here, we must explicitly subtract the utility of performing
-		// the activity that is displaced by travel.
-		// Effective marginal utility of travel = marginalUtilityOfTraveling - marginalUtilityOfPerforming
-		if (exMasConfig.isIncludeOpportunityCost()) {
-			double totalTravelTime = 0.0;
-			for (PlanElement pe : newRoute) {
-				if (pe instanceof Leg leg) {
-					totalTravelTime += leg.getTravelTime().seconds();
-				}
-			}
-			score -= totalTravelTime * params.marginalUtilityOfPerforming_s;
-		}
-
-        return score;
-    }
 
     public Map<Integer, Map<String, ModeAttributes>> getAttributes(Id<Person> personId) {
         return cache.get(personId);
@@ -382,34 +308,14 @@ public class ModeRoutingCache {
 		return bestBaselineModes;
 	}
 
-	/**
-	 * Get PT accessibility metrics for all persons.
-	 * Returns Map: Person ID -> Trip Index -> [carTravelTime, ptTravelTime]
-	 * Car travel time is ALWAYS calculated regardless of car availability.
-	 */
 	public Map<Id<Person>, Map<Integer, double[]>> getPtAccessibilityMetrics() {
 		return ptAccessibilityMetrics;
 	}
 
-	/**
-	 * Get all mode attributes for all persons.
-	 * Returns Map: Person ID -> Trip Index -> Mode Name -> ModeAttributes
-	 * Used for debugging and analyzing mode choice decisions.
-	 */
 	public Map<Id<Person>, Map<Integer, Map<String, ModeAttributes>>> getAllModeAttributes() {
 		return cache;
 	}
 
-	/**
-	 * Route a mode purely to get travel time for accessibility comparison.
-	 * This is called for modes the person doesn't have available (e.g., car for non-car-owners).
-	 *
-	 * @param tripRouter the trip router
-	 * @param trip       the trip to route
-	 * @param person     the person (for routing context)
-	 * @param mode       the mode to route
-	 * @return travel time in seconds, or Double.NaN if routing fails
-	 */
 	private double routeModeForAccessibility(TripRouter tripRouter, TripStructureUtils.Trip trip,
 			Person person, String mode) {
 		try {
@@ -436,7 +342,6 @@ public class ModeRoutingCache {
 			}
 			return travelTime;
 		} catch (Exception e) {
-			// Routing failed - return NaN
 			return Double.NaN;
 		}
 	}

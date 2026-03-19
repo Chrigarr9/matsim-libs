@@ -1,25 +1,12 @@
 package org.matsim.contrib.demand_extraction.demand;
 
-public class ModeAttributes {
-    public final double travelTime;
-    public final double distance;
-    public final double cost;
-    public final double score;
-
-    public ModeAttributes(double travelTime, double distance, double cost, double score) {
-        this.travelTime = travelTime;
-        this.distance = distance;
-        this.cost = cost;
-        this.score = score;
-    }
-
-    @Override
-    public String toString() {
-        return "ModeAttributes{" +
-                "travelTime=" + travelTime +
-                ", distance=" + distance +
-                ", cost=" + cost +
-                ", score=" + score +
-                '}';
-    }
+/**
+ * Immutable attributes for a routed mode alternative.
+ *
+ * <p>The {@code score} field is the trip-level utility from the scoring adapter,
+ * excluding daily constants. For budget calculation, only {@code score} is used
+ * to compare modes. Travel time and distance are retained for constraint
+ * calculation and analytics.
+ */
+public record ModeAttributes(double travelTime, double distance, double score) {
 }

@@ -220,7 +220,7 @@ public class ExMasHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				Assertions.assertEquals(27, parts.length, "Each request should have 27 fields");
+				Assertions.assertEquals(28, parts.length, "Each request should have 28 fields");
 
 				String personId = parts[1];
 				double budget = Double.parseDouble(parts[5]);
@@ -256,7 +256,7 @@ public class ExMasHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				Assertions.assertEquals(33, parts.length, "Each ride should have 33 fields (with HyperPool)");
+				Assertions.assertEquals(34, parts.length, "Each ride should have 34 fields (with HyperPool)");
 
 				int degree = Integer.parseInt(parts[1]);
 				String variant = parts[3]; // DOOR_TO_DOOR, STOP_TO_STOP, or HYPER_POOLED

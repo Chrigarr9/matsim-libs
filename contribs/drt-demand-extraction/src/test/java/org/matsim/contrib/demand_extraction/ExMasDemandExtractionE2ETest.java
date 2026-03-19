@@ -230,12 +230,12 @@ public class ExMasDemandExtractionE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				if (parts.length != 27) {
-					System.err.println("ERROR: Expected 27 fields but got " + parts.length);
+				if (parts.length != 28) {
+					System.err.println("ERROR: Expected 28 fields but got " + parts.length);
 					System.err.println("Line: " + line);
 					System.err.println("Fields: " + java.util.Arrays.toString(parts));
 				}
-				Assertions.assertEquals(27, parts.length, "Each request should have 27 fields (includes activity types + PT accessibility)");
+				Assertions.assertEquals(28, parts.length, "Each request should have 28 fields (includes activity types + PT accessibility + maxCostPerKm)");
 
 				String personId = parts[1];
 				double budget = Double.parseDouble(parts[5]);
@@ -283,7 +283,7 @@ public class ExMasDemandExtractionE2ETest {
 				// pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty,
 				// dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty,
 				// accessWalkDistances,egressWalkDistances
-				Assertions.assertEquals(33, parts.length, "Each ride should have 33 fields (with HyperPool stop fields)");
+				Assertions.assertEquals(34, parts.length, "Each ride should have 34 fields (with HyperPool stop fields)");
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();

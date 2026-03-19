@@ -520,7 +520,7 @@ public final class ExMasCsvWriter {
 					java.util.Map<Integer, java.util.Map<String, org.matsim.contrib.demand_extraction.demand.ModeAttributes>>> modeCache) {
 		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
 			// Header
-			writer.write("personId,tripIndex,mode,travelTime,distance,cost,score");
+			writer.write("personId,tripIndex,mode,travelTime,distance,score");
 			writer.newLine();
 
 			// Sort by person ID for consistent output
@@ -545,9 +545,9 @@ public final class ExMasCsvWriter {
 					for (String mode : sortedModes) {
 						var attrs = modes.get(mode);
 						writer.write(String.format(java.util.Locale.US,
-								"%s,%d,%s,%.2f,%.2f,%.4f,%.4f",
+								"%s,%d,%s,%.2f,%.2f,%.4f",
 								personId, tripIndex, mode,
-								attrs.travelTime, attrs.distance, attrs.cost, attrs.score));
+								attrs.travelTime(), attrs.distance(), attrs.score()));
 						writer.newLine();
 					}
 				}

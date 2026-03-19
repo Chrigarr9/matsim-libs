@@ -399,7 +399,7 @@ public class ExMasClusteredHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				Assertions.assertEquals(33, parts.length, "Each ride should have 33 fields");
+				Assertions.assertEquals(34, parts.length, "Each ride should have 34 fields");
 
 				String variant = parts[3];
 				if (variant.equals("DOOR_TO_DOOR")) doorToDoorCount++;

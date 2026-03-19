@@ -3,6 +3,8 @@ package org.matsim.contrib.demand_extraction.config;
 import java.util.Map;
 import java.util.Set;
 
+import org.matsim.api.core.v01.TransportMode;
+import org.matsim.core.config.Config;
 import org.matsim.core.config.ReflectiveConfigGroup;
 
 public class ExMasConfigGroup extends ReflectiveConfigGroup {
@@ -42,6 +44,20 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     // Person filtering settings
     private int minAge = 18; // Minimum age to use DRT (if age attribute exists)
     private String drtAvailabilityAttribute = null; // Person attribute to check for DRT eligibility (e.g. "hasLicense")
+
+	// Scoring adapter selection: "auto" (default), "planCalcScore", "dmc", "eqasim"
+	private String scoringAdapter = "auto";
+
+	// Tour evaluation mode for budget calculation
+	public enum TourEvaluationMode { TRIP_INDEPENDENT, GREEDY_PREFIX }
+	private TourEvaluationMode tourEvaluationMode = TourEvaluationMode.TRIP_INDEPENDENT;
+
+	// Override marginalUtilityOfMoney (utils/EUR) for maxCost conversion.
+	// Only needed when planCalcScore has dummy values AND no dedicated adapter.
+	// Standard MATSim/DMC: auto-detected from planCalcScore.
+	// eqasim: auto-detected from eqasim adapter.
+	// Custom: must be set here.
+	private Double marginalUtilityOfMoneyOverride = null;
 
 	// Base modes to evaluate for budget calculation (e.g., car, pt, walk, bike)
 	// Each mode will be routed using its own routing module
@@ -270,6 +286,54 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     public ExMasConfigGroup() {
         super(GROUP_NAME);
     }
+
+	/**
+	 * Get the walk speed from MATSim routing config, falling back to
+	 * {@link #DEFAULT_WALK_SPEED} if the configured speed is zero or negative.
+	 *
+	 * <p>Both BudgetValidator and BudgetToConstraintsCalculator need the same
+	 * walk speed for scoring synthetic DRT trips. This method centralizes the
+	 * extraction logic.
+	 *
+	 * @param config the MATSim config
+	 * @return walk speed in m/s
+	 */
+	public static double getWalkSpeed(Config config) {
+		double configuredSpeed = config.routing()
+				.getOrCreateModeRoutingParams(TransportMode.walk)
+				.getTeleportedModeSpeed();
+		return (configuredSpeed > 0) ? configuredSpeed : DEFAULT_WALK_SPEED;
+	}
+
+	@StringGetter("scoringAdapter")
+	public String getScoringAdapter() {
+		return scoringAdapter;
+	}
+
+	@StringSetter("scoringAdapter")
+	public void setScoringAdapter(String scoringAdapter) {
+		this.scoringAdapter = scoringAdapter;
+	}
+
+	@StringGetter("tourEvaluationMode")
+	public TourEvaluationMode getTourEvaluationMode() {
+		return tourEvaluationMode;
+	}
+
+	@StringSetter("tourEvaluationMode")
+	public void setTourEvaluationMode(TourEvaluationMode tourEvaluationMode) {
+		this.tourEvaluationMode = tourEvaluationMode;
+	}
+
+	@StringGetter("marginalUtilityOfMoney")
+	public Double getMarginalUtilityOfMoneyOverride() {
+		return marginalUtilityOfMoneyOverride;
+	}
+
+	@StringSetter("marginalUtilityOfMoney")
+	public void setMarginalUtilityOfMoneyOverride(Double marginalUtilityOfMoney) {
+		this.marginalUtilityOfMoneyOverride = marginalUtilityOfMoney;
+	}
 
 	@StringGetter("algorithmProcessCount")
 	public int getAlgorithmProcessCount() {

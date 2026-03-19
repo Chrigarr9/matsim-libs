@@ -242,7 +242,7 @@ public class DrtRequestFactory {
 
 		// Skip trips with zero travel time/distance (same origin-destination)
 		// These cause division by zero and NaN propagation in delay calculations
-		if (drtAttrs.travelTime <= 0.0 || drtAttrs.distance <= 0.0) {
+		if (drtAttrs.travelTime() <= 0.0 || drtAttrs.distance() <= 0.0) {
 			log.warn(
 					"Skipping request index {} (person: {}): zero travel time/distance (origin=destination or routing failure)",
 					requestIndex, person.getId());
@@ -263,14 +263,14 @@ public class DrtRequestFactory {
 		// Network distance should not be more than 5x beeline distance for realistic routes
 		// (factor accounts for road network detours, but 50x+ indicates routing failure)
 		double maxRealisticDistanceRatio = 5.0;
-		if (beelineDistance > 100.0 && drtAttrs.distance / beelineDistance > maxRealisticDistanceRatio) {
+		if (beelineDistance > 100.0 && drtAttrs.distance() / beelineDistance > maxRealisticDistanceRatio) {
 			log.warn(
 					"Skipping request index {} (person: {}): unrealistic routing result. "
 							+ "Beeline={}m but routed distance={}m (ratio={:.1f}x). "
 							+ "Origin link: {}, Dest link: {}. This may indicate activities mapped to wrong links.",
 					requestIndex, person.getId(),
-					String.format("%.0f", beelineDistance), String.format("%.0f", drtAttrs.distance),
-					drtAttrs.distance / beelineDistance, originLinkId, destinationLinkId);
+					String.format("%.0f", beelineDistance), String.format("%.0f", drtAttrs.distance()),
+					drtAttrs.distance() / beelineDistance, originLinkId, destinationLinkId);
 			return null;
 		}
 
@@ -294,13 +294,13 @@ public class DrtRequestFactory {
 				.destinationX(destCoord.getX())
 				.destinationY(destCoord.getY())
 				.requestTime(requestTime)
-				.directTravelTime(drtAttrs.travelTime)
-				.directDistance(drtAttrs.distance)
+				.directTravelTime(drtAttrs.travelTime())
+				.directDistance(drtAttrs.distance())
 				.maxDetourFactor(exmasConfig.getMaxDetourFactor())
 				// Temporary placeholders for time windows (will be recalculated with actual
 				// budget)
 				.earliestDeparture(requestTime)
-				.latestArrival(requestTime + drtAttrs.travelTime)
+				.latestArrival(requestTime + drtAttrs.travelTime())
 				.build();
 
 		// Calculate budget using BudgetValidator for consistency
@@ -321,8 +321,8 @@ public class DrtRequestFactory {
 		// This determines the maximum acceptable trip duration (e.g., 1.5 means 50%
 		// longer than direct)
 		double budgetDerivedDetour = budgetToConstraintsCalculator.budgetToMaxDetourTime(
-				budget, person, drtAttrs.travelTime, drtAttrs.distance);
-		double configMaxDetour = drtAttrs.travelTime * (exmasConfig.getMaxDetourFactor() - 1.0);
+				budget, person, drtAttrs.travelTime(), drtAttrs.distance(), tempRequest);
+		double configMaxDetour = drtAttrs.travelTime() * (exmasConfig.getMaxDetourFactor() - 1.0);
 		double maxAbsoluteDetour = Math.min(budgetDerivedDetour, configMaxDetour);
 		
 		// Apply absolute detour cap if configured
@@ -330,7 +330,7 @@ public class DrtRequestFactory {
 			maxAbsoluteDetour = Math.min(maxAbsoluteDetour, (double) exmasConfig.getMaxAbsoluteDetour());
 		}
 		
-		double effectiveMaxDetourFactor = 1.0 + (maxAbsoluteDetour / drtAttrs.travelTime);
+		double effectiveMaxDetourFactor = 1.0 + (maxAbsoluteDetour / drtAttrs.travelTime());
 
 		// Flexibility controls WHEN someone can depart/arrive (temporal window)
 		// This is INDEPENDENT from detour (which controls HOW LONG the trip can take)
@@ -354,7 +354,7 @@ public class DrtRequestFactory {
 
 		double earliestDep = requestTime - originFlex;
 		double latestDep = requestTime + destFlex;
-		double latestArr = latestDep + drtAttrs.travelTime;
+		double latestArr = latestDep + drtAttrs.travelTime();
 
 		// Calculate PT accessibility metrics
 		// ptMetrics[0] = carTravelTime, ptMetrics[1] = ptTravelTime
@@ -391,8 +391,8 @@ public class DrtRequestFactory {
 				.requestTime(requestTime)
 				.earliestDeparture(earliestDep)
 				.latestArrival(latestArr)
-				.directTravelTime(drtAttrs.travelTime)
-				.directDistance(drtAttrs.distance)
+				.directTravelTime(drtAttrs.travelTime())
+				.directDistance(drtAttrs.distance())
 				.maxDetourFactor(effectiveMaxDetourFactor)
 				.carTravelTime(carTravelTime)
 				.ptTravelTime(ptTravelTime)

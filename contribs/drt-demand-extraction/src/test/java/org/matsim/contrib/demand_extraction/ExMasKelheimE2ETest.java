@@ -221,7 +221,7 @@ public class ExMasKelheimE2ETest {
 				// originLinkId,destinationLinkId,originX,originY,destinationX,destinationY,directTravelTime,
 				// directDistance,earliestDeparture,latestArrival,maxTravelTime,maxPositiveDelay,maxNegativeDelay,
 				// baseModeScore,baseMode,originActivityType,destinationActivityType,carTravelTime,ptTravelTime,ptAccessibility
-				Assertions.assertEquals(27, parts.length, "Each request should have 27 fields (includes activity types)");
+				Assertions.assertEquals(28, parts.length, "Each request should have 28 fields (includes activity types)");
 
 				String personId = parts[1]; // personId is now column 1 (after index)
 				double budget = Double.parseDouble(parts[5]); // budget is now column 5
@@ -261,14 +261,14 @@ public class ExMasKelheimE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// Updated format (33 fields, with HyperPool stop-based pooling):
+				// Updated format (34 fields, with HyperPool stop-based pooling):
 				// rideIndex,degree,kind,variant,requestIndices,personIds,groupIds,requestTimes,isCommutes,
 				// originsOrdered,destinationsOrdered,passengerTravelTimes,passengerDistances,delays,detours,
 				// remainingBudgets,maxCosts,shapleyValues,successors,startTime,endTime,rideTravelTime,rideDistance,
 				// pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty,
 				// dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty,
 				// accessWalkDistances,egressWalkDistances
-				Assertions.assertEquals(33, parts.length, "Each ride should have 33 fields (with HyperPool stop fields)");
+				Assertions.assertEquals(34, parts.length, "Each ride should have 34 fields (with HyperPool stop fields)");
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();

@@ -8,6 +8,10 @@ import org.matsim.core.scoring.functions.ScoringParameters;
 /**
  * Utility class for calculating trip scores consistently across the demand extraction pipeline.
  *
+ * @deprecated No longer used. Leg scoring is now inlined in
+ *             {@link org.matsim.contrib.demand_extraction.scoring.PlanCalcScoreAdapter}.
+ *             Scheduled for removal.
+ *
  * <h2>Handling of Daily Constants</h2>
  * MATSim's scoring includes several types of constants:
  * <ul>
@@ -30,6 +34,7 @@ import org.matsim.core.scoring.functions.ScoringParameters;
  * Use these methods instead of creating new ScoringFunction instances per trip to ensure
  * consistent handling of constants across ModeRoutingCache and BudgetValidator.
  */
+@Deprecated(forRemoval = true)
 public final class TripScoringUtils {
 
 	private TripScoringUtils() {

@@ -2,96 +2,71 @@ package org.matsim.contrib.demand_extraction.algorithm.validation;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.matsim.api.core.v01.Id;
-import org.matsim.api.core.v01.TransportMode;
-import org.matsim.api.core.v01.network.Link;
-import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Population;
-import org.matsim.api.core.v01.population.Route;
 import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
-import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
-import org.matsim.contrib.drt.routing.DrtRoute;
+import org.matsim.contrib.demand_extraction.scoring.DemandExtractionScoringAdapter;
+import org.matsim.contrib.demand_extraction.scoring.DrtTripScorer;
 import org.matsim.core.config.Config;
-import org.matsim.core.population.PopulationUtils;
-import org.matsim.core.population.routes.RouteUtils;
-import org.matsim.core.scoring.ScoringFunction;
-import org.matsim.core.scoring.ScoringFunctionFactory;
-import org.matsim.core.scoring.functions.ModeUtilityParameters;
-import org.matsim.core.scoring.functions.ScoringParameters;
 import org.matsim.core.scoring.functions.ScoringParametersForPerson;
 
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 
 /**
- * Validates ride feasibility against budget constraints using MATSim scoring.
- * 
- * Builds complete DRT trips with access/egress walking legs and proper DRT routes.
- * Uses MATSim's ScoringFunction to calculate utility, ensuring accurate scoring with
- * all person-specific parameters and activity timing effects.
- * 
- * Compares actual DRT utility against best baseline mode utility to ensure
- * remaining budget >= 0. Populates ride with remaining budgets for all passengers.
+ * Validates ride feasibility against budget constraints using the scoring adapter.
+ *
+ * <p>Builds complete DRT trips with access/egress walking legs and proper DRT routes,
+ * then scores via the adapter. Compares actual DRT utility against best baseline mode
+ * utility to ensure remaining budget >= 0.
+ *
+ * <p><b>Bug fix:</b> Opportunity cost is now applied consistently in both
+ * ModeRoutingCache and BudgetValidator when configured AND the adapter doesn't
+ * already include it. Previous code applied it only in ModeRoutingCache.
  */
 @Singleton
 public class BudgetValidator {
 	private static final Logger log = LogManager.getLogger(BudgetValidator.class);
-	
-	private final ScoringFunctionFactory scoringFunctionFactory;
+
+	private final DemandExtractionScoringAdapter adapter;
 	private final ScoringParametersForPerson scoringParametersForPerson;
 	private final ExMasConfigGroup exMasConfig;
 	private final double walkSpeed;
 	private final Config config;
 	private final Population population;
-	private final BudgetToConstraintsCalculator budgetToConstraintsCalculator;
-	
+
 	@Inject
 	public BudgetValidator(
-			ScoringFunctionFactory scoringFunctionFactory,
+			DemandExtractionScoringAdapter adapter,
 			ScoringParametersForPerson scoringParametersForPerson,
 			ExMasConfigGroup exMasConfig,
 			Config config,
-			Population population,
-			BudgetToConstraintsCalculator budgetToConstraintsCalculator) {
-		this.scoringFunctionFactory = scoringFunctionFactory;
+			Population population) {
+		this.adapter = adapter;
 		this.scoringParametersForPerson = scoringParametersForPerson;
 		this.exMasConfig = exMasConfig;
 		this.population = population;
 		this.config = config;
-		this.budgetToConstraintsCalculator = budgetToConstraintsCalculator;
-		
-		// Get configured walking speed (same logic as ModeRoutingCache)
-		double configuredSpeed = config.routing()
-				.getOrCreateModeRoutingParams(TransportMode.walk)
-				.getTeleportedModeSpeed();
-		this.walkSpeed = (configuredSpeed > 0) ? configuredSpeed : ExMasConfigGroup.DEFAULT_WALK_SPEED;
 
+		this.walkSpeed = ExMasConfigGroup.getWalkSpeed(config);
 	}
-	
+
 	/**
 	 * Validate ride against budget constraints for all passengers.
 	 * Returns new Ride with populated remainingBudgets field.
-	 *
-	 * Uses direct object references from the Ride - no need to pass request array.
-	 *
-	 * @param ride the ride to validate (contains direct DrtRequest references)
-	 * @return new Ride with remainingBudgets populated, or null if any budget is negative
 	 */
 	public Ride validateAndPopulateBudgets(Ride ride) {
 		double[] remainingBudgets = calculateRemainingBudgets(ride);
 
-		// Check if all budgets are non-negative
 		for (double budget : remainingBudgets) {
 			if (budget < 0) {
-				return null; // Ride is infeasible
+				return null;
 			}
 		}
 
-		// Create new Ride with remainingBudgets populated using toBuilder()
 		return ride.toBuilder()
 				.remainingBudgets(remainingBudgets)
 				.build();
@@ -99,11 +74,6 @@ public class BudgetValidator {
 
 	/**
 	 * Calculate remaining budgets for all passengers in a ride.
-	 *
-	 * Uses direct object references from the Ride.
-	 *
-	 * @param ride the ride to evaluate (contains direct DrtRequest references)
-	 * @return array of remaining budgets (utils), one per passenger
 	 */
 	public double[] calculateRemainingBudgets(Ride ride) {
 		DrtRequest[] requests = ride.getRequests();
@@ -115,17 +85,13 @@ public class BudgetValidator {
 		for (int i = 0; i < ride.getDegree(); i++) {
 			DrtRequest request = requests[i];
 
-			// Calculate actual DRT score using real MATSim scoring with access/egress
 			double actualDrtScore = calculateDrtScore(
 					request,
 					delays[i],
 					travelTimes[i],
 					distances[i],
-					// for now we will use the walk distance from the settings. Later with hyperpool
-					// we will use actual walk distances
 					exMasConfig.getMinDrtAccessEgressDistance(),
 					exMasConfig.getMinDrtAccessEgressDistance());
-			// Calculate remaining budget (positive = DRT is better than baseline)
 			remainingBudgets[i] = actualDrtScore - request.bestModeScore;
 		}
 
@@ -134,11 +100,6 @@ public class BudgetValidator {
 
 	/**
 	 * Calculate budget for a single request (direct travel, no delays).
-	 * This is equivalent to calculating remaining budget for a single-ride
-	 * and can be used during request creation or single ride validation.
-	 *
-	 * @param request the DRT request with bestModeScore already populated
-	 * @return budget = actualDrtScore - bestModeScore (positive = DRT better than baseline)
 	 */
 	public double calculateBudget(DrtRequest request) {
 		double walkDistance = exMasConfig.getMinDrtAccessEgressDistance();
@@ -149,17 +110,6 @@ public class BudgetValidator {
 
 	/**
 	 * Calculate DRT score with explicit walk distances (for stop-based pooling).
-	 *
-	 * This is the public entry point for stop-based ride validation where
-	 * actual walk distances to/from stops are known.
-	 *
-	 * @param request the DRT request
-	 * @param delay departure delay (seconds, positive = late)
-	 * @param actualTravelTime total passenger travel time including walks (seconds)
-	 * @param actualDistance total travel distance including walks (meters)
-	 * @param accessWalkDistance walk distance from origin to pickup stop (meters)
-	 * @param egressWalkDistance walk distance from dropoff stop to destination (meters)
-	 * @return total utility score (includes all legs)
 	 */
 	public double calculateDrtScoreWithWalks(
 			DrtRequest request,
@@ -176,37 +126,22 @@ public class BudgetValidator {
 	// Hyper-Pooling (Stage 2) Validation Methods
 	// ===========================================
 
-	/**
-	 * Validate a hyper-pooled ride against budget constraints.
-	 *
-	 * Budget validation for hyper-pooled rides calculates remaining budget against
-	 * the base score (best alternative mode score), NOT the S2S ride's remaining budget.
-	 *
-	 * @param ride the HyperPooledRide to validate
-	 * @return ride with populated budgets, or null if any passenger fails validation
-	 */
 	public HyperPooledRide validateHyperPooledRide(HyperPooledRide ride) {
-		// First validate walk distances - if any exceed max, ride is infeasible
 		if (!validateWalkDistances(ride)) {
 			log.debug("Hyper-pooled ride {} failed walk distance validation", ride.getIndex());
 			return null;
 		}
 
-		// Calculate remaining budgets for all passengers
 		DrtRequest[] requests = ride.getRequests();
 		double[] remainingBudgets = new double[ride.getDegree()];
 
 		for (int i = 0; i < ride.getDegree(); i++) {
 			DrtRequest request = requests[i];
 
-			// Calculate actual DRT score for this passenger in the hyper-pooled ride
 			double actualDrtScore = calculateHyperPoolDrtScore(ride, i);
 
-			// Budget is calculated against the base score (best alternative mode),
-			// NOT against the S2S ride's remaining budget
 			remainingBudgets[i] = actualDrtScore - request.bestModeScore;
 
-			// If any passenger has negative budget, ride is infeasible
 			if (remainingBudgets[i] < 0) {
 				log.debug("Hyper-pooled ride {} failed budget validation for passenger {} (budget: {})",
 						ride.getIndex(), request.index, remainingBudgets[i]);
@@ -214,48 +149,24 @@ public class BudgetValidator {
 			}
 		}
 
-		// All passengers have non-negative budgets - create validated ride
 		return ride.toBuilder()
 				.remainingBudgets(remainingBudgets)
 				.build();
 	}
 
-	/**
-	 * Calculate DRT score for a passenger in a hyper-pooled ride.
-	 *
-	 * This includes:
-	 * - Total walk distance (access from origin to boarding stop + egress from alighting stop to destination)
-	 * - In-vehicle time from boarding to alighting
-	 * - Any fare discount for hyper-pooling (if configured)
-	 *
-	 * @param ride the HyperPooledRide containing the passenger
-	 * @param passengerIndex index of the passenger within the ride
-	 * @return total utility score for this passenger's trip
-	 */
 	public double calculateHyperPoolDrtScore(HyperPooledRide ride, int passengerIndex) {
 		DrtRequest request = ride.getRequest(passengerIndex);
 
-		// Get walk distances for this passenger
 		double accessWalkDistance = ride.getAccessWalkDistance(passengerIndex);
 		double egressWalkDistance = ride.getEgressWalkDistance(passengerIndex);
-
-		// Get in-vehicle time for this passenger (time from boarding to alighting)
 		double inVehicleTime = ride.getInVehicleTime(passengerIndex);
 
-		// Calculate delay based on ride start time vs passenger's request time
-		// In hyper-pooled rides, start time is when vehicle departs first stop
-		// Each passenger's delay depends on when they board relative to their request time
 		double accessWalkTime = accessWalkDistance / walkSpeed;
 		double passengerBoardingTime = ride.getStartTime() + calculateTimeToStop(ride, passengerIndex);
 		double passengerReadyTime = request.requestTime + accessWalkTime;
 		double delay = passengerBoardingTime - passengerReadyTime;
-
-		// For distance, use the direct distance (fare is based on direct route)
-		// The actual distance includes detours but fare calculation uses direct
 		double distance = request.directDistance;
 
-		// Calculate DRT score using the standard scoring method
-		// This properly handles walk legs, DRT leg, waiting time, etc.
 		return calculateDrtScore(
 				request,
 				delay,
@@ -265,66 +176,31 @@ public class BudgetValidator {
 				egressWalkDistance);
 	}
 
-	/**
-	 * Calculate time from ride start to when a specific passenger boards.
-	 *
-	 * This traverses the stop sequence from start to the passenger's boarding stop,
-	 * summing up travel times between stops.
-	 *
-	 * @param ride the HyperPooledRide
-	 * @param passengerIndex index of the passenger
-	 * @return time in seconds from ride start to passenger's boarding
-	 */
 	private double calculateTimeToStop(HyperPooledRide ride, int passengerIndex) {
 		int boardingStopIndex = ride.getBoardingStopIndex(passengerIndex);
 
-		// If passenger boards at first stop, time is 0
 		if (boardingStopIndex == 0) {
 			return 0.0;
 		}
 
-		// Calculate cumulative time to reach the boarding stop
-		// This uses the ordered stop sequence and travel times between stops
-		// For now, approximate using the ride's total time proportionally
-		// (A more precise calculation would require inter-stop travel times)
 		double fractionOfStops = (double) boardingStopIndex / (ride.getStopCount() - 1);
 		return fractionOfStops * ride.getTotalRideTime();
 	}
 
-	/**
-	 * Validate walk distances for all passengers in a hyper-pooled ride.
-	 *
-	 * Ensures no passenger's total walk exceeds maxWalkDistanceMeters.
-	 * Total walk includes:
-	 * - Original S2S access walk (origin to original pickup stop)
-	 * - Any relocation distance (if stop was merged/moved in hyper-pooling)
-	 * - Original S2S egress walk (original dropoff stop to destination)
-	 * - Any relocation distance for egress
-	 *
-	 * @param ride the HyperPooledRide to validate
-	 * @return true if all passengers' walks are within limits, false otherwise
-	 */
 	public boolean validateWalkDistances(HyperPooledRide ride) {
 		double maxWalkDistance = exMasConfig.getMaxWalkDistanceMeters();
 
 		for (int i = 0; i < ride.getDegree(); i++) {
-			// Get total walk distance for this passenger
-			// This already includes access + egress + any relocation
 			double totalWalkDistance = ride.getPassengerTotalWalkDistance(i);
-
-			// Also check individual components if they exceed max
 			double accessWalk = ride.getAccessWalkDistance(i);
 			double egressWalk = ride.getEgressWalkDistance(i);
 
-			// Validate total walk distance
 			if (totalWalkDistance > maxWalkDistance) {
 				log.debug("Passenger {} total walk distance ({} m) exceeds max ({} m)",
 						ride.getRequest(i).index, totalWalkDistance, maxWalkDistance);
 				return false;
 			}
 
-			// Also validate individual walks (access and egress separately)
-			// Some configurations may want stricter per-leg limits
 			if (accessWalk > maxWalkDistance) {
 				log.debug("Passenger {} access walk distance ({} m) exceeds max ({} m)",
 						ride.getRequest(i).index, accessWalk, maxWalkDistance);
@@ -342,216 +218,19 @@ public class BudgetValidator {
 	}
 
 	/**
-	 * Calculate DRT trip utility using MATSim scoring function.
-	 * 
-	 * Builds complete trip with access walk, DRT leg, and egress walk.
-	 * Uses proper DrtRoute and MATSim's scoring infrastructure for accurate utility.
-	 * 
-	 * @param request the DRT request
-	 * @param delay departure delay (seconds, positive = late)
-	 * @param actualTravelTime actual in-vehicle travel time including detours (seconds)
-	 * @param actualDistance actual travel distance including detours (meters)
-	 * @return total utility score (includes all legs)
+	 * Calculate DRT trip utility using the scoring adapter.
+	 *
+	 * <p>Delegates to {@link DrtTripScorer} which builds the complete trip
+	 * (access walk + DRT leg + egress walk), scores via adapter, and applies
+	 * wait time penalty + opportunity cost as appropriate.
 	 */
-	private double calculateDrtScore(DrtRequest request, double delay, 
+	private double calculateDrtScore(DrtRequest request, double delay,
 			double actualTravelTime, double actualDistance,
 			double actualWalkDistanceAccess, double actualWalkDistanceEgress) {
-		
-		// Validate inputs - if any are NaN/infinite, scoring cannot proceed
-		if (!Double.isFinite(delay)) {
-			log.error("Delay is NaN/infinite for request index {} (person: {}). Cannot calculate DRT score.",
-					request.index, request.personId);
-			return Double.NEGATIVE_INFINITY;
-		}
 
-		// Validate that routing succeeded - if travel time is infinite/NaN, DRT routing
-		// failed
-		if (!Double.isFinite(actualTravelTime) || !Double.isFinite(actualDistance)) {
-			log.warn("DRT routing failed for request index {} (person: {}): travelTime={}, distance={}",
-					request.index, request.personId, actualTravelTime, actualDistance);
-			return Double.NEGATIVE_INFINITY;
-		}
-
-		// Validate walk distances
-		if (!Double.isFinite(actualWalkDistanceAccess) || !Double.isFinite(actualWalkDistanceEgress)) {
-			log.error("Access/egress walk distance is NaN/infinite for request index {} (person: {})",
-					request.index, request.personId);
-			return Double.NEGATIVE_INFINITY;
-		}
-
-		// Create the real persons scoring function
 		Person person = population.getPersons().get(request.personId);
-		ScoringFunction scoringFunction = scoringFunctionFactory.createNewScoringFunction(person);
-
-		double accessTime = actualWalkDistanceAccess / walkSpeed;
-		
-		// Timeline:
-		// 1. request.requestTime: person ready to depart (earliest departure time)
-		// 2. request.requestTime to (request.requestTime + accessTime): access walk
-		// 3. (request.requestTime + accessTime) to (request.requestTime + delay): WAITING for vehicle
-		// 4. (request.requestTime + delay): pickup (PersonEntersVehicle)
-		// 5. (request.requestTime + delay) to (request.requestTime + delay + actualTravelTime): in-vehicle
-		// 6. dropoff, then egress walk
-
-		double pickupTime = request.requestTime + delay; // When vehicle actually arrives
-
-		// Access leg (walk from origin activity to pickup point)
-		Leg accessLeg = PopulationUtils.createLeg(TransportMode.walk);
-		accessLeg.setDepartureTime(pickupTime - accessTime);
-		accessLeg.setTravelTime(accessTime);
-		
-		// Use teleported route (same as ModeRoutingCache)
-		Route accessRoute = 
-			RouteUtils.createGenericRouteImpl(
-				request.originLinkId, request.originLinkId);
-		accessRoute.setDistance(actualWalkDistanceAccess);
-		accessRoute.setTravelTime(accessTime);
-		accessLeg.setRoute(accessRoute);
-		
-		scoringFunction.handleLeg(accessLeg);
-
-		// DRT leg (main ride) - departs at pickup time
-		Leg drtLeg = PopulationUtils.createLeg(exMasConfig.getDrtMode());
-		drtLeg.setDepartureTime(pickupTime); // currentTime = pickupTime
-		drtLeg.setTravelTime(actualTravelTime);
-		
-		// Build realistic DrtRoute exactly as MATSim router would
-		// This includes: directRideTime, distance, travelTime, and constraints
-		DrtRoute drtRoute = buildDrtRoute(
-				request.originLinkId,
-				request.destinationLinkId,
-				request.directTravelTime, // unshared direct ride time
-				request.directDistance,   // unshared direct distance
-				actualTravelTime,         // actual ride time (may include detours + stop durations)
-				actualDistance);          // actual distance (may include detours)
-		drtLeg.setRoute(drtRoute);
-		
-		scoringFunction.handleLeg(drtLeg);
-
-		// Egress leg (walk from dropoff point to destination activity)
-		// Always add even if distance is 0 - scoring can handle it
-		Leg egressLeg = PopulationUtils.createLeg("walk");
-		egressLeg.setDepartureTime(pickupTime + actualTravelTime);
-		double egressTime = actualWalkDistanceEgress / walkSpeed;
-		egressLeg.setTravelTime(egressTime);
-		
-		// Use teleported route (same as ModeRoutingCache)
-		Route egressRoute = 
-			RouteUtils.createGenericRouteImpl(
-				request.destinationLinkId, request.destinationLinkId);
-		egressRoute.setDistance(actualWalkDistanceEgress);
-		egressRoute.setTravelTime(egressTime);
-		egressLeg.setRoute(egressRoute);
-		
-		scoringFunction.handleLeg(egressLeg);
-		
-		// Wait time scoring - get person-specific waiting utility parameter
-		ScoringParameters scoringParams = scoringParametersForPerson.getScoringParameters(person);
-		double marginalUtilityOfWaitingPt_s = scoringParams.marginalUtilityOfWaitingPt_s;
-
-		// Calculate wait time based on delay and detour
-		// detour = extra travel time beyond direct route
-		double detour = actualTravelTime - request.directTravelTime;
-		double waitTime = 0.0;
-
-		if (delay > 0) {
-			// Positive delay: user waits at origin before pickup
-			// Wait time equals the delay (how late the vehicle arrives)
-			waitTime = delay;
-		} else if (delay < 0) {
-			// Negative delay: user leaves early and arrives early at destination
-			// The "early arrival" creates waiting time at the destination (before next activity)
-			// However, any detour during the ride reduces this waiting time
-			// (longer ride means less time waiting at destination)
-			// waitTime = |delay| - detour, but cannot be negative
-			waitTime = Math.max(0.0, Math.abs(delay) - detour);
-		}
-
-		// Apply person-specific waiting disutility
-		double waitScore = marginalUtilityOfWaitingPt_s * waitTime;
-		scoringFunction.addScore(waitScore);
-
-		scoringFunction.finish();
-		double score = scoringFunction.getScore();
-
-		// IMPORTANT: Correct for daily constants that were incorrectly added.
-		//
-		// MATSim's CharyparNagelLegScoring adds dailyUtilityConstant and dailyMoneyConstant
-		// the first time a mode is used. Since we create a NEW ScoringFunction for each trip,
-		// these daily constants are added every time, which is incorrect.
-		//
-		// For demand extraction comparing individual trips:
-		// - Daily constants are day-level decisions, not trip-level
-		// - They don't affect the marginal utility of DRT vs other modes for THIS trip
-		// - Including them would over-count (person may make multiple trips per day)
-		//
-		// We subtract the daily constants for the modes used in this DRT trip:
-		// - walk (for access/egress)
-		// - DRT mode (for the main ride)
-		String drtMode = exMasConfig.getDrtMode();
-		ModeUtilityParameters walkParams = scoringParams.modeParams.get(TransportMode.walk);
-		ModeUtilityParameters drtParams = scoringParams.modeParams.get(drtMode);
-
-		if (walkParams != null) {
-			score -= walkParams.dailyUtilityConstant;
-			score -= walkParams.dailyMoneyConstant * scoringParams.marginalUtilityOfMoney;
-		}
-		if (drtParams != null) {
-			score -= drtParams.dailyUtilityConstant;
-			score -= drtParams.dailyMoneyConstant * scoringParams.marginalUtilityOfMoney;
-		}
-
-		return score;
-	}
-	
-	
-	/**
-	 * Build a realistic DrtRoute exactly as MATSim's DrtRouteCreator would.
-	 * 
-	 * This matches the logic in DrtRouteCreator.createRoute():
-	 * 1. Set directRideTime (unshared direct travel time for fare calculation)
-	 * 2. Set distance (actual distance including any detours)
-	 * 3. Set travelTime (actual IN-VEHICLE time from pickup to dropoff)
-	 * 4. Calculate and set constraints (maxTravelTime, maxRideTime, maxWaitTime)
-	 * 
-	 * CRITICAL: actualRideTime is ONLY the in-vehicle time (PersonEntersVehicle to PersonLeavesVehicle).
-	 * It does NOT include:
-	 * - Access walk time (before pickup)
-	 * - Wait time (delay before vehicle arrives)
-	 * - Egress walk time (after dropoff)
-	 * 
-	 * However, it DOES include stop durations at pickup/dropoff:
-	 * - DrtStopActivity waits for stopDuration before allowing pickups
-	 * - This waiting AT THE STOP is part of in-vehicle time, not pre-pickup waiting
-	 * - Scored as travel time using marginalUtilityOfTraveling
-	 * 
-	 * @param originLinkId origin link
-	 * @param destinationLinkId destination link
-	 * @param directRideTime unshared direct in-vehicle ride time (seconds) - NOT including access/egress
-	 * @param directDistance unshared direct distance (meters)
-	 * @param actualRideTime actual in-vehicle ride time including detours and stop durations (seconds)
-	 * @param actualDistance actual distance including detours (meters)
-	 * @return DrtRoute with all components set
-	 */
-	private DrtRoute buildDrtRoute(
-			Id<Link> originLinkId,
-			Id<Link> destinationLinkId,
-			double directRideTime,
-			double directDistance,
-			double actualRideTime,
-			double actualDistance) {
-
-		DrtRoute route = new DrtRoute(originLinkId, destinationLinkId);
-
-		// 1. Set direct ride time (used for fare calculation)
-		route.setDirectRideTime(directRideTime);
-
-		// 2. Set actual distance
-		route.setDistance(directDistance);
-
-		// 5. Override travelTime with actual ride time for scoring
-		route.setTravelTime(actualRideTime);
-
-		return route;
+		return DrtTripScorer.score(person, request, adapter, scoringParametersForPerson,
+				exMasConfig, actualTravelTime, actualDistance,
+				actualWalkDistanceAccess, actualWalkDistanceEgress, delay, walkSpeed);
 	}
 }

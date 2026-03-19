@@ -173,7 +173,7 @@ public class ChainIdentifier {
                     feasible = false;
                     break;
                 }
-                combinedUtility += tripModes.get(privateMode).score;
+                combinedUtility += tripModes.get(privateMode).score();
             }
 
             if (feasible) {
@@ -194,7 +194,7 @@ public class ChainIdentifier {
             for (Map.Entry<String, ModeAttributes> entry : tripModes.entrySet()) {
                 String mode = entry.getKey();
                 if (!privateVehicleModes.contains(mode) && !mode.equals(exMasConfig.getDrtMode())) {
-                    bestTripUtility = Math.max(bestTripUtility, entry.getValue().score);
+                    bestTripUtility = Math.max(bestTripUtility, entry.getValue().score());
                 }
             }
 
