@@ -1,0 +1,11 @@
+# DRT mode choice parameters for eqasim demand extraction
+# Set to car-equivalent values (DRT is a car-like door-to-door ride experience)
+#
+# Source: BavariaModeParameters car values
+# car.alpha_u = 0.4, car.betaTravelTime_u_min = -0.042431
+# betaAccessTime_u_min = -0.031239 (shared across modes in Bavaria)
+# PT betaWaitingTime used for DRT waiting (no car equivalent)
+drt.alpha_u: 0.4
+drt.betaTravelTime_u_min: -0.042431
+drt.betaWaitingTime_u_min: -0.021801
+drt.betaAccessEgressTime_u_min: -0.031239
