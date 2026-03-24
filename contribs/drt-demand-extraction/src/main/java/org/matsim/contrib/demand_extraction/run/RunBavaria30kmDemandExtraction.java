@@ -15,7 +15,6 @@ import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.CommuteFilter;
 import org.matsim.contrib.demand_extraction.demand.DemandExtractionConfigValidator;
 import org.matsim.contrib.demand_extraction.demand.DemandExtractionModule;
-import org.matsim.contrib.drt.run.DrtControlerCreator;
 import org.matsim.contrib.drt.run.MultiModeDrtConfigGroup;
 import org.matsim.contrib.dvrp.run.DvrpConfigGroup;
 import org.matsim.core.config.Config;
@@ -147,9 +146,12 @@ public class RunBavaria30kmDemandExtraction {
 
 		DemandExtractionConfigValidator.prepareConfigForDemandExtraction(config);
 
-		Scenario scenario = DrtControlerCreator.createScenarioWithDrtRouteFactory(config);
+		// Use plain Scenario + Controler (NOT DrtControlerCreator).
+		// DemandExtractionModule only reads DRT config (fare params) — it does NOT require
+		// the DVRP/DRT simulation modules (MultiModeDrtModule, DvrpModule).
+		// This avoids the expensive DVRP TT matrix computation on the large Bavaria network.
+		Scenario scenario = ScenarioUtils.createScenario(config);
 		ScenarioUtils.loadScenario(scenario);
-		ensureVehicleTypeNetworkModes(scenario);
 
 		// Filter unwanted agents
 		int originalSize = scenario.getPopulation().getPersons().size();
@@ -158,8 +160,8 @@ public class RunBavaria30kmDemandExtraction {
 		log.info("Filtered population: {} -> {} agents ({} removed)",
 				originalSize, filteredSize, originalSize - filteredSize);
 
-		// Create controller
-		Controler controler = DrtControlerCreator.createControler(config, scenario, false);
+		// Create plain controller — no DRT simulation, just MATSim + demand extraction
+		Controler controler = new Controler(scenario);
 		controler.addOverridingModule(new DemandExtractionModule());
 
 		// Enable income-dependent scoring if population has income attributes
@@ -495,20 +497,8 @@ public class RunBavaria30kmDemandExtraction {
 		config.controller().setRoutingAlgorithmType(
 				ControllerConfigGroup.RoutingAlgorithmType.SpeedyALT);
 
-		// DVRP network modes — DRT operates on the car network (Bavaria has no drt-mode links)
-		DvrpConfigGroup dvrp = ConfigUtils.addOrGetModule(config, DvrpConfigGroup.class);
-		dvrp.setNetworkModes(java.util.Collections.singleton(TransportMode.car));
-
-		// Increase DVRP TT matrix cell size to avoid O(n²) computation on the large Bavaria network.
-		// Default 200m creates ~50k zones on the 140km extent; 10km gives ~200 zones.
-		// This only affects DRT analytics, not demand extraction routing.
-		var ttMatrixParams = dvrp.getTravelTimeMatrixParams();
-		var zoneParams = (org.matsim.contrib.common.zones.systems.grid.square.SquareGridZoneSystemParams)
-				ttMatrixParams.getZoneSystemParams();
-		if (zoneParams != null) {
-			zoneParams.setCellSize(10_000.0); // 10 km cells
-		}
-		ttMatrixParams.setMaxNeighborDistance(20_000.0); // 20 km
+		// Note: No DVRP/DRT module configuration needed — we use a plain Controler.
+		// DemandExtractionModule reads DRT fare params from Config, not from Guice bindings.
 
 		// Configure ExMAS (same as RunKelheimDemandExtraction)
 		configureExMas(config, algorithmProcessCount, heuristicsProcessCount, deterministic);
