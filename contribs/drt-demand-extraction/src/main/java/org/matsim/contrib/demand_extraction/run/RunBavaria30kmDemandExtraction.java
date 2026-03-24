@@ -495,10 +495,20 @@ public class RunBavaria30kmDemandExtraction {
 		config.controller().setRoutingAlgorithmType(
 				ControllerConfigGroup.RoutingAlgorithmType.SpeedyALT);
 
-		// DVRP network modes
+		// DVRP network modes — DRT operates on the car network (Bavaria has no drt-mode links)
 		DvrpConfigGroup dvrp = ConfigUtils.addOrGetModule(config, DvrpConfigGroup.class);
-		// DRT operates on the car network (Bavaria has no drt-mode links)
 		dvrp.setNetworkModes(java.util.Collections.singleton(TransportMode.car));
+
+		// Increase DVRP TT matrix cell size to avoid O(n²) computation on the large Bavaria network.
+		// Default 200m creates ~50k zones on the 140km extent; 10km gives ~200 zones.
+		// This only affects DRT analytics, not demand extraction routing.
+		var ttMatrixParams = dvrp.getTravelTimeMatrixParams();
+		var zoneParams = (org.matsim.contrib.common.zones.systems.grid.square.SquareGridZoneSystemParams)
+				ttMatrixParams.getZoneSystemParams();
+		if (zoneParams != null) {
+			zoneParams.setCellSize(10_000.0); // 10 km cells
+		}
+		ttMatrixParams.setMaxNeighborDistance(20_000.0); // 20 km
 
 		// Configure ExMAS (same as RunKelheimDemandExtraction)
 		configureExMas(config, algorithmProcessCount, heuristicsProcessCount, deterministic);
