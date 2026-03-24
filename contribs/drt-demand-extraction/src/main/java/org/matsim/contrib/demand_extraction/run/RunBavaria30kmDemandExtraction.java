@@ -329,6 +329,22 @@ public class RunBavaria30kmDemandExtraction {
 		walk.setMonetaryDistanceRate(0.0);
 		scoring.addModeParams(walk);
 
+		// bicycle: eqasim uses "bicycle" instead of "bike" — alias with same params
+		ModeParams bicycle = new ModeParams("bicycle");
+		bicycle.setConstant(bike.getConstant());
+		bicycle.setMarginalUtilityOfTraveling(bike.getMarginalUtilityOfTraveling());
+		bicycle.setMarginalUtilityOfDistance(bike.getMarginalUtilityOfDistance());
+		bicycle.setMonetaryDistanceRate(bike.getMonetaryDistanceRate());
+		scoring.addModeParams(bicycle);
+
+		// car_passenger: eqasim mode, use ride params as proxy
+		ModeParams carPassenger = new ModeParams("car_passenger");
+		carPassenger.setConstant(ride.getConstant());
+		carPassenger.setMarginalUtilityOfTraveling(ride.getMarginalUtilityOfTraveling());
+		carPassenger.setMarginalUtilityOfDistance(ride.getMarginalUtilityOfDistance());
+		carPassenger.setMonetaryDistanceRate(ride.getMonetaryDistanceRate());
+		scoring.addModeParams(carPassenger);
+
 		// drt: ASC=2.45, margUtilDist=-2.5E-4 (non-monetary distance disutility)
 		ModeParams drt = new ModeParams("drt");
 		drt.setConstant(2.45);
