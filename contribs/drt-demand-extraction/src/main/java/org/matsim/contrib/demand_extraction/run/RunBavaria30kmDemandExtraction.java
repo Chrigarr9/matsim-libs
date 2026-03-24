@@ -158,17 +158,29 @@ public class RunBavaria30kmDemandExtraction {
 		log.info("Filtered population: {} -> {} agents ({} removed)",
 				originalSize, filteredSize, originalSize - filteredSize);
 
-		// Create controller with income-dependent scoring
+		// Create controller
 		Controler controler = DrtControlerCreator.createControler(config, scenario, false);
 		controler.addOverridingModule(new DemandExtractionModule());
-		controler.addOverridingModule(new org.matsim.core.controler.AbstractModule() {
-			@Override
-			public void install() {
-				bind(ScoringParametersForPerson.class)
-						.to(IncomeDependentUtilityOfMoneyPersonScoringParameters.class)
-						.in(Singleton.class);
-			}
-		});
+
+		// Enable income-dependent scoring if population has income attributes
+		// (requires upsampled population with AttributeAdapter-derived income values)
+		boolean hasIncomeAttributes = scenario.getPopulation().getPersons().values().stream()
+				.anyMatch(p -> org.matsim.core.population.PersonUtils.getIncome(p) != null);
+		if (hasIncomeAttributes) {
+			log.info("Population has income attributes — enabling income-dependent marginalUtilityOfMoney");
+			controler.addOverridingModule(new org.matsim.core.controler.AbstractModule() {
+				@Override
+				public void install() {
+					bind(ScoringParametersForPerson.class)
+							.to(IncomeDependentUtilityOfMoneyPersonScoringParameters.class)
+							.in(Singleton.class);
+				}
+			});
+		} else {
+			log.warn("Population has NO income attributes — using uniform marginalUtilityOfMoney={}",
+					config.scoring().getMarginalUtilityOfMoney());
+			log.warn("For income-dependent scoring, use an upsampled population (RunPopulationUpsampling)");
+		}
 
 		controler.run();
 
@@ -210,7 +222,9 @@ public class RunBavaria30kmDemandExtraction {
 		config.transit().setUseTransit(true);
 
 		// --- Global settings ---
-		config.global().setCoordinateSystem("EPSG:25832");
+		// Eqasim uses "Atlantis" as CRS (coordinates are already projected to EPSG:25832).
+		// Setting the config CRS to "Atlantis" prevents MATSim from attempting a transformation.
+		config.global().setCoordinateSystem("Atlantis");
 		config.global().setNumberOfThreads(6);
 
 		// --- QSim ---
@@ -222,7 +236,9 @@ public class RunBavaria30kmDemandExtraction {
 		config.qsim().setStartTime(0);
 		config.qsim().setEndTime(36 * 3600);
 		config.qsim().setTrafficDynamics(QSimConfigGroup.TrafficDynamics.kinematicWaves);
-		config.qsim().setVehiclesSource(QSimConfigGroup.VehiclesSource.modeVehicleTypesFromVehiclesData);
+		// Eqasim vehicle types use "default_car" naming, not "car".
+		// Use defaultVehicle to avoid type mismatch (demand extraction doesn't need real vehicles).
+		config.qsim().setVehiclesSource(QSimConfigGroup.VehiclesSource.defaultVehicle);
 
 		// --- Routing ---
 		config.routing().setNetworkModes(java.util.List.of("car"));
@@ -481,7 +497,8 @@ public class RunBavaria30kmDemandExtraction {
 
 		// DVRP network modes
 		DvrpConfigGroup dvrp = ConfigUtils.addOrGetModule(config, DvrpConfigGroup.class);
-		dvrp.setNetworkModes(java.util.Collections.singleton("drt"));
+		// DRT operates on the car network (Bavaria has no drt-mode links)
+		dvrp.setNetworkModes(java.util.Collections.singleton(TransportMode.car));
 
 		// Configure ExMAS (same as RunKelheimDemandExtraction)
 		configureExMas(config, algorithmProcessCount, heuristicsProcessCount, deterministic);
