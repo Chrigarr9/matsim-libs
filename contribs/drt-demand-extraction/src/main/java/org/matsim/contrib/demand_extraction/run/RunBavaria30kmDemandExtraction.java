@@ -81,7 +81,7 @@ public class RunBavaria30kmDemandExtraction {
 		Integer algorithmProcessCountArg = null;
 		Integer heuristicsProcessCountArg = null;
 		boolean cleanup = true;
-		double filterRadius = 30.0; // km, 0 = disabled
+		double filterRadius = 0.0; // km, 0 = disabled
 		double filterCenterX = 709000.0; // Kelheim center EPSG:25832
 		double filterCenterY = 5423000.0;
 
