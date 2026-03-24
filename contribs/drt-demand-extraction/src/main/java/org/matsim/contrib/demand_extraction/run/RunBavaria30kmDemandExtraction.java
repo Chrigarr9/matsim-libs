@@ -657,14 +657,19 @@ public class RunBavaria30kmDemandExtraction {
 				return true;
 			}
 
-			// Check for freight or outside activities
-			if (person.getSelectedPlan() != null) {
+			// Check first activity for "outside" (agents living outside study area)
+			if (person.getSelectedPlan() != null && !person.getSelectedPlan().getPlanElements().isEmpty()) {
+				var firstElement = person.getSelectedPlan().getPlanElements().get(0);
+				if (firstElement instanceof Activity firstAct
+						&& "outside".equals(firstAct.getType())) {
+					return true;
+				}
+				// Check all activities for freight
 				return person.getSelectedPlan().getPlanElements().stream()
 						.filter(Activity.class::isInstance)
 						.map(Activity.class::cast)
 						.anyMatch(act -> act.getType() != null
-								&& (act.getType().startsWith("freight")
-									|| "outside".equals(act.getType())));
+								&& act.getType().startsWith("freight"));
 			}
 
 			return false;
