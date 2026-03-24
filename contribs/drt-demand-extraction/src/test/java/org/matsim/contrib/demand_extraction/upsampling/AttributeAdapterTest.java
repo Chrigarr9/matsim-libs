@@ -34,23 +34,24 @@ class AttributeAdapterTest {
 
     @Test
     void testIncomeDerivation() {
-        // HH income "3000-3500" with HH size 2 -> incomeGroup 7 -> (4000+rand(1000))/2
-        // Expected range: 2000-2500
+        // HH income "3000-3500" with HH size 2 -> incomeGroup 6 -> (3000+rand(1000))/2
+        // Expected range: 1500-2000
         Person person = createEqasimPerson("3", "all", "3000-3500");
         AttributeAdapter.adapt(person, 2, new Random(42));
 
         Double income = PersonUtils.getIncome(person);
         assertNotNull(income, "Income should be set");
-        assertTrue(income >= 2000 && income <= 2500,
-                "Income should be in range [2000,2500] for group 7 / HH size 2, got: " + income);
+        assertTrue(income >= 1500 && income <= 2000,
+                "Income should be in range [1500,2000] for group 6 / HH size 2, got: " + income);
     }
 
     @Test
     void testIncomeGroupMapping() {
+        // HH income "4000-5000" -> MiD group 7 (4000-5000 EUR/month)
         Person person = createEqasimPerson("4", "all", "4000-5000");
         AttributeAdapter.adapt(person, 3, new Random(42));
 
-        assertEquals("9", person.getAttributes().getAttribute("MiD:hheink_gr2").toString());
+        assertEquals("7", person.getAttributes().getAttribute("MiD:hheink_gr2").toString());
         assertEquals("3", person.getAttributes().getAttribute("MiD:hhgr_gr").toString());
     }
 

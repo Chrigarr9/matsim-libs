@@ -76,18 +76,18 @@ public final class AttributeAdapter {
         String hhIncome = hhIncomeObj.toString();
         double hhSize = Math.max(1, householdSize); // avoid division by zero
 
-        // Map eqasim HH income band -> MiD income group (1-10)
+        // Map eqasim HH income band (EUR/month) -> MiD income group (1-10)
+        // MiD groups: 1=<500, 2=500-900, 3=900-1500, 4=1500-2000, 5=2000-3000,
+        //             6=3000-4000, 7=4000-5000, 8=5000-6000, 9=6000-7000, 10=7000+
         int incomeGroup = switch (hhIncome) {
+            case "0-500" -> 1;
             case "500-1000" -> 2;
-            case "1000-1250" -> 3;
-            case "1250-1500" -> 4;
-            case "1500-2000" -> 5;
-            case "2000-2500" -> 6;
-            case "2500-3000" -> 7;
-            case "3000-3500" -> 7;
-            case "3500-4000" -> 8;
-            case "4000-5000" -> 9;
-            case "5000+" -> 10;
+            case "1000-1250", "1250-1500" -> 3;
+            case "1500-2000" -> 4;
+            case "2000-2500", "2500-3000" -> 5;
+            case "3000-3500", "3500-4000" -> 6;
+            case "4000-5000" -> 7;
+            case "5000+" -> 8; // conservative: 5000+ spans groups 8-10
             default -> 0;
         };
 
