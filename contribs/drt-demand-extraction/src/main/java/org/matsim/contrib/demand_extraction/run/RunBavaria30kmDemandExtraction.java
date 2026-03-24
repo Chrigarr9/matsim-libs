@@ -156,9 +156,13 @@ public class RunBavaria30kmDemandExtraction {
 		// Filter unwanted agents
 		int originalSize = scenario.getPopulation().getPersons().size();
 		filterUnwantedAgents(scenario);
-		int filteredSize = scenario.getPopulation().getPersons().size();
+		int afterFilter = scenario.getPopulation().getPersons().size();
 		log.info("Filtered population: {} -> {} agents ({} removed)",
-				originalSize, filteredSize, originalSize - filteredSize);
+				originalSize, afterFilter, originalSize - afterFilter);
+
+		// Downsample population to match --sample percentage.
+		// MATSim does NOT auto-sample at import — we do it here.
+		downsamplePopulation(scenario, sampleSize);
 
 		// Create plain controller — no DRT simulation, just MATSim + demand extraction
 		Controler controler = new Controler(scenario);
@@ -691,6 +695,28 @@ public class RunBavaria30kmDemandExtraction {
 
 			return false;
 		});
+	}
+
+	/**
+	 * Downsample population to the requested percentage.
+	 * Uses deterministic sampling (hash-based) so the same seed always selects the same agents.
+	 */
+	private static void downsamplePopulation(Scenario scenario, int samplePercent) {
+		if (samplePercent >= 100) {
+			log.info("Sample size 100% — keeping all {} agents", scenario.getPopulation().getPersons().size());
+			return;
+		}
+
+		int before = scenario.getPopulation().getPersons().size();
+		double fraction = samplePercent / 100.0;
+		java.util.Random rng = new java.util.Random(4711L);
+
+		scenario.getPopulation().getPersons().values()
+				.removeIf(person -> rng.nextDouble() >= fraction);
+
+		int after = scenario.getPopulation().getPersons().size();
+		log.info("Downsampled population: {} -> {} agents ({}% sample, target ratio {:.1f}%)",
+				before, after, samplePercent, (after * 100.0 / before));
 	}
 
 	// -------------------------------------------------------------------------
