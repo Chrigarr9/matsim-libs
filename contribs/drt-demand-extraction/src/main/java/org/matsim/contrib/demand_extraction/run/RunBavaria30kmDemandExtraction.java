@@ -31,6 +31,7 @@ import org.matsim.core.controler.OutputDirectoryHierarchy;
 import org.matsim.core.replanning.annealing.ReplanningAnnealerConfigGroup;
 import org.matsim.core.replanning.modules.SubtourModeChoice;
 import org.matsim.core.scenario.ScenarioUtils;
+import org.matsim.core.utils.gis.GeoFileReader;
 import org.matsim.core.scoring.functions.ScoringParametersForPerson;
 import org.matsim.vehicles.VehicleType;
 
@@ -84,6 +85,8 @@ public class RunBavaria30kmDemandExtraction {
 		double filterRadius = 0.0; // km, 0 = disabled
 		double filterCenterX = 709000.0; // Kelheim center EPSG:25832
 		double filterCenterY = 5423000.0;
+		String filterMunicipality = null;
+		String shapesPath = null;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -104,6 +107,8 @@ public class RunBavaria30kmDemandExtraction {
 					filterCenterX = Double.parseDouble(parts[0]);
 					filterCenterY = Double.parseDouble(parts[1]);
 				}
+				case "--filter-municipality" -> filterMunicipality = args[++i];
+				case "--shapes" -> shapesPath = args[++i];
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -114,8 +119,20 @@ public class RunBavaria30kmDemandExtraction {
 					+ "[--sample <1|10|25|100>] [--iterations <N>] "
 					+ "[--dmc-start-rate <0.0-1.0>] [--dmc-end-rate <0.0-1.0>] "
 					+ "[--output-dir <path>] [--deterministic] "
-					+ "[--filter-radius <km>] [--filter-center <x,y>]");
+					+ "[--filter-radius <km>] [--filter-center <x,y>] "
+					+ "[--filter-municipality <name>] [--shapes <path>]");
 			System.exit(1);
+		}
+
+		// Resolve municipality name to centroid coordinates
+		if (filterMunicipality != null) {
+			if (shapesPath == null) {
+				System.err.println("--filter-municipality requires --shapes <path-to-VG250.gpkg>");
+				System.exit(1);
+			}
+			double[] center = resolveMunicipalityCentroid(filterMunicipality, shapesPath);
+			filterCenterX = center[0];
+			filterCenterY = center[1];
 		}
 
 		log.info("=== Bavaria 30km DRT Demand Extraction ===");
@@ -764,6 +781,59 @@ public class RunBavaria30kmDemandExtraction {
 		int after = scenario.getPopulation().getPersons().size();
 		log.info("Radius filter ({}km): {} -> {} agents ({} removed)",
 				radiusMeters / 1000.0, before, after, before - after);
+	}
+
+	/**
+	 * Resolve a municipality name to its centroid coordinates by looking it up in VG250 shapes.
+	 * Searches vg250_gem (Gemeinde), then vg250_krs (Kreis), then vg250_lan (Land).
+	 * If multiple matches, picks the smallest area (most specific).
+	 *
+	 * @param name municipality name (case-insensitive match on GEN column)
+	 * @param shapesPath path to VG250 GeoPackage file
+	 * @return double[]{x, y} centroid in the shapefile's CRS (EPSG:25832)
+	 */
+	private static double[] resolveMunicipalityCentroid(String name, String shapesPath) {
+		String[] layers = {"vg250_gem", "vg250_krs", "vg250_lan"};
+		String nameLower = name.toLowerCase();
+
+		org.geotools.api.feature.simple.SimpleFeature bestMatch = null;
+		double bestArea = Double.MAX_VALUE;
+		String bestLayer = null;
+
+		for (String layer : layers) {
+			var features = GeoFileReader.getAllFeatures(shapesPath, new org.geotools.feature.NameImpl(layer));
+			for (var feature : features) {
+				Object gen = feature.getAttribute("GEN");
+				if (gen != null && gen.toString().toLowerCase().equals(nameLower)) {
+					org.locationtech.jts.geom.Geometry geom =
+							(org.locationtech.jts.geom.Geometry) feature.getDefaultGeometry();
+					if (geom != null) {
+						double area = geom.getArea();
+						if (area < bestArea) {
+							bestArea = area;
+							bestMatch = feature;
+							bestLayer = layer;
+						}
+					}
+				}
+			}
+		}
+
+		if (bestMatch == null) {
+			throw new IllegalArgumentException("Municipality '" + name + "' not found in VG250 layers "
+					+ java.util.Arrays.toString(layers) + ". Check spelling (GEN column, case-insensitive).");
+		}
+
+		org.locationtech.jts.geom.Geometry geom =
+				(org.locationtech.jts.geom.Geometry) bestMatch.getDefaultGeometry();
+		org.locationtech.jts.geom.Point centroid = geom.getCentroid();
+
+		log.info("Resolved '{}' -> {} ({}) in {}, centroid=({}, {}), pop={}",
+				name, bestMatch.getAttribute("GEN"), bestMatch.getAttribute("BEZ"),
+				bestLayer, String.format("%.0f", centroid.getX()), String.format("%.0f", centroid.getY()),
+				bestMatch.getAttribute("EWZ"));
+
+		return new double[]{centroid.getX(), centroid.getY()};
 	}
 
 	/**
