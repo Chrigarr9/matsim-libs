@@ -333,7 +333,7 @@ private static int ensureVehicleTypeNetworkModes(java.util.Collection<VehicleTyp
  * - drt_demand/ subdirectory (our demand extraction files)
  * - log files (*.log, logfile.log, logfileWarningsErrors.log)
  */
-private static void cleanupOutputDirectory(Path outputDir, String runId) {
+static void cleanupOutputDirectory(Path outputDir, String runId) {
 	log.info("Cleaning up output directory...");
 
 	try {
@@ -369,7 +369,7 @@ private static void cleanupOutputDirectory(Path outputDir, String runId) {
 /**
  * Recursively delete a file or directory.
  */
-private static void deleteRecursively(Path path) throws IOException {
+static void deleteRecursively(Path path) throws IOException {
 	if (Files.isDirectory(path)) {
 		// Delete directory contents first
 		Files.list(path).forEach(child -> {

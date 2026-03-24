@@ -32,6 +32,11 @@
 			<optional>true</optional>
 		</dependency>
 		<dependency>
+			<groupId>org.matsim.contrib</groupId>
+			<artifactId>vsp</artifactId>
+			<version>${project.parent.version}</version>
+		</dependency>
+		<dependency>
 			<groupId>org.eqasim</groupId>
 			<artifactId>core</artifactId>
 			<version>2.0.0</version>
