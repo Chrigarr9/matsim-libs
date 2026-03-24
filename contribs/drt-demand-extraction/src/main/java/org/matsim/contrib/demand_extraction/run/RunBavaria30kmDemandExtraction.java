@@ -81,6 +81,9 @@ public class RunBavaria30kmDemandExtraction {
 		Integer algorithmProcessCountArg = null;
 		Integer heuristicsProcessCountArg = null;
 		boolean cleanup = true;
+		double filterRadius = 30.0; // km, 0 = disabled
+		double filterCenterX = 709000.0; // Kelheim center EPSG:25832
+		double filterCenterY = 5423000.0;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -95,6 +98,12 @@ public class RunBavaria30kmDemandExtraction {
 				case "--algorithm-process-count" -> algorithmProcessCountArg = Integer.parseInt(args[++i]);
 				case "--heuristics-process-count" -> heuristicsProcessCountArg = Integer.parseInt(args[++i]);
 				case "--no-cleanup" -> cleanup = false;
+				case "--filter-radius" -> filterRadius = Double.parseDouble(args[++i]);
+				case "--filter-center" -> {
+					String[] parts = args[++i].split(",");
+					filterCenterX = Double.parseDouble(parts[0]);
+					filterCenterY = Double.parseDouble(parts[1]);
+				}
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -104,7 +113,8 @@ public class RunBavaria30kmDemandExtraction {
 					+ "--scenario-path <path> --population <path> "
 					+ "[--sample <1|10|25|100>] [--iterations <N>] "
 					+ "[--dmc-start-rate <0.0-1.0>] [--dmc-end-rate <0.0-1.0>] "
-					+ "[--output-dir <path>] [--deterministic]");
+					+ "[--output-dir <path>] [--deterministic] "
+					+ "[--filter-radius <km>] [--filter-center <x,y>]");
 			System.exit(1);
 		}
 
@@ -115,6 +125,9 @@ public class RunBavaria30kmDemandExtraction {
 		log.info("Iterations: {}", iterations);
 		if (iterations > 0) {
 			log.info("DMC annealing: {}% -> {}%", dmcStartRate * 100, dmcEndRate * 100);
+		}
+		if (filterRadius > 0) {
+			log.info("Radius filter: {}km around ({}, {})", filterRadius, filterCenterX, filterCenterY);
 		}
 
 		// Resolve output directory
@@ -159,6 +172,11 @@ public class RunBavaria30kmDemandExtraction {
 		int afterFilter = scenario.getPopulation().getPersons().size();
 		log.info("Filtered population: {} -> {} agents ({} removed)",
 				originalSize, afterFilter, originalSize - afterFilter);
+
+		// Spatial radius filter: keep only agents with any activity within radius of center
+		if (filterRadius > 0) {
+			filterByRadius(scenario, filterCenterX, filterCenterY, filterRadius * 1000.0);
+		}
 
 		// Downsample population to match --sample percentage.
 		// MATSim does NOT auto-sample at import — we do it here.
@@ -714,6 +732,38 @@ public class RunBavaria30kmDemandExtraction {
 
 			return false;
 		});
+	}
+
+	/**
+	 * Remove agents who have no activity within the specified radius of the center point.
+	 * Uses Euclidean distance (valid for projected CRS like EPSG:25832 at this scale).
+	 *
+	 * @param scenario the MATSim scenario
+	 * @param centerX center X coordinate (EPSG:25832)
+	 * @param centerY center Y coordinate (EPSG:25832)
+	 * @param radiusMeters radius in meters
+	 */
+	private static void filterByRadius(Scenario scenario, double centerX,
+			double centerY, double radiusMeters) {
+		int before = scenario.getPopulation().getPersons().size();
+		double radiusSq = radiusMeters * radiusMeters;
+
+		scenario.getPopulation().getPersons().values().removeIf(person -> {
+			if (person.getSelectedPlan() == null) return true;
+			return person.getSelectedPlan().getPlanElements().stream()
+					.filter(Activity.class::isInstance)
+					.map(Activity.class::cast)
+					.filter(act -> act.getCoord() != null)
+					.noneMatch(act -> {
+						double dx = act.getCoord().getX() - centerX;
+						double dy = act.getCoord().getY() - centerY;
+						return (dx * dx + dy * dy) <= radiusSq;
+					});
+		});
+
+		int after = scenario.getPopulation().getPersons().size();
+		log.info("Radius filter ({}km): {} -> {} agents ({} removed)",
+				radiusMeters / 1000.0, before, after, before - after);
 	}
 
 	/**
