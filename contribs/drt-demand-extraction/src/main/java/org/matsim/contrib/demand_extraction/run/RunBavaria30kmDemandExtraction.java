@@ -245,6 +245,9 @@ public class RunBavaria30kmDemandExtraction {
 		// Eqasim vehicle types use "default_car" naming, not "car".
 		// Use defaultVehicle to avoid type mismatch (demand extraction doesn't need real vehicles).
 		config.qsim().setVehiclesSource(QSimConfigGroup.VehiclesSource.defaultVehicle);
+		// Allow agents to use any vehicle (avoids "could not find vehicle" errors when
+		// household vehicle IDs don't match person IDs after downsampling)
+		config.qsim().setUsePersonIdForMissingVehicleId(true);
 
 		// --- Routing ---
 		config.routing().setNetworkModes(java.util.List.of("car"));
