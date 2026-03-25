@@ -82,11 +82,12 @@ public class RunBavaria30kmDemandExtraction {
 		Integer algorithmProcessCountArg = null;
 		Integer heuristicsProcessCountArg = null;
 		boolean cleanup = true;
-		double filterRadius = 0.0; // km, 0 = disabled
+		double filterRadius = 0.0; // km, 0 = disabled (agent-level: any activity inside)
 		double filterCenterX = 709000.0; // Kelheim center EPSG:25832
 		double filterCenterY = 5423000.0;
 		String filterMunicipality = null;
 		String shapesPath = null;
+		double tripFilterRadiusKm = 0.0; // km, 0 = disabled (trip-level: O+D both inside)
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -109,6 +110,7 @@ public class RunBavaria30kmDemandExtraction {
 				}
 				case "--filter-municipality" -> filterMunicipality = args[++i];
 				case "--shapes" -> shapesPath = args[++i];
+				case "--trip-filter-radius" -> tripFilterRadiusKm = Double.parseDouble(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -173,6 +175,16 @@ public class RunBavaria30kmDemandExtraction {
 		configureForDemandExtraction(config, outDir, sampleSize, iterations,
 				algorithmProcessCount, heuristicsProcessCount, deterministic);
 		String runId = config.controller().getRunId();
+
+		// Trip-level spatial filter: uses resolved filter center (from --filter-municipality or --filter-center)
+		if (tripFilterRadiusKm > 0) {
+			ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
+			exMasConfig.setTripFilterRadiusKm(tripFilterRadiusKm);
+			exMasConfig.setTripFilterCenterX(filterCenterX);
+			exMasConfig.setTripFilterCenterY(filterCenterY);
+			log.info("Trip-level spatial filter: {}km around ({}, {})",
+					tripFilterRadiusKm, filterCenterX, filterCenterY);
+		}
 
 		DemandExtractionConfigValidator.prepareConfigForDemandExtraction(config);
 

@@ -45,6 +45,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     private int minAge = 18; // Minimum age to use DRT (if age attribute exists)
     private String drtAvailabilityAttribute = null; // Person attribute to check for DRT eligibility (e.g. "hasLicense")
 
+    // Trip-level spatial filter: only extract trips where BOTH origin and destination
+    // are within a radius of a center point. 0.0 = disabled.
+    private double tripFilterRadiusKm = 0.0;
+    private double tripFilterCenterX = Double.NaN;
+    private double tripFilterCenterY = Double.NaN;
+
 	// Scoring adapter selection: "auto" (default), "planCalcScore", "dmc", "eqasim"
 	private String scoringAdapter = "auto";
 
@@ -424,6 +430,40 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     @StringSetter("drtAvailabilityAttribute")
     public void setDrtAvailabilityAttribute(String drtAvailabilityAttribute) {
         this.drtAvailabilityAttribute = drtAvailabilityAttribute;
+    }
+
+    @StringGetter("tripFilterRadiusKm")
+    public double getTripFilterRadiusKm() {
+        return tripFilterRadiusKm;
+    }
+
+    @StringSetter("tripFilterRadiusKm")
+    public void setTripFilterRadiusKm(double tripFilterRadiusKm) {
+        this.tripFilterRadiusKm = tripFilterRadiusKm;
+    }
+
+    @StringGetter("tripFilterCenterX")
+    public double getTripFilterCenterX() {
+        return tripFilterCenterX;
+    }
+
+    @StringSetter("tripFilterCenterX")
+    public void setTripFilterCenterX(double tripFilterCenterX) {
+        this.tripFilterCenterX = tripFilterCenterX;
+    }
+
+    @StringGetter("tripFilterCenterY")
+    public double getTripFilterCenterY() {
+        return tripFilterCenterY;
+    }
+
+    @StringSetter("tripFilterCenterY")
+    public void setTripFilterCenterY(double tripFilterCenterY) {
+        this.tripFilterCenterY = tripFilterCenterY;
+    }
+
+    public boolean hasTripSpatialFilter() {
+        return tripFilterRadiusKm > 0 && Double.isFinite(tripFilterCenterX) && Double.isFinite(tripFilterCenterY);
     }
 
     public Set<String> getBaseModes() {
@@ -1031,6 +1071,9 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
         map.put("commuteFilter", "Filter for commute trips. Options: [ALL, COMMUTES_ONLY, COMMUTES_AND_EDUCATION, NON_COMMUTES]. Default: ALL");
         map.put("minAge", "Minimum age to use DRT (if 'age' attribute exists). Default: 18");
         map.put("drtAvailabilityAttribute", "Person attribute to check for DRT eligibility. If set, only persons with this attribute=true can use DRT. Default: null");
+        map.put("tripFilterRadiusKm", "Trip-level spatial filter: only extract trips where BOTH origin and destination are within this radius (km) of the center point. 0.0 = disabled. Default: 0.0");
+        map.put("tripFilterCenterX", "X coordinate of the trip spatial filter center (in scenario CRS). Required if tripFilterRadiusKm > 0.");
+        map.put("tripFilterCenterY", "Y coordinate of the trip spatial filter center (in scenario CRS). Required if tripFilterRadiusKm > 0.");
 		map.put("drtRoutingMode",
 				"Routing mode to use for DRT when no DRT routing module exists. Typically 'car' for network-based routing. Default: 'car'");
 		map.put("drtAllowedModes",

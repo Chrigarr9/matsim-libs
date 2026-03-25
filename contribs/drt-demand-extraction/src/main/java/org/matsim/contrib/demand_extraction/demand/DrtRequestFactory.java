@@ -80,8 +80,21 @@ public class DrtRequestFactory {
 		ExMasConfigGroup.CommuteFilter commuteFilter = exmasConfig.getCommuteFilter();
 		log.info("Commute filter: {}", commuteFilter);
 
+		// Trip-level spatial filter: only extract trips where both O and D are inside radius
+		boolean hasSpatialFilter = exmasConfig.hasTripSpatialFilter();
+		double spatialCenterX = 0, spatialCenterY = 0, spatialRadiusSq = 0;
+		if (hasSpatialFilter) {
+			spatialCenterX = exmasConfig.getTripFilterCenterX();
+			spatialCenterY = exmasConfig.getTripFilterCenterY();
+			double r = exmasConfig.getTripFilterRadiusKm() * 1000.0;
+			spatialRadiusSq = r * r;
+			log.info("Trip spatial filter: {}km around ({}, {})",
+					exmasConfig.getTripFilterRadiusKm(), spatialCenterX, spatialCenterY);
+		}
+
 		List<DrtRequest> requests = new ArrayList<>();
 		int filteredByCommute = 0;
+		int filteredBySpatial = 0;
 
 		int processedPersons = 0;
 		int totalPersons = population.getPersons().size();
@@ -178,6 +191,22 @@ public class DrtRequestFactory {
 					continue;
 				}
 
+				// Trip-level spatial filter: skip if O or D is outside radius
+				if (hasSpatialFilter) {
+					Coord oCoord = trip.getOriginActivity().getCoord();
+					Coord dCoord = trip.getDestinationActivity().getCoord();
+					if (oCoord == null || dCoord == null) {
+						filteredBySpatial++;
+						continue;
+					}
+					double dxO = oCoord.getX() - spatialCenterX, dyO = oCoord.getY() - spatialCenterY;
+					double dxD = dCoord.getX() - spatialCenterX, dyD = dCoord.getY() - spatialCenterY;
+					if ((dxO * dxO + dyO * dyO) > spatialRadiusSq || (dxD * dxD + dyD * dyD) > spatialRadiusSq) {
+						filteredBySpatial++;
+						continue;
+					}
+				}
+
 				// Get group ID for this trip
 				String groupId = tripToGroupId.getOrDefault(tripIdx, person.getId().toString() + "_trip_" + tripIdx);
 
@@ -203,8 +232,8 @@ public class DrtRequestFactory {
 
 		long elapsed = System.currentTimeMillis() - startTime;
 		double seconds = elapsed / 1000.0;
-		log.info("Request building complete: {} requests from {} persons in {}s (filtered {} by commute filter)",
-				requests.size(), totalPersons, String.format("%.1f", seconds), filteredByCommute);
+		log.info("Request building complete: {} requests from {} persons in {}s (filtered {} by commute filter, {} by spatial filter)",
+				requests.size(), totalPersons, String.format("%.1f", seconds), filteredByCommute, filteredBySpatial);
 
 		return requests;
 	}
