@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -32,6 +33,7 @@ public final class PairGenerator {
 	private final double horizon;
 	private final boolean useParallel;
 	private static final double EPSILON = 1e-9;
+	private final AtomicLong beelineRejected = new AtomicLong();
 
 	public PairGenerator(MatsimNetworkCache network, BudgetValidator budgetValidator, double horizon, int algorithmProcessCount) {
 		this.network = network;
@@ -131,6 +133,7 @@ public final class PairGenerator {
 				pairs.size(), requests.length, String.format("%.1f", seconds), String.format("%.1f", pairsPerSecond));
 		log.info("  Created: {} FIFO, {} LIFO (from {} candidates)",
 				fifoCreated, lifoCreated, candidates.size());
+		log.info("  Beeline pre-filter rejected {} candidate pairs before routing", beelineRejected.get());
 
 		return pairs;
 	}
@@ -154,6 +157,14 @@ public final class PairGenerator {
 	}
 
 	/**
+	 * Euclidean (beeline) distance between two points.
+	 */
+	private static double beeline(double x1, double y1, double x2, double y2) {
+		double dx = x2 - x1, dy = y2 - y1;
+		return Math.sqrt(dx * dx + dy * dy);
+	}
+
+	/**
 	 * Generate all valid candidates for a single request index.
 	 */
 	private List<PairCandidate> generateCandidatesForRequest(TimeFilter filter, int i) {
@@ -173,7 +184,30 @@ public final class PairGenerator {
 				continue;
 			}
 
-			// Get origin-to-origin segment
+			// Beeline pre-filter: reject pairs where the Euclidean shared path
+			// already exceeds the max allowed distance (directDistance * maxDetourFactor).
+			// Since beeline <= network distance, this has zero false negatives.
+			double beeOO = beeline(reqI.originX, reqI.originY, reqJ.originX, reqJ.originY);
+			double beeOD = beeline(reqJ.originX, reqJ.originY, reqI.destinationX, reqI.destinationY);
+			double beeDD = beeline(reqI.destinationX, reqI.destinationY, reqJ.destinationX, reqJ.destinationY);
+			double beeOJ = beeline(reqJ.originX, reqJ.originY, reqJ.destinationX, reqJ.destinationY);
+			double beeJD = beeline(reqJ.destinationX, reqJ.destinationY, reqI.destinationX, reqI.destinationY);
+
+			// FIFO: passenger i travels O_i->O_j->D_i, passenger j travels O_j->D_i->D_j
+			boolean fifoFeasible =
+				(beeOO + beeOD) <= reqI.directDistance * reqI.maxDetourFactor &&
+				(beeOD + beeDD) <= reqJ.directDistance * reqJ.maxDetourFactor;
+
+			// LIFO: passenger i travels O_i->O_j->D_j->D_i, passenger j rides directly (always passes)
+			boolean lifoFeasible =
+				(beeOO + beeOJ + beeJD) <= reqI.directDistance * reqI.maxDetourFactor;
+
+			if (!fifoFeasible && !lifoFeasible) {
+				beelineRejected.incrementAndGet();
+				continue;
+			}
+
+			// Get origin-to-origin segment (routing call)
 			TravelSegment oo = network.getSegment(reqI.originLinkId, reqJ.originLinkId, reqI.requestTime);
 			if (!oo.isReachable()) continue;
 
@@ -181,13 +215,17 @@ public final class PairGenerator {
 			if (reqI.getLatestDeparture() + oo.getTravelTime() < reqJ.getEarliestDeparture()) continue;
 			if (reqI.getEarliestDeparture() + oo.getTravelTime() > reqJ.getLatestDeparture()) continue;
 
-			// Try FIFO
-			PairCandidate fifo = tryFifoCandidate(reqI, reqJ, oo);
-			if (fifo != null) results.add(fifo);
+			// Try FIFO (only if beeline check passed)
+			if (fifoFeasible) {
+				PairCandidate fifo = tryFifoCandidate(reqI, reqJ, oo);
+				if (fifo != null) results.add(fifo);
+			}
 
-			// Try LIFO
-			PairCandidate lifo = tryLifoCandidate(reqI, reqJ, oo);
-			if (lifo != null) results.add(lifo);
+			// Try LIFO (only if beeline check passed)
+			if (lifoFeasible) {
+				PairCandidate lifo = tryLifoCandidate(reqI, reqJ, oo);
+				if (lifo != null) results.add(lifo);
+			}
 		}
 
 		return results;
