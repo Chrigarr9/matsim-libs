@@ -13,7 +13,7 @@ import org.matsim.api.core.v01.population.Activity;
 import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Route;
-import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.OpportunityCostModel;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.contrib.drt.routing.DrtRoute;
 import org.matsim.core.population.PopulationUtils;
@@ -49,17 +49,22 @@ public final class DrtTripScorer {
 	 * <p>Constructs access walk + DRT leg + egress walk, scores via adapter,
 	 * and applies wait time penalty + opportunity cost as appropriate.
 	 *
-	 * @param person                  the person
-	 * @param request                 the DRT request (for link IDs, coordinates, timing)
-	 * @param adapter                 the scoring adapter
+	 * @param person                    the person
+	 * @param request                   the DRT request (for link IDs, coordinates, timing)
+	 * @param adapter                   the scoring adapter
 	 * @param scoringParametersForPerson scoring parameters provider
-	 * @param exMasConfig             ExMAS config (for DRT mode, opportunity cost flag)
-	 * @param travelTime              in-vehicle travel time (seconds)
-	 * @param distance                travel distance (meters)
-	 * @param accessWalkDist          access walk distance (meters)
-	 * @param egressWalkDist          egress walk distance (meters)
-	 * @param delay                   delay/wait time before pickup (seconds)
-	 * @param walkSpeed               walk speed (m/s)
+	 * @param drtMode                   the DRT mode string (e.g. "drt")
+	 * @param opportunityCostModel      which opportunity cost model to apply
+	 * @param travelTime                in-vehicle travel time (seconds)
+	 * @param distance                  travel distance (meters)
+	 * @param accessWalkDist            access walk distance (meters)
+	 * @param egressWalkDist            egress walk distance (meters)
+	 * @param delay                     delay/wait time before pickup (seconds)
+	 * @param walkSpeed                 walk speed (m/s)
+	 * @param originActivity            the real origin activity (for LOG opp cost)
+	 * @param destActivity              the real destination activity (for LOG opp cost)
+	 * @param originDuration            actual origin activity duration in seconds
+	 * @param destDuration              actual destination activity duration in seconds
 	 * @return the trip utility score
 	 */
 	public static double score(
@@ -67,13 +72,18 @@ public final class DrtTripScorer {
 			DrtRequest request,
 			DemandExtractionScoringAdapter adapter,
 			ScoringParametersForPerson scoringParametersForPerson,
-			ExMasConfigGroup exMasConfig,
+			String drtMode,
+			OpportunityCostModel opportunityCostModel,
 			double travelTime,
 			double distance,
 			double accessWalkDist,
 			double egressWalkDist,
 			double delay,
-			double walkSpeed) {
+			double walkSpeed,
+			Activity originActivity,
+			Activity destActivity,
+			double originDuration,
+			double destDuration) {
 
 		// Validate inputs
 		if (!Double.isFinite(delay)) {
@@ -113,7 +123,7 @@ public final class DrtTripScorer {
 		elements.add(accessLeg);
 
 		// DRT leg
-		Leg drtLeg = PopulationUtils.createLeg(exMasConfig.getDrtMode());
+		Leg drtLeg = PopulationUtils.createLeg(drtMode);
 		drtLeg.setDepartureTime(pickupTime);
 		drtLeg.setTravelTime(travelTime);
 		DrtRoute drtRoute = new DrtRoute(request.originLinkId, request.destinationLinkId);
@@ -135,18 +145,18 @@ public final class DrtTripScorer {
 		elements.add(egressLeg);
 
 		// Create synthetic activities for adapters that need them (DMC, eqasim)
-		Activity originActivity = PopulationUtils.createActivityFromLinkId(
+		Activity syntheticOriginActivity = PopulationUtils.createActivityFromLinkId(
 				"drt_interaction", request.originLinkId);
-		originActivity.setCoord(new Coord(request.originX, request.originY));
-		originActivity.setEndTime(request.requestTime);
-		Activity destActivity = PopulationUtils.createActivityFromLinkId(
+		syntheticOriginActivity.setCoord(new Coord(request.originX, request.originY));
+		syntheticOriginActivity.setEndTime(request.requestTime);
+		Activity syntheticDestActivity = PopulationUtils.createActivityFromLinkId(
 				"drt_interaction", request.destinationLinkId);
-		destActivity.setCoord(new Coord(request.destinationX, request.destinationY));
+		syntheticDestActivity.setCoord(new Coord(request.destinationX, request.destinationY));
 
 		// Score via adapter
 		TripScoreRequest scoreRequest = new TripScoreRequest(
-				person, exMasConfig.getDrtMode(), elements,
-				originActivity, destActivity,
+				person, drtMode, elements,
+				syntheticOriginActivity, syntheticDestActivity,
 				request.requestTime, null, request.tripIndex);
 
 		TripScoreResult result = adapter.scoreTrip(scoreRequest);
@@ -170,10 +180,12 @@ public final class DrtTripScorer {
 		}
 
 		// Opportunity cost (if configured AND adapter doesn't include it)
-		if (exMasConfig.isIncludeOpportunityCost() && !adapter.includesOpportunityCost()) {
+		if (opportunityCostModel != OpportunityCostModel.NONE && !adapter.includesOpportunityCost()) {
 			double totalTravelTime = accessTime + travelTime + egressTime;
 			ScoringParameters scoringParams = scoringParametersForPerson.getScoringParameters(person);
-			score -= totalTravelTime * scoringParams.marginalUtilityOfPerforming_s;
+			score -= OpportunityCostCalculator.compute(opportunityCostModel, scoringParams,
+					totalTravelTime, originActivity, destActivity,
+					originDuration, destDuration);
 		}
 
 		return score;

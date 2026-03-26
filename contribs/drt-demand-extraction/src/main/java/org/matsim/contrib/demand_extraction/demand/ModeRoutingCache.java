@@ -20,8 +20,10 @@ import org.matsim.api.core.v01.population.PlanElement;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.demand_extraction.algorithm.util.StringUtils;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.OpportunityCostModel;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.TourEvaluationMode;
 import org.matsim.contrib.demand_extraction.scoring.DemandExtractionScoringAdapter;
+import org.matsim.contrib.demand_extraction.scoring.OpportunityCostCalculator;
 import org.matsim.contrib.demand_extraction.scoring.PreviousTripContext;
 import org.matsim.contrib.demand_extraction.scoring.TripScoreRequest;
 import org.matsim.contrib.demand_extraction.scoring.TripScoreResult;
@@ -76,8 +78,9 @@ public class ModeRoutingCache {
     }
 
     public void cacheModes(Population population) {
-		log.info("Starting mode caching for {} persons (adapter: {})...",
-				population.getPersons().size(), adapter.getName());
+		log.info("Starting mode caching for {} persons (adapter: {}, opportunityCost: {}, adapterIncludesOC: {})...",
+				population.getPersons().size(), adapter.getName(),
+				exMasConfig.getOpportunityCostModel(), adapter.includesOpportunityCost());
 		long startTime = System.currentTimeMillis();
 
 		// Thread-safe progress tracking
@@ -111,6 +114,13 @@ public class ModeRoutingCache {
 						}
 					}
 				}
+			}
+
+			// Compute activity durations for LOG opportunity cost model
+			double[] activityDurations = null;
+			OpportunityCostModel oppCostModel = exMasConfig.getOpportunityCostModel();
+			if (oppCostModel == OpportunityCostModel.LOG && !adapter.includesOpportunityCost()) {
+				activityDurations = OpportunityCostCalculator.computeActivityDurations(person.getSelectedPlan());
 			}
 
             // GREEDY_PREFIX: accumulate best non-DRT mode per trip for tour context
@@ -181,7 +191,7 @@ public class ModeRoutingCache {
 
 					// Score via adapter (with tour context for GREEDY_PREFIX)
 					double score = scoreViaAdapter(person, mode, tripElements, trip,
-							tripIndex, params, previousTrips, distance, totalDailyDistance_m);
+							tripIndex, params, previousTrips, distance, totalDailyDistance_m, activityDurations);
 
 					modeCache.put(mode, new ModeAttributes(travelTime, distance, score));
 				}
@@ -265,7 +275,7 @@ public class ModeRoutingCache {
 			List<? extends PlanElement> tripElements, TripStructureUtils.Trip trip,
 			int tripIndex, ScoringParameters params,
 			List<PreviousTripContext> previousTrips,
-			double tripDistance_m, double totalDailyDistance_m) {
+			double tripDistance_m, double totalDailyDistance_m, double[] activityDurations) {
 
 		TripScoreRequest request = new TripScoreRequest(
 				person, mode, tripElements,
@@ -276,15 +286,21 @@ public class ModeRoutingCache {
 		TripScoreResult result = adapter.scoreTrip(request);
 		double score = result.utility();
 
-		// Apply opportunity cost only if adapter doesn't already include it
-		if (exMasConfig.isIncludeOpportunityCost() && !adapter.includesOpportunityCost()) {
+		OpportunityCostModel oppCostModel = exMasConfig.getOpportunityCostModel();
+		if (oppCostModel != OpportunityCostModel.NONE && !adapter.includesOpportunityCost()) {
 			double totalTravelTime = 0.0;
 			for (PlanElement pe : tripElements) {
 				if (pe instanceof Leg leg) {
 					totalTravelTime += leg.getTravelTime().orElse(0.0);
 				}
 			}
-			score -= totalTravelTime * params.marginalUtilityOfPerforming_s;
+			double originDuration = (activityDurations != null && tripIndex < activityDurations.length)
+					? activityDurations[tripIndex] : 0.0;
+			double destDuration = (activityDurations != null && tripIndex + 1 < activityDurations.length)
+					? activityDurations[tripIndex + 1] : 0.0;
+			score -= OpportunityCostCalculator.compute(oppCostModel, params,
+					totalTravelTime, trip.getOriginActivity(), trip.getDestinationActivity(),
+					originDuration, destDuration);
 		}
 
 		// Amortize daily monetary constant proportionally by trip distance

@@ -656,7 +656,7 @@ public class RunBavaria30kmDemandExtraction {
 		// Degree 2 pairs are pruned as extension BASES only (after shareability graph
 		// construction). Pruned pairs remain in allRides as pair support for tryExtend
 		// validation, so higher-degree rides can still be discovered via alternate pair paths.
-		exMasConfig.setPruningDistanceSavingsLogScale(0.20);
+		exMasConfig.setPruningDistanceSavingsLogScale(0.25);
 		exMasConfig.setPruningDistanceSavingsMax(0.75);
 		exMasConfig.setPruningDistanceSavingsMinDegree(2); // prune paired rides after graph construction
 		exMasConfig.setPruningRankingObjective("rideDistance"); // rideDistance | passengerTravelTime | passengerUtility
@@ -667,7 +667,7 @@ public class RunBavaria30kmDemandExtraction {
 		exMasConfig.setMaxSuccessors(50);
 
 		// Scoring
-		exMasConfig.setIncludeOpportunityCost(true);
+		exMasConfig.setOpportunityCostModel(ExMasConfigGroup.OpportunityCostModel.LOG);
 		exMasConfig.setAmortizeDailyMonetaryConstants(true);
 
 		// Disable PT departure optimization to avoid SwissRailRaptor configuration issues
@@ -684,7 +684,7 @@ public class RunBavaria30kmDemandExtraction {
 		log.info("  algorithmProcessCount: {}", exMasConfig.getAlgorithmProcessCount());
 		log.info("  heuristicsProcessCount: {}", exMasConfig.getHeuristicsProcessCount());
 		log.info("  deterministicNetworkRouting: {}", exMasConfig.isUseDeterministicNetworkRouting());
-		log.info("  Include opportunity cost: {}", exMasConfig.isIncludeOpportunityCost());
+		log.info("  Opportunity cost model: {}", exMasConfig.getOpportunityCostModel());
 	}
 
 	// -------------------------------------------------------------------------

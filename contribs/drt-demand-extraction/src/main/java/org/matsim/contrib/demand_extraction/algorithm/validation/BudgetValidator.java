@@ -1,16 +1,23 @@
 package org.matsim.contrib.demand_extraction.algorithm.validation;
 
+import java.util.List;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.matsim.api.core.v01.population.Activity;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.OpportunityCostModel;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.contrib.demand_extraction.scoring.DemandExtractionScoringAdapter;
 import org.matsim.contrib.demand_extraction.scoring.DrtTripScorer;
+import org.matsim.contrib.demand_extraction.scoring.OpportunityCostCalculator;
 import org.matsim.core.config.Config;
+import org.matsim.core.population.PopulationUtils;
+import org.matsim.core.router.TripStructureUtils;
 import org.matsim.core.scoring.functions.ScoringParametersForPerson;
 
 import com.google.inject.Inject;
@@ -229,8 +236,37 @@ public class BudgetValidator {
 			double actualWalkDistanceAccess, double actualWalkDistanceEgress) {
 
 		Person person = population.getPersons().get(request.personId);
+
+		Activity originActivity = null;
+		Activity destActivity = null;
+		double originDuration = 0.0;
+		double destDuration = 0.0;
+
+		OpportunityCostModel oppCostModel = exMasConfig.getOpportunityCostModel();
+		if (oppCostModel == OpportunityCostModel.LOG) {
+			List<TripStructureUtils.Trip> trips = TripStructureUtils.getTrips(person.getSelectedPlan());
+			if (request.tripIndex >= 0 && request.tripIndex < trips.size()) {
+				TripStructureUtils.Trip trip = trips.get(request.tripIndex);
+				originActivity = trip.getOriginActivity();
+				destActivity = trip.getDestinationActivity();
+				double[] actDurations = OpportunityCostCalculator.computeActivityDurations(person.getSelectedPlan());
+				if (request.tripIndex < actDurations.length) originDuration = actDurations[request.tripIndex];
+				if (request.tripIndex + 1 < actDurations.length) destDuration = actDurations[request.tripIndex + 1];
+			}
+		}
+
+		// Provide fallback activities if not resolved
+		if (originActivity == null) {
+			originActivity = PopulationUtils.createActivityFromLinkId("unknown", request.originLinkId);
+		}
+		if (destActivity == null) {
+			destActivity = PopulationUtils.createActivityFromLinkId("unknown", request.destinationLinkId);
+		}
+
 		return DrtTripScorer.score(person, request, adapter, scoringParametersForPerson,
-				exMasConfig, actualTravelTime, actualDistance,
-				actualWalkDistanceAccess, actualWalkDistanceEgress, delay, walkSpeed);
+				exMasConfig.getDrtMode(), oppCostModel,
+				actualTravelTime, actualDistance,
+				actualWalkDistanceAccess, actualWalkDistanceEgress, delay, walkSpeed,
+				originActivity, destActivity, originDuration, destDuration);
 	}
 }

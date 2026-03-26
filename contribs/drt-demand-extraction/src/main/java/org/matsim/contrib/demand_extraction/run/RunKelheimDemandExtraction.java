@@ -659,7 +659,7 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 		exMasConfig.setMaxSuccessors(50);
 
 		// Scoring
-		exMasConfig.setIncludeOpportunityCost(true);
+		exMasConfig.setOpportunityCostModel(ExMasConfigGroup.OpportunityCostModel.LOG);
 		exMasConfig.setAmortizeDailyMonetaryConstants(true);
 
 		// Disable PT departure optimization to avoid SwissRailRaptor configuration issues
@@ -676,7 +676,7 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 		log.info("  algorithmProcessCount: {}", exMasConfig.getAlgorithmProcessCount());
 		log.info("  heuristicsProcessCount: {}", exMasConfig.getHeuristicsProcessCount());
 		log.info("  deterministicNetworkRouting: {}", exMasConfig.isUseDeterministicNetworkRouting());
-		log.info("  Include opportunity cost: {}", exMasConfig.isIncludeOpportunityCost());
+		log.info("  Opportunity cost model: {}", exMasConfig.getOpportunityCostModel());
 	}
 	
 	/**

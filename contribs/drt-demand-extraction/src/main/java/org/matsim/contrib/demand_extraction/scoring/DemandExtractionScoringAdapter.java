@@ -15,7 +15,7 @@ import org.matsim.api.core.v01.population.Person;
  *       All built-in adapters guarantee this by construction.</li>
  *   <li>Opportunity cost inclusion is adapter-dependent and reported via
  *       {@link #includesOpportunityCost()}. The caller adds opportunity cost only when
- *       both {@code exMasConfig.isIncludeOpportunityCost()} is true AND
+ *       both {@code exMasConfig.getOpportunityCostModel()} is not NONE AND
  *       {@code adapter.includesOpportunityCost()} is false.</li>
  *   <li>{@link #getMarginalUtilityOfMoney} is the only explicit parameter adapters must
  *       expose. It is needed for maxCost conversion because DRT fare is external to

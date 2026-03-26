@@ -58,6 +58,17 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	public enum TourEvaluationMode { TRIP_INDEPENDENT, GREEDY_PREFIX }
 	private TourEvaluationMode tourEvaluationMode = TourEvaluationMode.TRIP_INDEPENDENT;
 
+	/** Opportunity cost model for trip-level scoring. */
+	public enum OpportunityCostModel {
+		/** No opportunity cost added. */
+		NONE,
+		/** Constant rate: marginalUtilityOfPerforming_s * travelTime (MATSim default approximation). */
+		LINEAR,
+		/** Exact log-utility: min over origin/dest of beta_perf * t_typ * ln(t_actual / (t_actual - tt)).
+		 *  Falls back to LINEAR for activities without typicalDuration. */
+		LOG
+	}
+
 	// Override marginalUtilityOfMoney (utils/EUR) for maxCost conversion.
 	// Only needed when planCalcScore has dummy values AND no dedicated adapter.
 	// Standard MATSim/DMC: auto-detected from planCalcScore.
@@ -134,10 +145,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// This means agents can leave earlier/later to catch better PT connections
 	private boolean ptOptimizeDepartureTime = true;
 
-	// If true, includes opportunity cost of time (lost activity time) in trip scoring
-	// Effective marginal utility of travel = marginalUtilityOfTraveling - marginalUtilityOfPerforming
-	// This is important when marginalUtilityOfTraveling is zero (e.g. Kelheim PT)
-	private boolean includeOpportunityCost = true;
+	// Opportunity cost model for trip-level scoring:
+	// NONE    = no opportunity cost added
+	// LINEAR  = constant rate: marginalUtilityOfPerforming_s * travelTime (MATSim default approximation)
+	// LOG     = exact log-utility: min over origin/dest of beta_perf * t_typ * ln(t_actual / (t_actual - tt))
+	//           Falls back to LINEAR for activities without typicalDuration.
+	// Essential when marginalUtilityOfTraveling is zero (e.g. Kelheim PT)
+	private OpportunityCostModel opportunityCostModel = OpportunityCostModel.LINEAR;
 
 	// If true, amortizes each mode's dailyMonetaryConstant into trip-level scoring.
 	// The daily constant (e.g. car's -5.3 EUR/day) is spread over the person's total
@@ -878,14 +892,26 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.intermediateWrite = intermediateWrite;
 	}
 
-	@StringGetter("includeOpportunityCost")
-	public boolean isIncludeOpportunityCost() {
-		return includeOpportunityCost;
+	@StringGetter("opportunityCostModel")
+	public OpportunityCostModel getOpportunityCostModel() {
+		return opportunityCostModel;
 	}
 
-	@StringSetter("includeOpportunityCost")
-	public void setIncludeOpportunityCost(boolean includeOpportunityCost) {
-		this.includeOpportunityCost = includeOpportunityCost;
+	@StringSetter("opportunityCostModel")
+	public void setOpportunityCostModel(OpportunityCostModel opportunityCostModel) {
+		this.opportunityCostModel = opportunityCostModel;
+	}
+
+	/** @deprecated Use {@link #setOpportunityCostModel} instead. */
+	@Deprecated
+	public void setIncludeOpportunityCost(boolean include) {
+		this.opportunityCostModel = include ? OpportunityCostModel.LINEAR : OpportunityCostModel.NONE;
+	}
+
+	/** @deprecated Use {@link #getOpportunityCostModel} instead. */
+	@Deprecated
+	public boolean isIncludeOpportunityCost() {
+		return opportunityCostModel != OpportunityCostModel.NONE;
 	}
 
 	@StringGetter("amortizeDailyMonetaryConstants")
@@ -1127,9 +1153,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("ptOptimizeDepartureTime",
 				"If true, PT router can optimize departure time to reduce waiting times. " +
 				"Agent can leave earlier/later to catch better connections. Default: true");
-		map.put("includeOpportunityCost",
-				"If true, includes opportunity cost of time (lost activity time) in trip scoring. " +
-				"Essential when marginalUtilityOfTraveling is zero. Default: true");
+		map.put("opportunityCostModel",
+				"Opportunity cost model for trip scoring. NONE = no opportunity cost, " +
+				"LINEAR = constant marginalUtilityOfPerforming_s * travelTime (MATSim default), " +
+				"LOG = exact log-utility with activity-aware durations " +
+				"(min of origin/dest: beta_perf * t_typ * ln(t_actual / (t_actual - tt))). " +
+				"Falls back to LINEAR for activities without typicalDuration. Default: LINEAR");
 		map.put("amortizeDailyMonetaryConstants",
 				"If true, amortizes each mode's dailyMonetaryConstant into trip-level scoring by " +
 				"spreading it over the person's total daily trip distance. Without this, daily costs " +

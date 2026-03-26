@@ -102,7 +102,7 @@ public class RunScoringAdapterValidation {
 
 		if (noOpportunityCost) {
 			ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
-			exMas.setIncludeOpportunityCost(false);
+			exMas.setOpportunityCostModel(ExMasConfigGroup.OpportunityCostModel.NONE);
 			log.info("Opportunity cost DISABLED");
 		}
 
@@ -175,7 +175,7 @@ public class RunScoringAdapterValidation {
 				exMasConfig.setScoringAdapter("planCalcScore");
 				applyEqasimBavariaParams(config);
 				// eqasim betaTravelTime already includes opportunity cost
-				exMasConfig.setIncludeOpportunityCost(false);
+				exMasConfig.setOpportunityCostModel(ExMasConfigGroup.OpportunityCostModel.NONE);
 				// Set marginalUtilityOfMoney override (at reference distance)
 				exMasConfig.setMarginalUtilityOfMoneyOverride(0.310998);
 				log.info("Using planCalcScore adapter with Bavaria eqasim-approximate params");
@@ -185,7 +185,7 @@ public class RunScoringAdapterValidation {
 				exMasConfig.setScoringAdapter("eqasim");
 				configureEqasim(config);
 				// eqasim betaTravelTime already includes opportunity cost
-				exMasConfig.setIncludeOpportunityCost(false);
+				exMasConfig.setOpportunityCostModel(ExMasConfigGroup.OpportunityCostModel.NONE);
 				log.info("Using real eqasim adapter with Bavaria scoring modules");
 				break;
 		}
@@ -428,7 +428,7 @@ public class RunScoringAdapterValidation {
 		exMasConfig.setMaxPoolingDegree(16);
 		exMasConfig.setCalcPredecessors(false); // Skip for speed
 		exMasConfig.setCalcShapleyValues(false); // Skip for speed
-		exMasConfig.setIncludeOpportunityCost(true);
+		exMasConfig.setOpportunityCostModel(ExMasConfigGroup.OpportunityCostModel.LOG);
 		exMasConfig.setPtOptimizeDepartureTime(false);
 		exMasConfig.setHeuristicPruningEnabled(true);
 		exMasConfig.setPruningKeepTopFractionPerRequestSet(0.3);
