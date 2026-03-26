@@ -139,6 +139,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// This is important when marginalUtilityOfTraveling is zero (e.g. Kelheim PT)
 	private boolean includeOpportunityCost = true;
 
+	// If true, amortizes each mode's dailyMonetaryConstant into trip-level scoring.
+	// The daily constant (e.g. car's -5.3 EUR/day) is spread over the person's total
+	// daily trip distance: amortizedUtils = dailyConstant * margUtilOfMoney * (tripDist / totalDailyDist).
+	// Without this, daily costs are ignored in trip scoring, making car look cheaper than it is.
+	private boolean amortizeDailyMonetaryConstants = false;
+
 	// Heuristics and post-processing settings (align with exmas_pipeline.heuristics)
 	// Controls parallelism in the ExMAS *core algorithm* (pair generation + extensions)
 	// -1 => use parallel streams (default); 1 => force sequential (for reproducible results)
@@ -882,6 +888,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.includeOpportunityCost = includeOpportunityCost;
 	}
 
+	@StringGetter("amortizeDailyMonetaryConstants")
+	public boolean isAmortizeDailyMonetaryConstants() {
+		return amortizeDailyMonetaryConstants;
+	}
+
+	@StringSetter("amortizeDailyMonetaryConstants")
+	public void setAmortizeDailyMonetaryConstants(boolean amortizeDailyMonetaryConstants) {
+		this.amortizeDailyMonetaryConstants = amortizeDailyMonetaryConstants;
+	}
+
 	// ===========================================
 	// Stop-Based Pooling (Stage 1) Getters/Setters
 	// ===========================================
@@ -1114,6 +1130,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("includeOpportunityCost",
 				"If true, includes opportunity cost of time (lost activity time) in trip scoring. " +
 				"Essential when marginalUtilityOfTraveling is zero. Default: true");
+		map.put("amortizeDailyMonetaryConstants",
+				"If true, amortizes each mode's dailyMonetaryConstant into trip-level scoring by " +
+				"spreading it over the person's total daily trip distance. Without this, daily costs " +
+				"(e.g. car ownership -5.3 EUR/day) are ignored in trip scoring. Default: false");
 		map.put("algorithmProcessCount",
 				"Parallelism for core ExMAS pair generation and ride extension. -1 = all processors, 1 = sequential (more deterministic). Default: -1");
 		map.put("heuristicsProcessCount",

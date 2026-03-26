@@ -92,6 +92,25 @@ public interface DemandExtractionScoringAdapter {
 	boolean supportsIterativeConstraints();
 
 	/**
+	 * Daily monetary constant for a mode, converted to utils.
+	 *
+	 * <p>Returns {@code dailyMoneyConstant * marginalUtilityOfMoney + dailyUtilityConstant}
+	 * for the given mode.
+	 * The caller amortizes this over the person's total daily trip distance to produce
+	 * a per-trip adjustment: {@code dailyConstantUtils * (tripDistance / totalDailyDistance)}.
+	 *
+	 * <p>Default returns 0 (no daily constant). Override in adapters that have access
+	 * to mode-specific daily monetary constants.
+	 *
+	 * @param person the person (for subpopulation-specific scoring parameters)
+	 * @param mode   the transport mode
+	 * @return daily monetary constant in utils (typically negative for costs)
+	 */
+	default double getDailyMonetaryConstantUtils(Person person, String mode) {
+		return 0.0;
+	}
+
+	/**
 	 * Does {@link #getMarginalUtilityOfMoney} vary by trip distance?
 	 *
 	 * <p>eqasim: yes ({@code betaCost * (euclidDist/refDist)^lambda}).

@@ -100,6 +100,19 @@ public class ModeRoutingCache {
             // Get scoring params for person (needed for opportunity cost)
             ScoringParameters params = scoringParametersForPerson.getScoringParameters(person);
 
+			// Compute total daily distance from the person's selected plan (for daily constant amortization)
+			double totalDailyDistance_m = 0.0;
+			if (exMasConfig.isAmortizeDailyMonetaryConstants()) {
+				for (PlanElement pe : person.getSelectedPlan().getPlanElements()) {
+					if (pe instanceof Leg leg && leg.getRoute() != null) {
+						double d = leg.getRoute().getDistance();
+						if (Double.isFinite(d) && d > 0) {
+							totalDailyDistance_m += d;
+						}
+					}
+				}
+			}
+
             // GREEDY_PREFIX: accumulate best non-DRT mode per trip for tour context
             boolean useGreedyPrefix = exMasConfig.getTourEvaluationMode() == TourEvaluationMode.GREEDY_PREFIX;
             List<PreviousTripContext> previousTrips = useGreedyPrefix ? new ArrayList<>() : List.of();
@@ -168,7 +181,7 @@ public class ModeRoutingCache {
 
 					// Score via adapter (with tour context for GREEDY_PREFIX)
 					double score = scoreViaAdapter(person, mode, tripElements, trip,
-							tripIndex, params, previousTrips);
+							tripIndex, params, previousTrips, distance, totalDailyDistance_m);
 
 					modeCache.put(mode, new ModeAttributes(travelTime, distance, score));
 				}
@@ -246,12 +259,13 @@ public class ModeRoutingCache {
     }
 
 	/**
-	 * Score a trip via the adapter, applying opportunity cost if needed.
+	 * Score a trip via the adapter, applying opportunity cost and daily constant amortization if needed.
 	 */
 	private double scoreViaAdapter(Person person, String mode,
 			List<? extends PlanElement> tripElements, TripStructureUtils.Trip trip,
 			int tripIndex, ScoringParameters params,
-			List<PreviousTripContext> previousTrips) {
+			List<PreviousTripContext> previousTrips,
+			double tripDistance_m, double totalDailyDistance_m) {
 
 		TripScoreRequest request = new TripScoreRequest(
 				person, mode, tripElements,
@@ -271,6 +285,14 @@ public class ModeRoutingCache {
 				}
 			}
 			score -= totalTravelTime * params.marginalUtilityOfPerforming_s;
+		}
+
+		// Amortize daily monetary constant proportionally by trip distance
+		if (totalDailyDistance_m > 0 && tripDistance_m > 0) {
+			double dailyConstantUtils = adapter.getDailyMonetaryConstantUtils(person, mode);
+			if (dailyConstantUtils != 0.0) {
+				score += dailyConstantUtils * (tripDistance_m / totalDailyDistance_m);
+			}
 		}
 
 		return score;

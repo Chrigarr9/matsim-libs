@@ -78,6 +78,17 @@ public class DmcMatSimTripAdapter implements DemandExtractionScoringAdapter {
 	}
 
 	@Override
+	public double getDailyMonetaryConstantUtils(Person person, String mode) {
+		ScoringParameters params = scoringParametersForPerson.getScoringParameters(person);
+		var modeParams = params.modeParams.get(mode);
+		if (modeParams == null) {
+			return 0.0;
+		}
+		return modeParams.dailyMoneyConstant * params.marginalUtilityOfMoney
+				+ modeParams.dailyUtilityConstant;
+	}
+
+	@Override
 	public double getMarginalUtilityOfMoney(Person person, double euclideanDistance_km) {
 		// MATSimTripScoring uses same planCalcScore params
 		ScoringParameters params = scoringParametersForPerson.getScoringParameters(person);

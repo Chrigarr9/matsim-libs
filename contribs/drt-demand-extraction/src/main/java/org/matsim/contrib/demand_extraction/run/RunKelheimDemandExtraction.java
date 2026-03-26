@@ -660,6 +660,7 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 
 		// Scoring
 		exMasConfig.setIncludeOpportunityCost(true);
+		exMasConfig.setAmortizeDailyMonetaryConstants(true);
 
 		// Disable PT departure optimization to avoid SwissRailRaptor configuration issues
 		// TODO: Fix SwissRailRaptor range query settings configuration

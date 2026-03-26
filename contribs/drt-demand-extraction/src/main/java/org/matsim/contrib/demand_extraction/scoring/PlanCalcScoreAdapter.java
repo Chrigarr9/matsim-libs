@@ -128,6 +128,19 @@ public class PlanCalcScoreAdapter implements DemandExtractionScoringAdapter {
 	}
 
 	@Override
+	public double getDailyMonetaryConstantUtils(Person person, String mode) {
+		ScoringParameters params = scoringParametersForPerson.getScoringParameters(person);
+		ModeUtilityParameters modeParams = params.modeParams.get(mode);
+		if (modeParams == null) {
+			return 0.0;
+		}
+		// dailyMoneyConstant is in EUR (converted to utils via margUtilOfMoney)
+		// dailyUtilityConstant is already in utils
+		return modeParams.dailyMoneyConstant * params.marginalUtilityOfMoney
+				+ modeParams.dailyUtilityConstant;
+	}
+
+	@Override
 	public double getMarginalUtilityOfMoney(Person person, double euclideanDistance_km) {
 		ScoringParameters params = scoringParametersForPerson.getScoringParameters(person);
 		return params.marginalUtilityOfMoney;
