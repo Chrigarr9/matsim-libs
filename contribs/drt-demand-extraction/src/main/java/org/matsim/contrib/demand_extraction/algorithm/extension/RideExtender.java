@@ -46,6 +46,13 @@ public final class RideExtender {
 	private final ExMasConfigGroup exMasConfig;
 	private static final double EPSILON = 1e-9;
 
+	private final java.util.concurrent.atomic.AtomicLong beelineExtensionRejected = new java.util.concurrent.atomic.AtomicLong();
+
+	private static double beeline(double x1, double y1, double x2, double y2) {
+		double dx = x2 - x1, dy = y2 - y1;
+		return Math.sqrt(dx * dx + dy * dy);
+	}
+
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 			List<DrtRequest> requests, List<Ride> rides, ExMasConfigGroup exMasConfig) {
 		this.network = network;
@@ -79,6 +86,7 @@ public final class RideExtender {
 		log.info("Extending {} rides from degree {} to {} [{}]...",
 				ridesToExtend.size(), targetDegree - 1, targetDegree, useParallel ? "parallel" : "sequential");
 		long startTime = System.currentTimeMillis();
+		beelineExtensionRejected.set(0);
 
 		int total = ridesToExtend.size();
 		AtomicInteger processedRides = new AtomicInteger(0);
@@ -107,6 +115,10 @@ public final class RideExtender {
 				.collect(Collectors.toList());
 
 		stats.logSummary(candidates.size());
+		if (beelineExtensionRejected.get() > 0) {
+			log.info("  Beeline extension pre-filter rejected {} candidates before routing",
+					beelineExtensionRejected.get());
+		}
 
 		// Phase 2: Sort by (baseRideIndex, newRequestIndex) for deterministic order
 		candidates.sort(ExtensionCandidate.COMPARATOR);
@@ -287,6 +299,32 @@ public final class RideExtender {
 					stats.missingPairRidesSkipped.increment();
 				}
 				continue;
+			}
+
+			// Beeline pre-filter: skip if new passenger is too far from existing stops
+			{
+				double maxDist = newRequest.directDistance * newRequest.maxDetourFactor;
+				double oX = newRequest.originX, oY = newRequest.originY;
+				double dX = newRequest.destinationX, dY = newRequest.destinationY;
+				boolean originReachable = false;
+				boolean destReachable = false;
+				for (DrtRequest existing : ride.getRequests()) {
+					if (!originReachable) {
+						double beeToO = beeline(oX, oY, existing.originX, existing.originY);
+						double beeToD = beeline(oX, oY, existing.destinationX, existing.destinationY);
+						if (Math.min(beeToO, beeToD) <= maxDist) originReachable = true;
+					}
+					if (!destReachable) {
+						double beeToO = beeline(dX, dY, existing.originX, existing.originY);
+						double beeToD = beeline(dX, dY, existing.destinationX, existing.destinationY);
+						if (Math.min(beeToO, beeToD) <= maxDist) destReachable = true;
+					}
+					if (originReachable && destReachable) break;
+				}
+				if (!originReachable || !destReachable) {
+					beelineExtensionRejected.incrementAndGet();
+					continue;
+				}
 			}
 
 			// Use temp index (will be reassigned later)
