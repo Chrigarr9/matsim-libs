@@ -248,6 +248,28 @@ public final class ShareabilityGraph {
     }
 
     /**
+     * @return Sorted array of all request IDs that appear as nodes in the graph.
+     */
+    public int[] getNodeIds() {
+        IntOpenHashSet nodes = new IntOpenHashSet();
+        for (int i = 0; i < edgeCount; i++) {
+            nodes.add(sourceRequests[i]);
+            nodes.add(targetRequests[i]);
+        }
+        int[] sorted = nodes.toIntArray();
+        Arrays.sort(sorted);
+        return sorted;
+    }
+
+    /**
+     * @return Sorted neighbors of a single request.
+     */
+    public int[] getNeighbors(int requestId) {
+        int[] result = sortedNeighbors.get(requestId);
+        return result != null ? result : new int[0];
+    }
+
+    /**
      * Create a builder for constructing a ShareabilityGraph.
      *
      * @param estimatedEdges estimated number of edges (for initial capacity)

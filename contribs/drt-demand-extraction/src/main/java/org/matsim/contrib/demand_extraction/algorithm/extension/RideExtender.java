@@ -4,9 +4,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.Collectors;
@@ -77,68 +79,161 @@ public final class RideExtender {
 	}
 
 	/**
-	 * Extend rides with parallel processing and deterministic output.
+	 * Extend rides with per-request-set processing to bound memory usage.
+	 *
+	 * Instead of collecting ALL extension candidates into memory and pruning after,
+	 * this processes one request set at a time: generate all variants for the set,
+	 * prune immediately, release before moving on. Memory is bounded to one request
+	 * set's variants (~3-30 entries) instead of all candidates (~39M at 25% scale).
 	 */
 	public List<Ride> extendRides(List<Ride> ridesToExtend, int nextRideIndex) {
 		int targetDegree = ridesToExtend.isEmpty() ? 0 : ridesToExtend.get(0).getDegree() + 1;
-		boolean useParallel = exMasConfig == null || exMasConfig.getAlgorithmProcessCount() != 1;
 		ExtensionAttemptStats stats = new ExtensionAttemptStats(targetDegree, exMasConfig);
-		log.info("Extending {} rides from degree {} to {} [{}]...",
-				ridesToExtend.size(), targetDegree - 1, targetDegree, useParallel ? "parallel" : "sequential");
+		log.info("Extending {} rides from degree {} to {} [per-request-set]...",
+				ridesToExtend.size(), targetDegree - 1, targetDegree);
 		long startTime = System.currentTimeMillis();
 		beelineExtensionRejected.set(0);
 
-		int total = ridesToExtend.size();
-		AtomicInteger processedRides = new AtomicInteger(0);
-
-		// Phase 1: Parallel processing - collect validated extensions
-		java.util.stream.IntStream rideStream = IntStream.range(0, total);
-		if (useParallel) {
-			rideStream = rideStream.parallel();
+		// Build lookup: requestIndicesKey -> list of base rides with those indices
+		Map<String, List<Ride>> baseRidesByRequestSet = new HashMap<>();
+		for (Ride ride : ridesToExtend) {
+			int[] idx = ride.getRequestIndices().clone();
+			Arrays.sort(idx);
+			String key = Arrays.toString(idx);
+			baseRidesByRequestSet.computeIfAbsent(key, k -> new ArrayList<>()).add(ride);
 		}
 
-		List<ExtensionCandidate> candidates = rideStream
-				.mapToObj(i -> {
-					int processed = processedRides.incrementAndGet();
-					if (isPowerOfTwo(processed) || processed == total) {
-						double percent = (processed * 100.0) / total;
-						long now = System.currentTimeMillis();
-						double elapsedSeconds = Math.max(0.001, (now - startTime) / 1000.0);
-						double rate = processed / elapsedSeconds;
-						double remainingSeconds = (total - processed) / Math.max(rate, 1e-9);
-						log.info("  Extension progress: {}/{} ({}%), ETA {}",
-								processed, total, String.format("%.1f", percent), formatDuration(remainingSeconds));
-					}
-					return generateExtensionsForRide(ridesToExtend.get(i), stats);
-				})
-				.flatMap(List::stream)
-				.collect(Collectors.toList());
+		// Enumerate all candidate request sets at targetDegree
+		Set<String> processedSets = new HashSet<>();
+		List<Ride> allExtended = new ArrayList<>();
+		int setsProcessed = 0;
+		int totalSets = 0;
 
-		stats.logSummary(candidates.size());
+		// Count total sets for progress (quick pass)
+		for (Ride ride : ridesToExtend) {
+			int[] neighbors = graph.findCommonNeighborsSorted(ride.getRequestIndices());
+			for (int newReq : neighbors) {
+				int[] newSet = buildSortedRequestSet(ride.getRequestIndices(), newReq);
+				String key = Arrays.toString(newSet);
+				if (!processedSets.contains(key)) {
+					processedSets.add(key);
+					totalSets++;
+				}
+			}
+		}
+		processedSets.clear(); // reset for actual processing
+		log.info("  Found {} candidate request sets at degree {}", totalSets, targetDegree);
+
+		// Process each request set
+		for (Ride ride : ridesToExtend) {
+			int[] neighbors = graph.findCommonNeighborsSorted(ride.getRequestIndices());
+
+			for (int newReq : neighbors) {
+				int[] newSet = buildSortedRequestSet(ride.getRequestIndices(), newReq);
+				String key = Arrays.toString(newSet);
+
+				// Skip if already processed this request set
+				if (!processedSets.add(key)) continue;
+
+				setsProcessed++;
+				if (isPowerOfTwo(setsProcessed) || setsProcessed == totalSets) {
+					double pct = (setsProcessed * 100.0) / Math.max(1, totalSets);
+					long now = System.currentTimeMillis();
+					double elapsed = Math.max(0.001, (now - startTime) / 1000.0);
+					double eta = (totalSets - setsProcessed) / Math.max(setsProcessed / elapsed, 1e-9);
+					log.info("  Request-set progress: {}/{} ({}%), ETA {}",
+							setsProcessed, totalSets, String.format("%.1f", pct), formatDuration(eta));
+				}
+
+				// Generate ALL variants for this request set from ALL base rides
+				List<ExtensionCandidate> variants = new ArrayList<>();
+
+				// For degree D+1, each variant comes from a degree-D base ride + one added request.
+				// The base ride contains D requests from newSet; the added request is the remaining one.
+				for (int i = 0; i < newSet.length; i++) {
+					int addedReq = newSet[i];
+					int[] baseIndices = new int[newSet.length - 1];
+					for (int j = 0, k = 0; j < newSet.length; j++) {
+						if (j != i) baseIndices[k++] = newSet[j];
+					}
+					String baseKey = Arrays.toString(baseIndices);
+					List<Ride> bases = baseRidesByRequestSet.get(baseKey);
+					if (bases == null) continue;
+
+					DrtRequest addedRequest = requestMap.get(addedReq);
+
+					for (Ride base : bases) {
+						// Duplicate person check
+						boolean duplicatePerson = false;
+						for (DrtRequest existingReq : base.getRequests()) {
+							if (addedRequest.getPaxId().equals(existingReq.getPaxId())) {
+								duplicatePerson = true;
+								break;
+							}
+						}
+						if (duplicatePerson) {
+							if (stats != null) stats.duplicatePersonSkipped.increment();
+							continue;
+						}
+
+						// Beeline pre-filter
+						if (!passesExtensionBeelineFilter(base, addedRequest)) {
+							beelineExtensionRejected.incrementAndGet();
+							continue;
+						}
+
+						int[] pairRides = getPairRides(base.getRequestIndices(), addedReq);
+						if (pairRides == null) {
+							if (stats != null) stats.missingPairRidesSkipped.increment();
+							continue;
+						}
+
+						Ride ext = tryExtend(base, addedRequest, pairRides, 0);
+						if (ext == null) {
+							if (stats != null) stats.tryExtendFailed.increment();
+							continue;
+						}
+
+						Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
+						if (validated == null) {
+							if (stats != null) stats.budgetValidationFailed.increment();
+							continue;
+						}
+
+						if (exMasConfig != null && exMasConfig.getPruningDistanceSavingsLogScale() >= 0
+								&& !passesDistanceSavingsPruning(validated)) {
+							if (stats != null) stats.distanceSavingsPrunedEarly.increment();
+							continue;
+						}
+
+						variants.add(new ExtensionCandidate(base.getIndex(), addedReq, validated));
+						if (stats != null) stats.candidatesAdded.increment();
+					}
+				}
+
+				// Percentage-prune this request set immediately
+				if (!variants.isEmpty()) {
+					List<Ride> pruned = pruneRequestSetVariants(variants);
+					for (Ride r : pruned) {
+						allExtended.add(rebuildWithIndex(r, nextRideIndex++));
+					}
+				}
+				// variants released — GC can reclaim
+			}
+		}
+
 		if (beelineExtensionRejected.get() > 0) {
 			log.info("  Beeline extension pre-filter rejected {} candidates before routing",
 					beelineExtensionRejected.get());
 		}
-
-		// Phase 2: Sort by (baseRideIndex, newRequestIndex) for deterministic order
-		candidates.sort(ExtensionCandidate.COMPARATOR);
-
-		// Phase 3: Reassign indices sequentially
-		List<Ride> extended = new ArrayList<>();
-		for (ExtensionCandidate c : candidates) {
-			Ride reindexed = rebuildWithIndex(c.validatedRide, nextRideIndex++);
-			extended.add(reindexed);
-		}
-
-		// Apply group pruning after extensions
-		List<Ride> pruned = applyHeuristicPruning(extended);
+		stats.logSummary(allExtended.size());
 
 		long elapsed = System.currentTimeMillis() - startTime;
 		double seconds = elapsed / 1000.0;
-		log.info("Extension complete: {} rides extended to degree {} in {}s",
-				pruned.size(), targetDegree, String.format("%.1f", seconds));
+		log.info("Extension complete: {} rides extended to degree {} in {}s ({} request sets)",
+				allExtended.size(), targetDegree, String.format("%.1f", seconds), setsProcessed);
 
-		return pruned;
+		return allExtended;
 	}
 
 	private static final class ExtensionAttemptStats {
@@ -460,6 +555,85 @@ public final class RideExtender {
 				goal);
 
 		return kept;
+	}
+
+	/**
+	 * Build a sorted request set by adding newReq to existing indices.
+	 */
+	private static int[] buildSortedRequestSet(int[] existing, int newReq) {
+		int[] result = new int[existing.length + 1];
+		System.arraycopy(existing, 0, result, 0, existing.length);
+		result[existing.length] = newReq;
+		Arrays.sort(result);
+		return result;
+	}
+
+	/**
+	 * Beeline pre-filter for extensions: check if new passenger's origin and destination
+	 * are each within reach of at least one existing stop in the ride.
+	 */
+	private boolean passesExtensionBeelineFilter(Ride base, DrtRequest newRequest) {
+		double maxDist = newRequest.directDistance * newRequest.maxDetourFactor;
+		double oX = newRequest.originX, oY = newRequest.originY;
+		double dX = newRequest.destinationX, dY = newRequest.destinationY;
+
+		boolean originReachable = false;
+		boolean destReachable = false;
+		for (DrtRequest existing : base.getRequests()) {
+			if (!originReachable) {
+				double beeO = Math.min(
+					beeline(oX, oY, existing.originX, existing.originY),
+					beeline(oX, oY, existing.destinationX, existing.destinationY));
+				if (beeO <= maxDist) originReachable = true;
+			}
+			if (!destReachable) {
+				double beeD = Math.min(
+					beeline(dX, dY, existing.originX, existing.originY),
+					beeline(dX, dY, existing.destinationX, existing.destinationY));
+				if (beeD <= maxDist) destReachable = true;
+			}
+			if (originReachable && destReachable) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Prune variants for a single request set using the configured percentage/min/max settings.
+	 * Returns the kept rides (not yet reindexed).
+	 */
+	private List<Ride> pruneRequestSetVariants(List<ExtensionCandidate> variants) {
+		if (variants.isEmpty()) return List.of();
+
+		// Respect the heuristic pruning enabled flag
+		if (exMasConfig == null || !exMasConfig.isHeuristicPruningEnabled()) {
+			List<Ride> result = new ArrayList<>(variants.size());
+			for (ExtensionCandidate c : variants) {
+				result.add(c.validatedRide());
+			}
+			return result;
+		}
+
+		double keepFraction = Math.min(1.0, exMasConfig.getPruningKeepTopFractionPerRequestSet());
+		int minKeep = Math.max(0, exMasConfig.getPruningMinRidesToKeepPerRequestSet());
+		int maxKeep = Math.max(0, exMasConfig.getPruningMaxRidesToKeepPerRequestSet());
+		boolean minimize = exMasConfig.getPruningRankingGoal() == null
+				|| exMasConfig.getPruningRankingGoal().equalsIgnoreCase("minimize");
+
+		Comparator<ExtensionCandidate> cmp = Comparator.comparingDouble(c -> objectiveValue(c.validatedRide()));
+		if (!minimize) cmp = cmp.reversed();
+		variants.sort(cmp);
+
+		int size = variants.size();
+		int keep = (int) Math.ceil(size * keepFraction);
+		keep = Math.max(keep, minKeep);
+		if (maxKeep > 0) keep = Math.min(keep, maxKeep);
+		keep = Math.min(keep, size);
+
+		List<Ride> result = new ArrayList<>(keep);
+		for (int i = 0; i < keep; i++) {
+			result.add(variants.get(i).validatedRide());
+		}
+		return result;
 	}
 
 	private boolean passesDistanceSavingsPruning(Ride ride) {
