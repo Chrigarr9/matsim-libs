@@ -129,7 +129,7 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private String negativeFlexibilityAbsoluteMap = null; // Map "value:seconds,value:seconds"
 	private String negativeFlexibilityRelativeMap = null; // Map "value:factor,value:factor"
 
-	private int networkTimeBinSize = 60 * 60; // Network cache time bin size in seconds (15 minutes)
+	private int networkTimeBinSize = 60 * 60; // Network cache time bin size in seconds (1 hour)
 	
 	// ExMAS algorithm parameters
 	private double searchHorizon = 600.0; // Time horizon for pairing requests (seconds, 10 minutes)
@@ -201,6 +201,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// top-N extensions by objective).
 	// This is applied before the per-request-set group pruning.
 	private int pruningTopNPerBase = 0;
+
+	// Post-extension pruning (applied after all degrees are generated, before post-processing)
+	// MaxPerSet: keep only the N best rides per request set (by rideDistance). 0 = disabled.
+	private int postExtensionMaxPerSet = 0;
+	// Per-degree percentile: keep only the top X% of rides (by distanceSavings) within each degree.
+	// 1.0 = disabled (keep all). 0.05 = keep top 5%.
+	private double postExtensionKeepTopFraction = 1.0;
 
 	// Calculate Shapley values for rides (distance contribution per passenger)
 	private boolean calcShapleyValues = true;
@@ -822,6 +829,26 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.pruningTopNPerBase = pruningKeepTopNExtensionsPerBaseRide;
 	}
 
+	@StringGetter("postExtensionMaxPerSet")
+	public int getPostExtensionMaxPerSet() {
+		return postExtensionMaxPerSet;
+	}
+
+	@StringSetter("postExtensionMaxPerSet")
+	public void setPostExtensionMaxPerSet(int postExtensionMaxPerSet) {
+		this.postExtensionMaxPerSet = postExtensionMaxPerSet;
+	}
+
+	@StringGetter("postExtensionKeepTopFraction")
+	public double getPostExtensionKeepTopFraction() {
+		return postExtensionKeepTopFraction;
+	}
+
+	@StringSetter("postExtensionKeepTopFraction")
+	public void setPostExtensionKeepTopFraction(double postExtensionKeepTopFraction) {
+		this.postExtensionKeepTopFraction = postExtensionKeepTopFraction;
+	}
+
 	@StringGetter("calcShapleyValues")
 	public boolean isCalcShapleyValues() {
 		return calcShapleyValues;
@@ -1186,6 +1213,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("pruningRankingGoal", "Ranking goal for pruning objective: minimize | maximize. Default: minimize");
 		map.put("pruningKeepTopNExtensionsPerBaseRide",
 				"Limit number of extensions per base ride to top N by objective (0 disables). Default: 0");
+		map.put("postExtensionMaxPerSet",
+				"Post-extension pruning: keep only the N best rides (by rideDistance) per request set. "
+				+ "Applied after all extension degrees complete, before Shapley/predecessors. 0 = disabled. Default: 0");
+		map.put("postExtensionKeepTopFraction",
+				"Post-extension pruning: keep only the top fraction of rides (by distanceSavings) within each degree. "
+				+ "1.0 = disabled. 0.10 = keep top 10% per degree. 0.05 = keep top 5%. Applied after MaxPerSet. Default: 1.0");
 		map.put("calcShapleyValues", "Calculate Shapley values for each ride (distance contribution per passenger). Default: true");
 		map.put("calcPredecessors",
 				"Calculate predecessor/successor relationships between rides. When enabled, connection cache is automatically written. Default: true");
