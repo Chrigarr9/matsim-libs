@@ -88,6 +88,10 @@ public class RunBavaria30kmDemandExtraction {
 		String filterMunicipality = null;
 		String shapesPath = null;
 		double tripFilterRadiusKm = 0.0; // km, 0 = disabled (trip-level: O+D both inside)
+		String travelTimesFile = null; // path to pre-computed travel_times.tsv
+		boolean noPruning = false; // disable all pruning (for baseline comparison)
+		int postExtMaxPerSet = 0;
+		double postExtKeepTop = 1.0;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -111,6 +115,10 @@ public class RunBavaria30kmDemandExtraction {
 				case "--filter-municipality" -> filterMunicipality = args[++i];
 				case "--shapes" -> shapesPath = args[++i];
 				case "--trip-filter-radius" -> tripFilterRadiusKm = Double.parseDouble(args[++i]);
+				case "--travel-times" -> travelTimesFile = args[++i];
+				case "--no-pruning" -> noPruning = true;
+				case "--post-ext-max-per-set" -> postExtMaxPerSet = Integer.parseInt(args[++i]);
+				case "--post-ext-keep-top" -> postExtKeepTop = Double.parseDouble(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -173,7 +181,8 @@ public class RunBavaria30kmDemandExtraction {
 		}
 
 		configureForDemandExtraction(config, outDir, sampleSize, iterations,
-				algorithmProcessCount, heuristicsProcessCount, deterministic);
+				algorithmProcessCount, heuristicsProcessCount, deterministic, noPruning,
+				postExtMaxPerSet, postExtKeepTop);
 		String runId = config.controller().getRunId();
 
 		// Trip-level spatial filter: uses resolved filter center (from --filter-municipality or --filter-center)
@@ -214,6 +223,36 @@ public class RunBavaria30kmDemandExtraction {
 		// Create plain controller — no DRT simulation, just MATSim + demand extraction
 		Controler controler = new Controler(scenario);
 		controler.addOverridingModule(new DemandExtractionModule());
+
+		// Load pre-computed travel times if provided (from RunBavariaBaseSimulation)
+		final String ttFile = travelTimesFile;
+		if (ttFile != null) {
+			log.info("Loading pre-computed travel times from: {}", ttFile);
+			// Match the discretizer to what was exported (36h endTime, 900s bins)
+			int endTime = 36 * 3600;
+			int binSize = 900;
+			var timeDiscretizer = new org.matsim.contrib.common.timeprofile.TimeDiscretizer(endTime, binSize);
+			try {
+				java.net.URL ttUrl = java.nio.file.Path.of(ttFile).toUri().toURL();
+				double[][] matrix = org.matsim.contrib.dvrp.trafficmonitoring.DvrpOfflineTravelTimes
+						.loadLinkTravelTimes(timeDiscretizer, ttUrl, "\t");
+				var baseTt = org.matsim.contrib.dvrp.trafficmonitoring.DvrpOfflineTravelTimes
+						.asTravelTime(timeDiscretizer, matrix);
+				// Wrap to clamp out-of-range times (activities beyond 36h use last bin)
+				org.matsim.core.router.util.TravelTime clampedTt = (link, time, person, vehicle) ->
+						baseTt.getLinkTravelTime(link, Math.min(time, endTime), person, vehicle);
+				controler.addOverridingModule(new org.matsim.core.controler.AbstractModule() {
+					@Override
+					public void install() {
+						addTravelTimeBinding(org.matsim.api.core.v01.TransportMode.car).toInstance(clampedTt);
+					}
+				});
+				log.info("Bound pre-computed travel times ({} time bins, clamped to {}h)",
+						timeDiscretizer.getIntervalCount(), endTime / 3600);
+			} catch (java.net.MalformedURLException e) {
+				throw new RuntimeException("Invalid travel times path: " + ttFile, e);
+			}
+		}
 
 		// Enable income-dependent scoring if population has income attributes
 		// (requires upsampled population with AttributeAdapter-derived income values)
@@ -291,7 +330,9 @@ public class RunBavaria30kmDemandExtraction {
 		config.qsim().setTrafficDynamics(QSimConfigGroup.TrafficDynamics.kinematicWaves);
 		// Eqasim vehicle types use "default_car" naming, not "car".
 		// Use defaultVehicle to avoid type mismatch (demand extraction doesn't need real vehicles).
-		config.qsim().setVehiclesSource(QSimConfigGroup.VehiclesSource.defaultVehicle);
+		// Eqasim populations embed vehicle IDs in person attributes (e.g. "368346:car").
+		// Use fromVehiclesData to load actual vehicle definitions from vehicles.xml.gz.
+		config.qsim().setVehiclesSource(QSimConfigGroup.VehiclesSource.fromVehiclesData);
 		// Allow agents to use any vehicle (avoids "could not find vehicle" errors when
 		// household vehicle IDs don't match person IDs after downsampling)
 		config.qsim().setUsePersonIdForMissingVehicleId(true);
@@ -545,7 +586,8 @@ public class RunBavaria30kmDemandExtraction {
 	 */
 	private static void configureForDemandExtraction(Config config, Path outputDir,
 			int sampleSize, int iterations, int algorithmProcessCount,
-			int heuristicsProcessCount, boolean deterministic) {
+			int heuristicsProcessCount, boolean deterministic, boolean noPruning,
+			int postExtMaxPerSet, double postExtKeepTop) {
 
 		// VSP defaults
 		config.vspExperimental().setVspDefaultsCheckingLevel(
@@ -571,7 +613,8 @@ public class RunBavaria30kmDemandExtraction {
 		// DemandExtractionModule reads DRT fare params from Config, not from Guice bindings.
 
 		// Configure ExMAS (same as RunKelheimDemandExtraction)
-		configureExMas(config, algorithmProcessCount, heuristicsProcessCount, deterministic);
+		configureExMas(config, algorithmProcessCount, heuristicsProcessCount, deterministic, noPruning,
+				postExtMaxPerSet, postExtKeepTop);
 
 		logScoringParameters(config);
 	}
@@ -584,7 +627,8 @@ public class RunBavaria30kmDemandExtraction {
 	 * Configure ExMAS algorithm parameters.
 	 * Settings aligned with ExMasKelheimE2ETest for consistency.
 	 */
-	private static void configureExMas(Config config, int algorithmProcessCount, int heuristicsProcessCount, boolean deterministic) {
+	private static void configureExMas(Config config, int algorithmProcessCount, int heuristicsProcessCount, boolean deterministic, boolean noPruning,
+			int postExtMaxPerSet, double postExtKeepTop) {
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 
 		// DRT mode must match Kelheim config
@@ -663,6 +707,16 @@ public class RunBavaria30kmDemandExtraction {
 		exMasConfig.setPruningRankingGoal("minimize"); // minimize | maximize
 		exMasConfig.setPruningKeepTopNExtensionsPerBaseRide(0); // per-base cap (0 disables)
 
+		if (noPruning) {
+			log.info("=== NO-PRUNING MODE: disabling all pruning for baseline comparison ===");
+			exMasConfig.setHeuristicPruningEnabled(false);
+			exMasConfig.setPruningDistanceSavingsLogScale(-1.0);
+			exMasConfig.setPruningKeepTopFractionPerRequestSet(1.0);
+			exMasConfig.setPruningMinRidesToKeepPerRequestSet(0);
+			exMasConfig.setPruningMaxRidesToKeepPerRequestSet(0);
+			exMasConfig.setPruningKeepTopNExtensionsPerBaseRide(0);
+		}
+
 		// Limit successors to improve performance (Top-K pruning)
 		exMasConfig.setMaxSuccessors(50);
 
@@ -673,6 +727,14 @@ public class RunBavaria30kmDemandExtraction {
 		// Disable PT departure optimization to avoid SwissRailRaptor configuration issues
 		// TODO: Fix SwissRailRaptor range query settings configuration
 		exMasConfig.setPtOptimizeDepartureTime(false);
+
+		// Post-extension pruning
+		exMasConfig.setPostExtensionMaxPerSet(postExtMaxPerSet);
+		exMasConfig.setPostExtensionKeepTopFraction(postExtKeepTop);
+		if (postExtMaxPerSet > 0 || postExtKeepTop < 1.0) {
+			log.info("  Post-extension pruning: maxPerSet={}, keepTopFraction={}",
+					postExtMaxPerSet, postExtKeepTop);
+		}
 
 		log.info("ExMAS config:");
 		log.info("  DRT mode: {}", exMasConfig.getDrtMode());
