@@ -142,13 +142,17 @@ public final class ExMasEngine {
 		log.info("PHASE 4: Iterative Ride Extension");
 		log.info("======================================================================");
 		List<Ride> pairAndSingleRides = new ArrayList<>(allRides); // singles + pairs for rideMap
-		// Inter-degree pruner: MaxPerSet ONLY (no percentile filter).
-		// Percentile filter is applied once after ALL degrees complete (in DemandExtractionListener).
-		// Using percentile per-degree would cascade-kill higher degrees.
+		// Inter-degree pruning to bound memory during extension.
+		// MaxPerSet: collapse variants. Percentile: drop low-value sets.
+		// The inter-degree percentile is gentler than the final percentile (keep top 50%
+		// to preserve base diversity) while the final P90/P95 in DemandExtractionListener
+		// does the aggressive compression after ALL degrees complete.
 		int interDegreeMaxPerSet = exMasConfig.getPostExtensionMaxPerSet();
-		PostExtensionPruner interDegreePruner = interDegreeMaxPerSet > 0
-				? new PostExtensionPruner(interDegreeMaxPerSet)
-				: null;
+		double finalKeepTop = exMasConfig.getPostExtensionKeepTopFraction();
+		// Inter-degree: keep top 50% (sqrt of final fraction, minimum 0.5)
+		// This is gentler than the final filter to preserve base diversity for higher degrees
+		double interDegreeKeepTop = (interDegreeMaxPerSet > 0 || finalKeepTop < 1.0)
+				? Math.max(0.5, Math.sqrt(finalKeepTop)) : 1.0;
 		int nextRideIndex = allRides.size();
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
@@ -160,15 +164,26 @@ public final class ExMasEngine {
 				break;
 			}
 
-			// Apply inter-degree MaxPerSet pruning to bound memory: only keep best N variants
-			// per request set before accumulating. Percentile filter is NOT applied here
-			// (it would cascade-kill higher degrees).
+			// Inter-degree pruning to bound memory:
+			// 1. MaxPerSet: collapse to best variant per request set
+			// 2. Gentle percentile: drop bottom half of sets by savings (preserves base diversity)
 			int generatedCount = extended.size();
-			if (interDegreePruner != null) {
-				extended = interDegreePruner.prune(extended);
+			if (interDegreeMaxPerSet > 0 || interDegreeKeepTop < 1.0) {
+				// Apply MaxPerSet first
+				if (interDegreeMaxPerSet > 0) {
+					PostExtensionPruner mps = new PostExtensionPruner(interDegreeMaxPerSet);
+					extended = mps.prune(extended);
+				}
+				// Apply gentle percentile
+				if (interDegreeKeepTop < 1.0 && extended.size() > 1000) {
+					PostExtensionPruner pct = new PostExtensionPruner(0, interDegreeKeepTop);
+					extended = pct.prune(extended);
+				}
 				if (extended.size() < generatedCount) {
-					log.info("Inter-degree MaxPerSet at degree {}: {} -> {} rides",
-							degree + 1, generatedCount, extended.size());
+					log.info("Inter-degree pruning at degree {}: {} -> {} rides (maxPerSet={}, keepTop={})",
+							degree + 1, generatedCount, extended.size(),
+							interDegreeMaxPerSet > 0 ? interDegreeMaxPerSet : "off",
+							interDegreeKeepTop < 1.0 ? String.format("%.2f", interDegreeKeepTop) : "off");
 				}
 			}
 

@@ -33,10 +33,12 @@ public final class PostExtensionPruner {
 
 	private final ExMasConfigGroup config;
 	private final int maxPerSetOverride;
+	private final double keepTopOverride;
 
 	public PostExtensionPruner(ExMasConfigGroup config) {
 		this.config = config;
 		this.maxPerSetOverride = -1; // use config
+		this.keepTopOverride = -1; // use config
 	}
 
 	/**
@@ -46,6 +48,17 @@ public final class PostExtensionPruner {
 	public PostExtensionPruner(int maxPerSet) {
 		this.config = null;
 		this.maxPerSetOverride = maxPerSet;
+		this.keepTopOverride = 1.0;
+	}
+
+	/**
+	 * Explicit pruner with both maxPerSet and keepTopFraction.
+	 * Set maxPerSet=0 to disable MaxPerSet, keepTopFraction=1.0 to disable percentile.
+	 */
+	public PostExtensionPruner(int maxPerSet, double keepTopFraction) {
+		this.config = null;
+		this.maxPerSetOverride = maxPerSet > 0 ? maxPerSet : -1;
+		this.keepTopOverride = keepTopFraction;
 	}
 
 	/**
@@ -58,7 +71,7 @@ public final class PostExtensionPruner {
 
 		int maxPerSet = maxPerSetOverride > 0 ? maxPerSetOverride
 				: (config != null ? config.getPostExtensionMaxPerSet() : 0);
-		double keepTopFraction = maxPerSetOverride > 0 ? 1.0
+		double keepTopFraction = keepTopOverride >= 0 ? keepTopOverride
 				: (config != null ? config.getPostExtensionKeepTopFraction() : 1.0);
 
 		if (maxPerSet <= 0 && keepTopFraction >= 1.0) {
