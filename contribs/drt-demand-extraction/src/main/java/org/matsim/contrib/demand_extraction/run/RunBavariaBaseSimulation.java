@@ -313,10 +313,23 @@ public class RunBavariaBaseSimulation {
 		config.qsim().setUsePersonIdForMissingVehicleId(true);
 
 		// --- Routing ---
-		// Car uses network routing. All other modes use MATSim default teleportation.
+		// Car uses network routing. All other modes use teleportation.
 		// Eqasim mode names (bicycle, car_passenger) are gone — all legs reset to walk,
-		// SubtourModeChoice assigns standard modes (car, bike, ride, pt, walk).
+		// SubtourModeChoice assigns standard modes (car, bike, pt, walk).
 		config.routing().setNetworkModes(java.util.List.of("car"));
+
+		// Teleportation speeds matching Kelheim v3.0 config (NOT MATSim defaults!)
+		// MATSim defaults are too fast: bike 4.17 m/s (15 km/h), walk 1.39 m/s (5 km/h)
+		// Kelheim uses: bike 3.14 m/s (11.3 km/h), walk 1.06 m/s (3.8 km/h)
+		var bikeRoute = new org.matsim.core.config.groups.RoutingConfigGroup.TeleportedModeParams("bike");
+		bikeRoute.setTeleportedModeSpeed(3.1388889);  // 11.3 km/h
+		bikeRoute.setBeelineDistanceFactor(1.3);
+		config.routing().addTeleportedModeParams(bikeRoute);
+
+		var walkRoute = new org.matsim.core.config.groups.RoutingConfigGroup.TeleportedModeParams("walk");
+		walkRoute.setTeleportedModeSpeed(1.0555556);  // 3.8 km/h
+		walkRoute.setBeelineDistanceFactor(1.3);
+		config.routing().addTeleportedModeParams(walkRoute);
 
 		// --- Scoring (Kelheim v3.0, with optional ASC overrides) ---
 		applyKelheimScoring(config, ascOverrides);
