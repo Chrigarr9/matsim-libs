@@ -18,6 +18,7 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.contrib.drt.routing.DrtRoute;
 import org.matsim.core.population.PopulationUtils;
 import org.matsim.core.population.routes.RouteUtils;
+import org.matsim.core.router.TripStructureUtils;
 import org.matsim.core.scoring.functions.ScoringParameters;
 import org.matsim.core.scoring.functions.ScoringParametersForPerson;
 
@@ -189,5 +190,80 @@ public final class DrtTripScorer {
 		}
 
 		return score;
+	}
+
+	/**
+	 * Resolve origin/destination activities from the person's plan and delegate to
+	 * {@link #score}.
+	 *
+	 * <p>Both {@link org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator}
+	 * and {@link org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator}
+	 * need to perform identical activity-resolution logic before scoring. This method
+	 * encapsulates that shared logic:
+	 * <ol>
+	 *   <li>If {@code opportunityCostModel == LOG}, look up the trip from the person's
+	 *       selected plan by {@code request.tripIndex} and extract activities + durations.</li>
+	 *   <li>Create {@code "unknown"} fallback activities for any that are still null.</li>
+	 *   <li>Delegate to {@link #score}.</li>
+	 * </ol>
+	 *
+	 * @param person                      the person (must not be null)
+	 * @param request                     the DRT request
+	 * @param adapter                     the scoring adapter
+	 * @param scoringParametersForPerson  scoring parameters provider
+	 * @param drtMode                     the DRT mode string (e.g. "drt")
+	 * @param opportunityCostModel        which opportunity cost model to apply
+	 * @param travelTime                  in-vehicle travel time (seconds)
+	 * @param distance                    travel distance (meters)
+	 * @param accessWalkDist              access walk distance (meters)
+	 * @param egressWalkDist              egress walk distance (meters)
+	 * @param delay                       delay/wait time before pickup (seconds)
+	 * @param walkSpeed                   walk speed (m/s)
+	 * @return the trip utility score
+	 */
+	public static double scoreWithActivityResolution(
+			Person person,
+			DrtRequest request,
+			DemandExtractionScoringAdapter adapter,
+			ScoringParametersForPerson scoringParametersForPerson,
+			String drtMode,
+			OpportunityCostModel opportunityCostModel,
+			double travelTime,
+			double distance,
+			double accessWalkDist,
+			double egressWalkDist,
+			double delay,
+			double walkSpeed) {
+
+		Activity originActivity = null;
+		Activity destActivity = null;
+		double originDuration = 0.0;
+		double destDuration = 0.0;
+
+		if (opportunityCostModel == OpportunityCostModel.LOG) {
+			List<TripStructureUtils.Trip> trips = TripStructureUtils.getTrips(person.getSelectedPlan());
+			if (request.tripIndex >= 0 && request.tripIndex < trips.size()) {
+				TripStructureUtils.Trip trip = trips.get(request.tripIndex);
+				originActivity = trip.getOriginActivity();
+				destActivity = trip.getDestinationActivity();
+				double[] actDurations = OpportunityCostCalculator.computeActivityDurations(person.getSelectedPlan());
+				if (request.tripIndex < actDurations.length) originDuration = actDurations[request.tripIndex];
+				if (request.tripIndex + 1 < actDurations.length) destDuration = actDurations[request.tripIndex + 1];
+			}
+		}
+
+		// Provide fallback activities if not resolved
+		if (originActivity == null) {
+			originActivity = PopulationUtils.createActivityFromLinkId("unknown", request.originLinkId);
+		}
+		if (destActivity == null) {
+			destActivity = PopulationUtils.createActivityFromLinkId("unknown", request.destinationLinkId);
+		}
+
+		return score(person, request, adapter, scoringParametersForPerson,
+				drtMode, opportunityCostModel,
+				travelTime, distance,
+				accessWalkDist, egressWalkDist, delay, walkSpeed,
+				originActivity, destActivity, originDuration, destDuration);
 	}
 }

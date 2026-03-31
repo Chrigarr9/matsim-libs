@@ -11,6 +11,9 @@ import org.matsim.core.scoring.functions.ScoringParameters;
 import org.matsim.core.scoring.functions.ScoringParametersForPerson;
 import org.matsim.pt.routes.TransitPassengerRoute;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 
@@ -32,6 +35,8 @@ import com.google.inject.Singleton;
  */
 @Singleton
 public class PlanCalcScoreAdapter implements DemandExtractionScoringAdapter {
+
+	private static final Logger log = LogManager.getLogger(PlanCalcScoreAdapter.class);
 
 	/** Leg modes that indicate PT vehicular legs (for waiting time + line switches). */
 	private static final Set<String> PT_LEG_MODES = Set.of(TransportMode.pt);
@@ -110,6 +115,8 @@ public class PlanCalcScoreAdapter implements DemandExtractionScoringAdapter {
 		}
 
 		if (modeParams == null) {
+			log.warn("No scoring parameters found for mode '{}' — scoring leg as 0.0. "
+					+ "Check planCalcScore config if this mode should contribute to utility.", mode);
 			return 0.0;
 		}
 

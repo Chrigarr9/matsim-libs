@@ -30,6 +30,7 @@ public final class AttributeAdapter {
      */
     public static void adapt(Person person, int householdSize, Random rnd) {
         adaptCarAvailability(person);
+        adaptLicenseAndMinors(person);
         adaptPtSubscription(person);
         adaptSubpopulation(person);
         adaptHouseholdSizeGroup(person, householdSize);
@@ -48,6 +49,35 @@ public final class AttributeAdapter {
 
         PersonUtils.setCarAvail(person, mapped);
         person.getAttributes().putAttribute("sim_carAvailability", mapped);
+    }
+
+    /**
+     * Match Kelheim v3.0 PreparePopulation.java convention: car availability is
+     * purely age-based. Adults (>=18) get carAvail=always, minors (<18) get
+     * carAvail=never. The hasLicense attribute is removed entirely.
+     *
+     * <p>Kelheim has no hasLicense attribute and no household-level car constraints.
+     * The eqasim population sets hasLicense=no for ~23% of adults and
+     * carAvailability=none for ~18% of adults, which is too restrictive for rural
+     * Bavaria and causes unrealistic bike dominance.</p>
+     */
+    private static void adaptLicenseAndMinors(Person person) {
+        // Remove hasLicense — Kelheim doesn't use it, and SubtourModeChoice's
+        // PermissibleModesCalculator treats null as "licensed"
+        person.getAttributes().removeAttribute("hasLicense");
+
+        // Age-based car availability (matching Kelheim PreparePopulation.java)
+        Object ageObj = person.getAttributes().getAttribute("age");
+        if (ageObj != null) {
+            int age = (ageObj instanceof Integer) ? (Integer) ageObj : Integer.parseInt(ageObj.toString());
+            if (age < 18) {
+                PersonUtils.setCarAvail(person, "never");
+                person.getAttributes().putAttribute("sim_carAvailability", "never");
+            } else {
+                PersonUtils.setCarAvail(person, "always");
+                person.getAttributes().putAttribute("sim_carAvailability", "always");
+            }
+        }
     }
 
     private static void adaptPtSubscription(Person person) {

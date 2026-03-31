@@ -295,11 +295,11 @@ public class DrtRequestFactory {
 		if (beelineDistance > 100.0 && drtAttrs.distance() / beelineDistance > maxRealisticDistanceRatio) {
 			log.warn(
 					"Skipping request index {} (person: {}): unrealistic routing result. "
-							+ "Beeline={}m but routed distance={}m (ratio={:.1f}x). "
+							+ "Beeline={}m but routed distance={}m (ratio={}x). "
 							+ "Origin link: {}, Dest link: {}. This may indicate activities mapped to wrong links.",
 					requestIndex, person.getId(),
 					String.format("%.0f", beelineDistance), String.format("%.0f", drtAttrs.distance()),
-					drtAttrs.distance() / beelineDistance, originLinkId, destinationLinkId);
+					String.format("%.1f", drtAttrs.distance() / beelineDistance), originLinkId, destinationLinkId);
 			return null;
 		}
 

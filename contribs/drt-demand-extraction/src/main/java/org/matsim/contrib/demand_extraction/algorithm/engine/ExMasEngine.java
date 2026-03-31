@@ -142,7 +142,13 @@ public final class ExMasEngine {
 		log.info("PHASE 4: Iterative Ride Extension");
 		log.info("======================================================================");
 		List<Ride> pairAndSingleRides = new ArrayList<>(allRides); // singles + pairs for rideMap
-		PostExtensionPruner interDegreePruner = new PostExtensionPruner(exMasConfig);
+		// Inter-degree pruner: MaxPerSet ONLY (no percentile filter).
+		// Percentile filter is applied once after ALL degrees complete (in DemandExtractionListener).
+		// Using percentile per-degree would cascade-kill higher degrees.
+		int interDegreeMaxPerSet = exMasConfig.getPostExtensionMaxPerSet();
+		PostExtensionPruner interDegreePruner = interDegreeMaxPerSet > 0
+				? new PostExtensionPruner(interDegreeMaxPerSet)
+				: null;
 		int nextRideIndex = allRides.size();
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
@@ -154,15 +160,19 @@ public final class ExMasEngine {
 				break;
 			}
 
-			// Apply inter-degree pruning to bound memory: prune before accumulating
-			int beforePrune = extended.size();
-			extended = interDegreePruner.prune(extended);
-			if (extended.size() < beforePrune) {
-				log.info("Inter-degree pruning at degree {}: {} -> {} rides",
-						degree + 1, beforePrune, extended.size());
+			// Apply inter-degree MaxPerSet pruning to bound memory: only keep best N variants
+			// per request set before accumulating. Percentile filter is NOT applied here
+			// (it would cascade-kill higher degrees).
+			int generatedCount = extended.size();
+			if (interDegreePruner != null) {
+				extended = interDegreePruner.prune(extended);
+				if (extended.size() < generatedCount) {
+					log.info("Inter-degree MaxPerSet at degree {}: {} -> {} rides",
+							degree + 1, generatedCount, extended.size());
+				}
 			}
 
-			nextRideIndex += beforePrune; // index space reserved for all generated rides
+			nextRideIndex += generatedCount; // index space reserved for all generated rides
 			allRides.addAll(extended);
 			currentDegreeRides = extended;
 		}

@@ -39,9 +39,9 @@ public class RunBavariaKelheim30kmComparison {
 	private static final String SCENARIO_PATH =
 			"../../../matsim_scenarios/bavaria/output/kelheim_30km_100pct";
 
-	/** Adapted population with numeric income attributes (output of RunAdaptEqasimPopulation) */
+	/** Pre-filtered 25% population (output of RunCreatePermanentPopulations) */
 	private static final String POPULATION_PATH =
-			"../../../matsim_scenarios/bavaria/output/kelheim_30km_100pct/kelheim_30km_100pct_population_adapted.xml.gz";
+			"../../../matsim_scenarios/bavaria/output/populations/population_25pct_kelheim30km.xml.gz";
 
 	/** VG250 administrative boundaries for municipality lookup */
 	private static final String VG250_SHAPES_PATH =
@@ -53,10 +53,14 @@ public class RunBavariaKelheim30kmComparison {
 	/** Trip-level filter radius in km — only trips with O+D both inside are extracted */
 	private static final double TRIP_FILTER_RADIUS_KM = 30.0;
 
-	/** Population sample percentage (1 = 1%, 25 = 25%, 100 = 100%) */
-	private static final int SAMPLE_PERCENT = 25;
+	/** Pre-computed travel times from base simulation (replaces free-flow) */
+	private static final String TRAVEL_TIMES_FILE =
+			"../../../matsim_scenarios/bavaria/output/base-simulation-10pct/travel_times.tsv";
 
-	/** MATSim iterations (0 = free-flow travel times, no convergence) */
+	/** Population sample — 100 because population file is already pre-filtered to 25% */
+	private static final int SAMPLE_PERCENT = 100;
+
+	/** MATSim iterations (0 = uses pre-computed travel times, no simulation needed) */
 	private static final int ITERATIONS = 0;
 
 	/** Output directory for this comparison run */
@@ -69,6 +73,7 @@ public class RunBavariaKelheim30kmComparison {
 		log.info("Population:    {}", POPULATION_PATH);
 		log.info("VG250 shapes:  {}", VG250_SHAPES_PATH);
 		log.info("Trip filter:   {}km around {} (O+D both inside)", TRIP_FILTER_RADIUS_KM, FILTER_MUNICIPALITY);
+		log.info("Travel times:  {}", TRAVEL_TIMES_FILE);
 		log.info("Sample:        {}%", SAMPLE_PERCENT);
 		log.info("Iterations:    {}", ITERATIONS);
 		log.info("Output:        {}", OUTPUT_DIR);
@@ -77,7 +82,8 @@ public class RunBavariaKelheim30kmComparison {
 		for (var entry : new String[][]{
 				{"Scenario", SCENARIO_PATH},
 				{"Population", POPULATION_PATH},
-				{"VG250 shapes", VG250_SHAPES_PATH}
+				{"VG250 shapes", VG250_SHAPES_PATH},
+				{"Travel times", TRAVEL_TIMES_FILE}
 		}) {
 			if (!Path.of(entry[1]).toFile().exists()) {
 				log.error("{} not found: {}", entry[0], entry[1]);
@@ -95,6 +101,7 @@ public class RunBavariaKelheim30kmComparison {
 				"--trip-filter-radius", String.valueOf(TRIP_FILTER_RADIUS_KM),
 				"--filter-municipality", FILTER_MUNICIPALITY,
 				"--shapes", VG250_SHAPES_PATH,
+				"--travel-times", TRAVEL_TIMES_FILE,
 				"--output-dir", OUTPUT_DIR
 		});
 	}

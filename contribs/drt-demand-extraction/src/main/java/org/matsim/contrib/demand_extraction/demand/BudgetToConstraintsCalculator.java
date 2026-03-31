@@ -1,20 +1,13 @@
 package org.matsim.contrib.demand_extraction.demand;
 
-import java.util.List;
-
 import org.matsim.api.core.v01.TransportMode;
-import org.matsim.api.core.v01.population.Activity;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
-import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.OpportunityCostModel;
 import org.matsim.contrib.demand_extraction.scoring.DemandExtractionScoringAdapter;
 import org.matsim.contrib.demand_extraction.scoring.DrtTripScorer;
-import org.matsim.contrib.demand_extraction.scoring.OpportunityCostCalculator;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.core.config.Config;
-import org.matsim.core.population.PopulationUtils;
-import org.matsim.core.router.TripStructureUtils;
 import org.matsim.core.scoring.functions.ScoringParameters;
 import org.matsim.core.scoring.functions.ScoringParametersForPerson;
 import org.matsim.core.utils.geometry.CoordUtils;
@@ -263,46 +256,20 @@ public class BudgetToConstraintsCalculator {
 	/**
 	 * Score a synthetic DRT trip via the adapter.
 	 *
-	 * <p>Delegates to {@link DrtTripScorer} which constructs access walk + DRT leg +
-	 * egress walk, scores via adapter, and applies wait time penalty + opportunity
-	 * cost as appropriate.
+	 * <p>Delegates to {@link DrtTripScorer#scoreWithActivityResolution} which resolves
+	 * origin/destination activities from the person's plan (for LOG opportunity cost),
+	 * constructs access walk + DRT leg + egress walk, scores via adapter, and applies
+	 * wait time penalty + opportunity cost as appropriate.
 	 */
 	private double scoreDrtTrip(Person person, DrtRequest request,
 			double travelTime, double distance,
 			double accessWalkDist, double egressWalkDist,
 			double delay) {
-
-		Activity originActivity = null;
-		Activity destActivity = null;
-		double originDuration = 0.0;
-		double destDuration = 0.0;
-
-		OpportunityCostModel oppCostModel = exMasConfig.getOpportunityCostModel();
-		if (oppCostModel == OpportunityCostModel.LOG) {
-			List<TripStructureUtils.Trip> trips = TripStructureUtils.getTrips(person.getSelectedPlan());
-			if (request.tripIndex >= 0 && request.tripIndex < trips.size()) {
-				TripStructureUtils.Trip trip = trips.get(request.tripIndex);
-				originActivity = trip.getOriginActivity();
-				destActivity = trip.getDestinationActivity();
-				double[] actDurations = OpportunityCostCalculator.computeActivityDurations(person.getSelectedPlan());
-				if (request.tripIndex < actDurations.length) originDuration = actDurations[request.tripIndex];
-				if (request.tripIndex + 1 < actDurations.length) destDuration = actDurations[request.tripIndex + 1];
-			}
-		}
-
-		// Provide fallback activities if not resolved
-		if (originActivity == null) {
-			originActivity = PopulationUtils.createActivityFromLinkId("unknown", request.originLinkId);
-		}
-		if (destActivity == null) {
-			destActivity = PopulationUtils.createActivityFromLinkId("unknown", request.destinationLinkId);
-		}
-
-		return DrtTripScorer.score(person, request, adapter, scoringParametersForPerson,
-				exMasConfig.getDrtMode(), oppCostModel,
+		return DrtTripScorer.scoreWithActivityResolution(person, request, adapter,
+				scoringParametersForPerson, exMasConfig.getDrtMode(),
+				exMasConfig.getOpportunityCostModel(),
 				travelTime, distance,
-				accessWalkDist, egressWalkDist, delay, walkSpeed,
-				originActivity, destActivity, originDuration, destDuration);
+				accessWalkDist, egressWalkDist, delay, walkSpeed);
 	}
 
 	// Fallback methods for adapters that don't support iterative constraints

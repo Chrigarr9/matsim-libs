@@ -32,9 +32,20 @@ public final class PostExtensionPruner {
 	private static final Logger log = LogManager.getLogger(PostExtensionPruner.class);
 
 	private final ExMasConfigGroup config;
+	private final int maxPerSetOverride;
 
 	public PostExtensionPruner(ExMasConfigGroup config) {
 		this.config = config;
+		this.maxPerSetOverride = -1; // use config
+	}
+
+	/**
+	 * MaxPerSet-only pruner (no percentile filter). Used for inter-degree pruning
+	 * inside the extension loop to bound memory without cascade-killing higher degrees.
+	 */
+	public PostExtensionPruner(int maxPerSet) {
+		this.config = null;
+		this.maxPerSetOverride = maxPerSet;
 	}
 
 	/**
@@ -45,8 +56,10 @@ public final class PostExtensionPruner {
 			return rides;
 		}
 
-		int maxPerSet = config.getPostExtensionMaxPerSet();
-		double keepTopFraction = config.getPostExtensionKeepTopFraction();
+		int maxPerSet = maxPerSetOverride > 0 ? maxPerSetOverride
+				: (config != null ? config.getPostExtensionMaxPerSet() : 0);
+		double keepTopFraction = maxPerSetOverride > 0 ? 1.0
+				: (config != null ? config.getPostExtensionKeepTopFraction() : 1.0);
 
 		if (maxPerSet <= 0 && keepTopFraction >= 1.0) {
 			log.info("Post-extension pruning: disabled (maxPerSet={}, keepTopFraction={})",
