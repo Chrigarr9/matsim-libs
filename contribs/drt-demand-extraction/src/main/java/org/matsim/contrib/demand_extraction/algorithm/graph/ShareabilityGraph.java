@@ -61,22 +61,29 @@ public final class ShareabilityGraph {
                         .add(i);
         }
 
-        // Pre-build sorted neighbors for deterministic iteration
+        // Pre-build sorted neighbors for deterministic iteration.
+        // BIDIRECTIONAL: for each edge A→B, both A and B are neighbors of each other.
+        // This ensures findCommonNeighborsSorted finds candidates regardless of pair ride
+        // direction. Edge metadata (kind, ride index) remains directional in getEdges().
+        //
+        // Without bidirectional neighbors, a directed 3-cycle (A→B, B→C, C→A with no
+        // reverse edges) would be invisible: no base pair can find the third member as a
+        // common outgoing neighbor. Bidirectional neighbors fix this.
         this.sortedNeighbors = new Int2ObjectOpenHashMap<>();
-        for (Int2ObjectMap.Entry<IntArrayList> entry : outgoingEdges.int2ObjectEntrySet()) {
-            int source = entry.getIntKey();
-            IntArrayList edgeIndices = entry.getValue();
-
-            // Collect unique neighbors
-            IntOpenHashSet neighborSet = new IntOpenHashSet(edgeIndices.size());
-            for (int edgeIdx : edgeIndices) {
-                neighborSet.add(targetRequests[edgeIdx]);
+        {
+            Int2ObjectOpenHashMap<IntOpenHashSet> neighborSets = new Int2ObjectOpenHashMap<>();
+            for (int i = 0; i < edgeCount; i++) {
+                int source = sourceRequests[i];
+                int target = targetRequests[i];
+                // Both directions for neighbor lookup
+                neighborSets.computeIfAbsent(source, k -> new IntOpenHashSet()).add(target);
+                neighborSets.computeIfAbsent(target, k -> new IntOpenHashSet()).add(source);
             }
-
-            // Convert to sorted array
-            int[] sorted = neighborSet.toIntArray();
-            Arrays.sort(sorted);
-            sortedNeighbors.put(source, sorted);
+            for (Int2ObjectMap.Entry<IntOpenHashSet> entry : neighborSets.int2ObjectEntrySet()) {
+                int[] sorted = entry.getValue().toIntArray();
+                Arrays.sort(sorted);
+                sortedNeighbors.put(entry.getIntKey(), sorted);
+            }
         }
     }
 
