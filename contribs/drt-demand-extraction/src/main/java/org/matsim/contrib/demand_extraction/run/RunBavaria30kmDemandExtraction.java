@@ -92,6 +92,7 @@ public class RunBavaria30kmDemandExtraction {
 		boolean noPruning = false; // disable all pruning (for baseline comparison)
 		int postExtMaxPerSet = 0;
 		double postExtKeepTop = 1.0;
+		int maxDegree = 16;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -119,6 +120,7 @@ public class RunBavaria30kmDemandExtraction {
 				case "--no-pruning" -> noPruning = true;
 				case "--post-ext-max-per-set" -> postExtMaxPerSet = Integer.parseInt(args[++i]);
 				case "--post-ext-keep-top" -> postExtKeepTop = Double.parseDouble(args[++i]);
+				case "--max-degree" -> maxDegree = Integer.parseInt(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -182,7 +184,7 @@ public class RunBavaria30kmDemandExtraction {
 
 		configureForDemandExtraction(config, outDir, sampleSize, iterations,
 				algorithmProcessCount, heuristicsProcessCount, deterministic, noPruning,
-				postExtMaxPerSet, postExtKeepTop);
+				postExtMaxPerSet, postExtKeepTop, maxDegree);
 		String runId = config.controller().getRunId();
 
 		// Trip-level spatial filter: uses resolved filter center (from --filter-municipality or --filter-center)
@@ -587,7 +589,7 @@ public class RunBavaria30kmDemandExtraction {
 	private static void configureForDemandExtraction(Config config, Path outputDir,
 			int sampleSize, int iterations, int algorithmProcessCount,
 			int heuristicsProcessCount, boolean deterministic, boolean noPruning,
-			int postExtMaxPerSet, double postExtKeepTop) {
+			int postExtMaxPerSet, double postExtKeepTop, int maxDegree) {
 
 		// VSP defaults
 		config.vspExperimental().setVspDefaultsCheckingLevel(
@@ -614,7 +616,7 @@ public class RunBavaria30kmDemandExtraction {
 
 		// Configure ExMAS (same as RunKelheimDemandExtraction)
 		configureExMas(config, algorithmProcessCount, heuristicsProcessCount, deterministic, noPruning,
-				postExtMaxPerSet, postExtKeepTop);
+				postExtMaxPerSet, postExtKeepTop, maxDegree);
 
 		logScoringParameters(config);
 	}
@@ -628,7 +630,7 @@ public class RunBavaria30kmDemandExtraction {
 	 * Settings aligned with ExMasKelheimE2ETest for consistency.
 	 */
 	private static void configureExMas(Config config, int algorithmProcessCount, int heuristicsProcessCount, boolean deterministic, boolean noPruning,
-			int postExtMaxPerSet, double postExtKeepTop) {
+			int postExtMaxPerSet, double postExtKeepTop, int maxDegree) {
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 
 		// DRT mode must match Kelheim config
@@ -677,7 +679,7 @@ public class RunBavaria30kmDemandExtraction {
 		exMasConfig.setSearchHorizon(3600.0); // unlimited
 		exMasConfig.setMaxDetourFactor(1.5);  // Max 50% longer than direct
 		exMasConfig.setMaxAbsoluteDetour(3600); // Max 1 hour absolute detour
-		exMasConfig.setMaxPoolingDegree(16);  // Allow up to 16 passengers (aligned with test)
+		exMasConfig.setMaxPoolingDegree(maxDegree);  // CLI: --max-degree (default: 16)
 
 		// Enable predecessor calculation for connection_cache.csv output
 		// This is needed for optimization empty vehicle kilometer calculations
