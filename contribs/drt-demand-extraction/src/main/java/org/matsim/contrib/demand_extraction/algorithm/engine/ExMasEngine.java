@@ -21,9 +21,7 @@ import org.matsim.contrib.demand_extraction.algorithm.generation.StopBasedRideGe
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.hyperpool.HyperPoolGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.hyperpool.StopCompatibilityChecker;
-import org.matsim.contrib.demand_extraction.algorithm.hyperpool.StopRelocator;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
-import org.matsim.contrib.demand_extraction.algorithm.stops.LinkCandidateFinder;
 import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinder;
 import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinderFactory;
 import org.matsim.contrib.demand_extraction.algorithm.stops.WalkingDistanceCalculator;
@@ -103,46 +101,20 @@ public final class ExMasEngine {
 
 		// Check if we should stop before generating pairs
 		if (maxDegree < 2) {
-			long totalElapsed = System.currentTimeMillis() - algorithmStartTime;
-			double totalSeconds = totalElapsed / 1000.0;
-			log.info("");
-			log.info("======================================================================");
-			log.info("ExMAS Algorithm Complete (maxDegree < 2, skipping pair generation)");
-			log.info("  Total rides: {}", allRides.size());
-			log.info("  Total time: {}s", String.format("%.1f", totalSeconds));
-			log.info("======================================================================");
-			
-			// Log network routing statistics
-			log.info("");
-			network.logRoutingStatistics();
-			
-			return allRides;
+			return completeEarly(algorithmStartTime, "maxDegree < 2, skipping pair generation");
 		}
 
         // Phase 2: Generate pair rides with budget validation
 		log.info("");
 		log.info("PHASE 2: Pair Ride Generation");
 		log.info("======================================================================");
-		int algorithmProcessCount = exMasConfig != null ? exMasConfig.getAlgorithmProcessCount() : -1;
+		int algorithmProcessCount = exMasConfig.getAlgorithmProcessCount();
 		PairGenerator pairGen = new PairGenerator(network, budgetValidator, horizon, algorithmProcessCount);
         List<Ride> pairRides = pairGen.generatePairs(reqArray);
 		allRides.addAll(pairRides);
 
         if (maxDegree <= 2) {
-			long totalElapsed = System.currentTimeMillis() - algorithmStartTime;
-			double totalSeconds = totalElapsed / 1000.0;
-			log.info("");
-			log.info("======================================================================");
-			log.info("ExMAS Algorithm Complete");
-			log.info("  Total rides: {}", allRides.size());
-			log.info("  Total time: {}s", String.format("%.1f", totalSeconds));
-			log.info("======================================================================");
-			
-			// Log network routing statistics
-			log.info("");
-			network.logRoutingStatistics();
-			
-            return allRides;
+			return completeEarly(algorithmStartTime, "maxDegree <= 2");
         }
 
         // Phase 3: Build sharability graph from pairs
@@ -162,19 +134,35 @@ public final class ExMasEngine {
 		List<Ride> currentDegreeRides = maybePrunePairRidesAfterGraph(pairRides);
 
         // Phase 4: Iteratively extend rides with budget validation
+		// RideExtender only needs pair rides in rideMap (for getPairRides/tryExtend insertion ordering).
+		// Higher-degree rides are NOT needed in rideMap, so we pass only pairRides + singles.
+		// Post-extension pruning is applied per degree to bound memory: only pruned rides are
+		// kept in allRides and used as bases for the next degree.
 		log.info("");
 		log.info("PHASE 4: Iterative Ride Extension");
 		log.info("======================================================================");
+		List<Ride> pairAndSingleRides = new ArrayList<>(allRides); // singles + pairs for rideMap
+		PostExtensionPruner interDegreePruner = new PostExtensionPruner(exMasConfig);
+		int nextRideIndex = allRides.size();
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
-													 requests, allRides, exMasConfig);
-			List<Ride> extended = extender.extendRides(currentDegreeRides, allRides.size());
+													 requests, pairAndSingleRides, exMasConfig);
+			List<Ride> extended = extender.extendRides(currentDegreeRides, nextRideIndex);
 
 			if (extended.isEmpty()) {
 				log.info("No extensions possible at degree {}. Stopping.", (degree + 1));
 				break;
 			}
 
+			// Apply inter-degree pruning to bound memory: prune before accumulating
+			int beforePrune = extended.size();
+			extended = interDegreePruner.prune(extended);
+			if (extended.size() < beforePrune) {
+				log.info("Inter-degree pruning at degree {}: {} -> {} rides",
+						degree + 1, beforePrune, extended.size());
+			}
+
+			nextRideIndex += beforePrune; // index space reserved for all generated rides
 			allRides.addAll(extended);
 			currentDegreeRides = extended;
 		}
@@ -197,7 +185,7 @@ public final class ExMasEngine {
 		// Phase 5: Stop-Based Ride Generation (HyperPool Stage 1)
 		// Only runs if enableStopBased = true
 		List<Ride> stopBasedRides = new ArrayList<>();
-		if (exMasConfig != null && exMasConfig.isEnableStopBased()) {
+		if (exMasConfig.isEnableStopBased()) {
 			log.info("");
 			log.info("PHASE 5: Stop-Based Ride Generation (HyperPool Stage 1)");
 			log.info("======================================================================");
@@ -211,7 +199,7 @@ public final class ExMasEngine {
 
 		// Phase 6: Hyper-Pooling (HyperPool Stage 2)
 		// Only runs if enableHyperPooling = true (and enableStopBased = true)
-		if (exMasConfig != null && exMasConfig.isEnableHyperPooling()) {
+		if (exMasConfig.isEnableHyperPooling()) {
 			if (!exMasConfig.isEnableStopBased()) {
 				log.warn("Hyper-pooling requires stop-based pooling to be enabled. Skipping Phase 6.");
 			} else {
@@ -244,7 +232,7 @@ public final class ExMasEngine {
 		}
 
 		// Final summary
-		if (exMasConfig != null && exMasConfig.isEnableStopBased()) {
+		if (exMasConfig.isEnableStopBased()) {
 			long d2dCount = allRides.stream().filter(r -> r.getVariant() == RideVariant.DOOR_TO_DOOR).count();
 			long s2sCount = allRides.stream().filter(r -> r.getVariant() == RideVariant.STOP_TO_STOP).count();
 			log.info("");
@@ -265,6 +253,23 @@ public final class ExMasEngine {
 			log.info("======================================================================");
 		}
 
+		return allRides;
+	}
+
+	/**
+	 * Log completion summary and return rides for early exit.
+	 */
+	private List<Ride> completeEarly(long algorithmStartTime, String reason) {
+		long totalElapsed = System.currentTimeMillis() - algorithmStartTime;
+		double totalSeconds = totalElapsed / 1000.0;
+		log.info("");
+		log.info("======================================================================");
+		log.info("ExMAS Algorithm Complete ({})", reason);
+		log.info("  Total rides: {}", allRides.size());
+		log.info("  Total time: {}s", String.format("%.1f", totalSeconds));
+		log.info("======================================================================");
+		log.info("");
+		network.logRoutingStatistics();
 		return allRides;
 	}
 
@@ -354,18 +359,6 @@ public final class ExMasEngine {
 		HyperPoolGenerator.StopRelocator stopRelocator = null;
 		if (exMasConfig.getHyperPoolEnableStopRelocation()) {
 			log.info("HyperPool: Stop relocation enabled (optimization, not in original ExMAS/HyperPool)");
-			Network matsimNetwork = network.getNetwork();
-			Set<String> allowedModes = Collections.singleton("car"); // Default to car mode
-			double maxLinkLength = Double.MAX_VALUE; // No link length filter
-			LinkCandidateFinder linkCandidateFinder = new LinkCandidateFinder(matsimNetwork, allowedModes, maxLinkLength);
-			StopRelocator externalRelocator = new StopRelocator(matsimNetwork, linkCandidateFinder, exMasConfig);
-
-			// Create adapter for StopRelocator interface
-			// The HyperPoolGenerator.StopRelocator interface requires:
-			// - areStopsNearby(stop1, stop2, proximityMeters)
-			// - findMergedStop(stop, existingStops, proximityMeters)
-			// - calculateRelocationDistance(originalStop, mergedStop)
-			// We use the external StopRelocator's methods where possible
 			stopRelocator = new HyperPoolGenerator.StopRelocator() {
 				@Override
 				public boolean areStopsNearby(
@@ -424,7 +417,7 @@ public final class ExMasEngine {
 	 * Keeps the shareability graph complete but reduces which pair rides we try to extend.
 	 */
 	private List<Ride> maybePrunePairRidesAfterGraph(List<Ride> pairRides) {
-		if (exMasConfig == null || pairRides.isEmpty()) {
+		if (pairRides.isEmpty()) {
 			return pairRides;
 		}
 		double scale = exMasConfig.getPruningDistanceSavingsLogScale();
