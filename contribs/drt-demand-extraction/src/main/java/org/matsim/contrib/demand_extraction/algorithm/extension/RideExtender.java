@@ -2,6 +2,7 @@ package org.matsim.contrib.demand_extraction.algorithm.extension;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -170,13 +171,11 @@ public final class RideExtender {
 	 * @return best validated ride for this set, or null if no valid ordering exists
 	 */
 	private Ride processSet(int[] newSet) {
-		// Resolve requests
 		DrtRequest[] setRequests = new DrtRequest[newSet.length];
 		for (int i = 0; i < newSet.length; i++) {
 			setRequests[i] = requestMap.get(newSet[i]);
 		}
 
-		// Duplicate person check
 		for (int i = 0; i < setRequests.length; i++) {
 			for (int j = i + 1; j < setRequests.length; j++) {
 				if (setRequests[i].getPaxId().equals(setRequests[j].getPaxId())) {
@@ -185,16 +184,19 @@ public final class RideExtender {
 			}
 		}
 
-		// Compute distance threshold for pruned enumeration
 		double maxAllowedRideDistance = computeMaxAllowedRideDistance(setRequests);
 
-		// Enumerate valid orderings (pruned by distance threshold)
 		List<OrderingEnumerator.Ordering> orderings = OrderingEnumerator.enumeratePruned(
 				newSet, graph, network, setRequests, maxAllowedRideDistance);
 
-		Ride bestRide = null;
-		double bestObjective = Double.MAX_VALUE;
+		if (orderings.isEmpty()) return null;
 
+		// Sort by ride distance (shortest first) — enables early exit
+		orderings.sort(Comparator.comparingDouble(OrderingEnumerator.Ordering::rideDistance));
+
+		// Try shortest ordering first. If it passes budget validation, it's the
+		// optimal ride for this set (shortest distance = best objective).
+		// If it fails, try next shortest, etc.
 		for (OrderingEnumerator.Ordering ord : orderings) {
 			int n = newSet.length;
 			DrtRequest[] originsOrdered = new DrtRequest[n];
@@ -210,22 +212,10 @@ public final class RideExtender {
 			Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
 			if (validated == null) continue;
 
-			// Debug assertion: enumeration guarantees distance threshold.
-			// Cumulative time tracking in enumeratePruned matches buildRideFromOrdering
-			// exactly, so accumulated distance == ride.getRideDistance().
-			assert maxAllowedRideDistance >= Double.MAX_VALUE / 2
-					|| validated.getRideDistance() <= maxAllowedRideDistance + 1e-3
-					: "Ride distance " + validated.getRideDistance()
-					  + " exceeds threshold " + maxAllowedRideDistance
-					  + " — enumeration/ride-building distance mismatch";
-
-			double obj = objectiveValue(validated);
-			if (obj < bestObjective) {
-				bestObjective = obj;
-				bestRide = validated;
-			}
+			// First valid ride is the best (sorted by distance = objective)
+			return validated;
 		}
-		return bestRide;
+		return null;
 	}
 
 	// --- Ride construction from explicit orderings ---

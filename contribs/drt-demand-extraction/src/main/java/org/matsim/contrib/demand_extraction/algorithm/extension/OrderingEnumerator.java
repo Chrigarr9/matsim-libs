@@ -42,8 +42,8 @@ public final class OrderingEnumerator {
 		boolean reverseOnly() { return !forwardExists() && reverseExists(); }
 	}
 
-	/** A valid (origin, destination) ordering as index permutations into the requests array */
-	public record Ordering(int[] originPerm, int[] destPerm) {}
+	/** A valid ordering with its total ride distance (from cumulative segment routing). */
+	public record Ordering(int[] originPerm, int[] destPerm, double rideDistance) {}
 
 	/**
 	 * Enumerate all valid orderings for the given request set.
@@ -65,7 +65,7 @@ public final class OrderingEnumerator {
 		for (int[] origPerm : originPerms) {
 			List<int[]> destPerms = enumerateDestOrderings(n, origPerm, pairs);
 			for (int[] destPerm : destPerms) {
-				result.add(new Ordering(origPerm, destPerm));
+				result.add(new Ordering(origPerm, destPerm, Double.NaN));
 			}
 		}
 		return result;
@@ -118,9 +118,12 @@ public final class OrderingEnumerator {
 			}
 		}
 
+		// Tightening bound: starts at maxRideDistance, shrinks as shorter orderings are found.
+		double[] bestFoundDist = { maxRideDistance };
+
 		List<Ordering> result = new ArrayList<>();
 		enumerateOriginsPruned(origAdj, n, pairs, network, requests,
-				maxRideDistance, new boolean[n], new int[n], 0,
+				maxRideDistance, bestFoundDist, new boolean[n], new int[n], 0,
 				0.0, 0.0, result);
 		return result;
 	}
@@ -128,18 +131,17 @@ public final class OrderingEnumerator {
 	private static void enumerateOriginsPruned(
 			Boolean[][] adj, int n, PairInfo[] pairs,
 			MatsimNetworkCache network, DrtRequest[] requests,
-			double maxRideDistance,
+			double maxRideDistance, double[] bestFoundDist,
 			boolean[] used, int[] perm, int depth,
 			double partialDist, double currentTime,
 			List<Ordering> result) {
 
 		if (depth == n) {
 			enumerateDestinationsPruned(n, perm, pairs, network, requests,
-					maxRideDistance, partialDist, currentTime, result);
+					maxRideDistance, bestFoundDist, partialDist, currentTime, result);
 			return;
 		}
 
-		// Collect valid candidates (predecessors satisfied in topo sort)
 		List<Integer> candidates = new ArrayList<>();
 		for (int c = 0; c < n; c++) {
 			if (used[c]) continue;
@@ -154,38 +156,33 @@ public final class OrderingEnumerator {
 		}
 
 		if (depth == 0) {
-			// First origin: no segment to previous stop. Try each candidate.
 			for (int c : candidates) {
 				used[c] = true;
 				perm[0] = c;
 				enumerateOriginsPruned(adj, n, pairs, network, requests,
-						maxRideDistance, used, perm, 1,
+						maxRideDistance, bestFoundDist, used, perm, 1,
 						0.0, requests[c].getRequestTime(), result);
 				used[c] = false;
 			}
 			return;
 		}
 
-		// Compute routed segments from previous origin to each candidate
 		Id<Link> prevLink = requests[perm[depth - 1]].originLinkId;
 		Map<Integer, TravelSegment> segMap = new HashMap<>();
 		for (int c : candidates) {
 			segMap.put(c, network.getSegment(prevLink, requests[c].originLinkId, currentTime));
 		}
-
-		// Sort candidates by routed distance (unreachable = infinity, sorts to end)
 		candidates.sort(Comparator.comparingDouble(c -> segMap.get(c).getDistance()));
 
-		// Iterate with break on threshold
 		for (int c : candidates) {
 			TravelSegment seg = segMap.get(c);
 			double newPartialDist = partialDist + seg.getDistance();
-			if (newPartialDist > maxRideDistance) break; // sorted — all remaining farther
+			if (newPartialDist > bestFoundDist[0]) break;
 
 			used[c] = true;
 			perm[depth] = c;
 			enumerateOriginsPruned(adj, n, pairs, network, requests,
-					maxRideDistance, used, perm, depth + 1,
+					maxRideDistance, bestFoundDist, used, perm, depth + 1,
 					newPartialDist, currentTime + seg.getTravelTime(), result);
 			used[c] = false;
 		}
@@ -194,11 +191,10 @@ public final class OrderingEnumerator {
 	private static void enumerateDestinationsPruned(
 			int n, int[] origPerm, PairInfo[] pairs,
 			MatsimNetworkCache network, DrtRequest[] requests,
-			double maxRideDistance,
+			double maxRideDistance, double[] bestFoundDist,
 			double partialDist, double currentTime,
 			List<Ordering> result) {
 
-		// Build destination adjacency (same logic as enumerateDestOrderings)
 		int[] origPos = new int[n];
 		for (int i = 0; i < n; i++) origPos[origPerm[i]] = i;
 
@@ -219,34 +215,35 @@ public final class OrderingEnumerator {
 					if (aBeforeB) { adj[b][a] = true; adj[a][b] = false; }
 					else          { adj[a][b] = true; adj[b][a] = false; }
 				} else {
-					return; // infeasible
+					return;
 				}
 			}
 		}
 
-		// Previous link = last origin's origin link (transition point)
 		Id<Link> prevLink = requests[origPerm[n - 1]].originLinkId;
 
 		enumerateDestTopoSortPruned(adj, n, origPerm, network, requests,
-				maxRideDistance, new boolean[n], new int[n], 0,
+				maxRideDistance, bestFoundDist, new boolean[n], new int[n], 0,
 				partialDist, currentTime, prevLink, result);
 	}
 
 	private static void enumerateDestTopoSortPruned(
 			Boolean[][] adj, int n, int[] origPerm,
 			MatsimNetworkCache network, DrtRequest[] requests,
-			double maxRideDistance,
+			double maxRideDistance, double[] bestFoundDist,
 			boolean[] used, int[] perm, int depth,
 			double partialDist, double currentTime,
 			Id<Link> prevLinkId,
 			List<Ordering> result) {
 
 		if (depth == n) {
-			result.add(new Ordering(origPerm.clone(), perm.clone()));
+			if (partialDist < bestFoundDist[0]) {
+				bestFoundDist[0] = partialDist;
+			}
+			result.add(new Ordering(origPerm.clone(), perm.clone(), partialDist));
 			return;
 		}
 
-		// Collect valid candidates (predecessors satisfied)
 		List<Integer> candidates = new ArrayList<>();
 		for (int c = 0; c < n; c++) {
 			if (used[c]) continue;
@@ -260,7 +257,6 @@ public final class OrderingEnumerator {
 			if (valid) candidates.add(c);
 		}
 
-		// Compute routed segments and sort by distance
 		Map<Integer, TravelSegment> segMap = new HashMap<>();
 		for (int c : candidates) {
 			segMap.put(c, network.getSegment(prevLinkId,
@@ -268,16 +264,15 @@ public final class OrderingEnumerator {
 		}
 		candidates.sort(Comparator.comparingDouble(c -> segMap.get(c).getDistance()));
 
-		// Iterate with break on threshold
 		for (int c : candidates) {
 			TravelSegment seg = segMap.get(c);
 			double newPartialDist = partialDist + seg.getDistance();
-			if (newPartialDist > maxRideDistance) break;
+			if (newPartialDist > bestFoundDist[0]) break;
 
 			used[c] = true;
 			perm[depth] = c;
 			enumerateDestTopoSortPruned(adj, n, origPerm, network, requests,
-					maxRideDistance, used, perm, depth + 1,
+					maxRideDistance, bestFoundDist, used, perm, depth + 1,
 					newPartialDist, currentTime + seg.getTravelTime(),
 					requests[c].destinationLinkId, result);
 			used[c] = false;
