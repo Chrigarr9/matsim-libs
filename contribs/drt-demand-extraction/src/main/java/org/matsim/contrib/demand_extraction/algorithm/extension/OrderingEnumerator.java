@@ -1,0 +1,210 @@
+package org.matsim.contrib.demand_extraction.algorithm.extension;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
+
+import it.unimi.dsi.fastutil.ints.IntList;
+
+/**
+ * Enumerates all valid (origin ordering, destination ordering) combinations
+ * for a request set, using pairwise FIFO/LIFO constraints from pair rides.
+ *
+ * <p>Origin ordering is constrained by pair ride DIRECTIONS: if only pair(A,B)
+ * exists (A first), then O_A must come before O_B. If both directions exist,
+ * either origin order is valid for that pair.
+ *
+ * <p>Destination ordering is constrained by pair ride KINDS within the chosen
+ * direction: FIFO → D_A before D_B; LIFO → D_B before D_A; both → no constraint.
+ *
+ * <p>Enumeration uses topological sort of constraint DAGs. Typical counts:
+ * degree 3: 2-6 orderings, degree 4: 3-18, degree 5: 4-40.
+ */
+public final class OrderingEnumerator {
+
+	/** Pairwise constraint: which FIFO/LIFO pair ride kinds exist in each direction */
+	record PairInfo(
+			boolean forwardFifo, boolean forwardLifo,
+			boolean reverseFifo, boolean reverseLifo
+	) {
+		boolean forwardExists() { return forwardFifo || forwardLifo; }
+		boolean reverseExists() { return reverseFifo || reverseLifo; }
+		boolean forwardOnly() { return forwardExists() && !reverseExists(); }
+		boolean reverseOnly() { return !forwardExists() && reverseExists(); }
+	}
+
+	/** A valid (origin, destination) ordering as index permutations into the requests array */
+	public record Ordering(int[] originPerm, int[] destPerm) {}
+
+	/**
+	 * Enumerate all valid orderings for the given request set.
+	 *
+	 * @param requestIndices sorted request indices for the set
+	 * @param graph the shareability graph
+	 * @return list of valid orderings, or empty if set is infeasible (disconnected pair)
+	 */
+	public static List<Ordering> enumerate(int[] requestIndices, ShareabilityGraph graph) {
+		int n = requestIndices.length;
+
+		PairInfo[] pairs = extractConstraints(requestIndices, n, graph);
+		if (pairs == null) return List.of();
+
+		List<Ordering> result = new ArrayList<>();
+
+		List<int[]> originPerms = enumerateOriginOrderings(n, pairs);
+
+		for (int[] origPerm : originPerms) {
+			List<int[]> destPerms = enumerateDestOrderings(n, origPerm, pairs);
+			for (int[] destPerm : destPerms) {
+				result.add(new Ordering(origPerm, destPerm));
+			}
+		}
+		return result;
+	}
+
+	// --- Constraint extraction ---
+
+	private static PairInfo[] extractConstraints(int[] requestIndices, int n, ShareabilityGraph graph) {
+		PairInfo[] pairs = new PairInfo[n * (n - 1) / 2];
+		int idx = 0;
+
+		for (int a = 0; a < n; a++) {
+			for (int b = a + 1; b < n; b++) {
+				int reqA = requestIndices[a];
+				int reqB = requestIndices[b];
+
+				IntList[] fwd = graph.getEdgesWithKinds(reqA, reqB);
+				boolean fwdFifo = false, fwdLifo = false;
+				if (fwd[0].size() > 0) {
+					for (int k = 0; k < fwd[1].size(); k++) {
+						if (fwd[1].getInt(k) == ShareabilityGraph.KIND_FIFO) fwdFifo = true;
+						else fwdLifo = true;
+					}
+				}
+
+				IntList[] rev = graph.getEdgesWithKinds(reqB, reqA);
+				boolean revFifo = false, revLifo = false;
+				if (rev[0].size() > 0) {
+					for (int k = 0; k < rev[1].size(); k++) {
+						if (rev[1].getInt(k) == ShareabilityGraph.KIND_FIFO) revFifo = true;
+						else revLifo = true;
+					}
+				}
+
+				if (!(fwdFifo || fwdLifo || revFifo || revLifo)) {
+					return null;
+				}
+
+				pairs[idx++] = new PairInfo(fwdFifo, fwdLifo, revFifo, revLifo);
+			}
+		}
+		return pairs;
+	}
+
+	static PairInfo lookup(PairInfo[] pairs, int n, int a, int b) {
+		return pairs[a * (2 * n - a - 1) / 2 + (b - a - 1)];
+	}
+
+	// --- Origin ordering enumeration ---
+
+	private static List<int[]> enumerateOriginOrderings(int n, PairInfo[] pairs) {
+		Boolean[][] adj = new Boolean[n][n];
+		for (int a = 0; a < n; a++) {
+			for (int b = a + 1; b < n; b++) {
+				PairInfo p = lookup(pairs, n, a, b);
+				if (p.forwardOnly()) {
+					adj[a][b] = true;
+					adj[b][a] = false;
+				} else if (p.reverseOnly()) {
+					adj[b][a] = true;
+					adj[a][b] = false;
+				}
+			}
+		}
+
+		List<int[]> result = new ArrayList<>();
+		enumerateTopoSorts(adj, n, new boolean[n], new int[n], 0, result);
+		return result;
+	}
+
+	// --- Destination ordering enumeration ---
+
+	private static List<int[]> enumerateDestOrderings(int n, int[] origPerm, PairInfo[] pairs) {
+		int[] origPos = new int[n];
+		for (int i = 0; i < n; i++) origPos[origPerm[i]] = i;
+
+		Boolean[][] adj = new Boolean[n][n];
+		for (int a = 0; a < n; a++) {
+			for (int b = a + 1; b < n; b++) {
+				PairInfo p = lookup(pairs, n, a, b);
+
+				boolean aBeforeB = origPos[a] < origPos[b];
+				boolean hasFifo, hasLifo;
+
+				if (aBeforeB) {
+					hasFifo = p.forwardFifo();
+					hasLifo = p.forwardLifo();
+				} else {
+					hasFifo = p.reverseFifo();
+					hasLifo = p.reverseLifo();
+				}
+
+				if (hasFifo && hasLifo) {
+					// no constraint
+				} else if (hasFifo) {
+					if (aBeforeB) {
+						adj[a][b] = true;
+						adj[b][a] = false;
+					} else {
+						adj[b][a] = true;
+						adj[a][b] = false;
+					}
+				} else if (hasLifo) {
+					if (aBeforeB) {
+						adj[b][a] = true;
+						adj[a][b] = false;
+					} else {
+						adj[a][b] = true;
+						adj[b][a] = false;
+					}
+				} else {
+					return List.of();
+				}
+			}
+		}
+
+		List<int[]> result = new ArrayList<>();
+		enumerateTopoSorts(adj, n, new boolean[n], new int[n], 0, result);
+		return result;
+	}
+
+	// --- Topological sort enumeration ---
+
+	private static void enumerateTopoSorts(Boolean[][] adj, int n, boolean[] used, int[] perm, int depth,
+										   List<int[]> result) {
+		if (depth == n) {
+			result.add(perm.clone());
+			return;
+		}
+
+		for (int candidate = 0; candidate < n; candidate++) {
+			if (used[candidate]) continue;
+
+			boolean valid = true;
+			for (int other = 0; other < n; other++) {
+				if (other == candidate || used[other]) continue;
+				if (adj[other][candidate] != null && adj[other][candidate]) {
+					valid = false;
+					break;
+				}
+			}
+			if (!valid) continue;
+
+			used[candidate] = true;
+			perm[depth] = candidate;
+			enumerateTopoSorts(adj, n, used, perm, depth + 1, result);
+			used[candidate] = false;
+		}
+	}
+}

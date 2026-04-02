@@ -128,35 +128,27 @@ public final class ExMasEngine {
 				graph.getEdgeCount(), graph.getNodeCount(), String.format("%.1f", graphElapsed / 1000.0));
 
 		// Optional: prune which degree-2 rides are used as extension bases AFTER the shareability graph
-		// is constructed. This keeps the shareability graph complete (built from all pair rides) and keeps
-		// full pair-ride support available via allRides/rideMap. It only reduces which pair rides we try
-		// to extend to higher degrees.
+		// is constructed. This keeps the shareability graph complete (built from all pair rides).
+		// It only reduces which pair rides we try to extend to higher degrees.
 		List<Ride> currentDegreeRides = maybePrunePairRidesAfterGraph(pairRides);
 
         // Phase 4: Iteratively extend rides with budget validation
-		// RideExtender only needs pair rides in rideMap (for getPairRides/tryExtend insertion ordering).
-		// Higher-degree rides are NOT needed in rideMap, so we pass only pairRides + singles.
-		// Post-extension pruning is applied per degree to bound memory: only pruned rides are
-		// kept in allRides and used as bases for the next degree.
+		// The ordering-based RideExtender enumerates valid orderings directly from
+		// pairwise constraints in the shareability graph — no rideMap needed.
+		// It returns top-1 per set, so MaxPerSet pruning is redundant.
+		// Percentile pruning across sets is still applied to bound memory.
 		log.info("");
 		log.info("PHASE 4: Iterative Ride Extension");
 		log.info("======================================================================");
-		List<Ride> pairAndSingleRides = new ArrayList<>(allRides); // singles + pairs for rideMap
-		// Inter-degree pruning to bound memory during extension.
-		// MaxPerSet: collapse variants. Percentile: drop low-value sets.
-		// The inter-degree percentile is gentler than the final percentile (keep top 50%
-		// to preserve base diversity) while the final P90/P95 in DemandExtractionListener
-		// does the aggressive compression after ALL degrees complete.
-		int interDegreeMaxPerSet = exMasConfig.getPostExtensionMaxPerSet();
 		double finalKeepTop = exMasConfig.getPostExtensionKeepTopFraction();
 		// Inter-degree: keep top 50% (sqrt of final fraction, minimum 0.5)
-		// This is gentler than the final filter to preserve base diversity for higher degrees
-		double interDegreeKeepTop = (interDegreeMaxPerSet > 0 || finalKeepTop < 1.0)
+		// Gentler than final P90/P95 to preserve base diversity for higher degrees
+		double interDegreeKeepTop = finalKeepTop < 1.0
 				? Math.max(0.5, Math.sqrt(finalKeepTop)) : 1.0;
 		int nextRideIndex = allRides.size();
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
-													 requests, pairAndSingleRides, exMasConfig);
+													 requests, exMasConfig);
 			List<Ride> extended = extender.extendRides(currentDegreeRides, nextRideIndex);
 
 			if (extended.isEmpty()) {
@@ -164,26 +156,16 @@ public final class ExMasEngine {
 				break;
 			}
 
-			// Inter-degree pruning to bound memory:
-			// 1. MaxPerSet: collapse to best variant per request set
-			// 2. Gentle percentile: drop bottom half of sets by savings (preserves base diversity)
+			// Inter-degree percentile pruning to bound memory:
+			// Drop bottom sets by savings (preserves base diversity for higher degrees)
 			int generatedCount = extended.size();
-			if (interDegreeMaxPerSet > 0 || interDegreeKeepTop < 1.0) {
-				// Apply MaxPerSet first
-				if (interDegreeMaxPerSet > 0) {
-					PostExtensionPruner mps = new PostExtensionPruner(interDegreeMaxPerSet);
-					extended = mps.prune(extended);
-				}
-				// Apply gentle percentile
-				if (interDegreeKeepTop < 1.0 && extended.size() > 1000) {
-					PostExtensionPruner pct = new PostExtensionPruner(0, interDegreeKeepTop);
-					extended = pct.prune(extended);
-				}
+			if (interDegreeKeepTop < 1.0 && extended.size() > 1000) {
+				PostExtensionPruner pct = new PostExtensionPruner(0, interDegreeKeepTop);
+				extended = pct.prune(extended);
 				if (extended.size() < generatedCount) {
-					log.info("Inter-degree pruning at degree {}: {} -> {} rides (maxPerSet={}, keepTop={})",
+					log.info("Inter-degree pruning at degree {}: {} -> {} rides (keepTop={})",
 							degree + 1, generatedCount, extended.size(),
-							interDegreeMaxPerSet > 0 ? interDegreeMaxPerSet : "off",
-							interDegreeKeepTop < 1.0 ? String.format("%.2f", interDegreeKeepTop) : "off");
+							String.format("%.2f", interDegreeKeepTop));
 				}
 			}
 
