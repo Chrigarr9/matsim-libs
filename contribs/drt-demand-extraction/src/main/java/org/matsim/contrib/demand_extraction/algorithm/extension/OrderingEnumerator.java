@@ -237,9 +237,9 @@ public final class OrderingEnumerator {
 			List<Ordering> result) {
 
 		if (depth == n) {
-			if (partialDist < bestFoundDist[0]) {
-				bestFoundDist[0] = partialDist;
-			}
+			// Note: do NOT tighten bestFoundDist here. The shortest ordering might
+			// fail budget validation, and we need longer orderings as fallbacks.
+			// The sort + early exit in processSet handles the optimization.
 			result.add(new Ordering(origPerm.clone(), perm.clone(), partialDist));
 			return;
 		}
