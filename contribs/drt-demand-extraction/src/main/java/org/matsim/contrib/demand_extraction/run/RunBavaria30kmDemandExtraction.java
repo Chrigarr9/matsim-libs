@@ -710,7 +710,7 @@ public class RunBavaria30kmDemandExtraction {
 		// Degree 2 pairs are pruned as extension BASES only (after shareability graph
 		// construction). Pruned pairs remain in allRides as pair support for tryExtend
 		// validation, so higher-degree rides can still be discovered via alternate pair paths.
-		exMasConfig.setPruningDistanceSavingsLogScale(0.25);
+		exMasConfig.setPruningDistanceSavingsLogScale(0.15);
 		exMasConfig.setPruningDistanceSavingsMax(0.75);
 		exMasConfig.setPruningDistanceSavingsMinDegree(2); // prune paired rides after graph construction
 		exMasConfig.setPruningRankingObjective("rideDistance"); // rideDistance | passengerTravelTime | passengerUtility

@@ -185,8 +185,12 @@ public final class RideExtender {
 			}
 		}
 
-		// Enumerate valid orderings
-		List<OrderingEnumerator.Ordering> orderings = OrderingEnumerator.enumerate(newSet, graph);
+		// Compute distance threshold for pruned enumeration
+		double maxAllowedRideDistance = computeMaxAllowedRideDistance(setRequests);
+
+		// Enumerate valid orderings (pruned by distance threshold)
+		List<OrderingEnumerator.Ordering> orderings = OrderingEnumerator.enumeratePruned(
+				newSet, graph, network, setRequests, maxAllowedRideDistance);
 
 		Ride bestRide = null;
 		double bestObjective = Double.MAX_VALUE;
@@ -206,8 +210,14 @@ public final class RideExtender {
 			Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
 			if (validated == null) continue;
 
-			if (exMasConfig != null && exMasConfig.getPruningDistanceSavingsLogScale() >= 0
-					&& !passesDistanceSavingsPruning(validated)) continue;
+			// Debug assertion: enumeration guarantees distance threshold.
+			// Cumulative time tracking in enumeratePruned matches buildRideFromOrdering
+			// exactly, so accumulated distance == ride.getRideDistance().
+			assert maxAllowedRideDistance >= Double.MAX_VALUE / 2
+					|| validated.getRideDistance() <= maxAllowedRideDistance + 1e-3
+					: "Ride distance " + validated.getRideDistance()
+					  + " exceeds threshold " + maxAllowedRideDistance
+					  + " — enumeration/ride-building distance mismatch";
 
 			double obj = objectiveValue(validated);
 			if (obj < bestObjective) {
@@ -409,6 +419,32 @@ public final class RideExtender {
 		double requiredSaving = requiredSavingForDegree(degree, scale, maxSaving, minDegree);
 		double maxRideDistance = (1.0 - requiredSaving) * sumDistances;
 		return ride.getRideDistance() <= maxRideDistance;
+	}
+
+	/**
+	 * Compute the maximum allowed ride distance for a request set based on
+	 * the distance savings pruning threshold.
+	 *
+	 * @return max ride distance in meters, or Double.MAX_VALUE if pruning disabled
+	 */
+	double computeMaxAllowedRideDistance(DrtRequest[] setRequests) {
+		if (exMasConfig == null || exMasConfig.getPruningDistanceSavingsLogScale() < 0) {
+			return Double.MAX_VALUE;
+		}
+		int degree = setRequests.length;
+		int minDegree = Math.max(2, exMasConfig.getPruningDistanceSavingsMinDegree());
+		if (degree < minDegree) return Double.MAX_VALUE;
+
+		double scale = exMasConfig.getPruningDistanceSavingsLogScale();
+		double maxSaving = exMasConfig.getPruningDistanceSavingsMax();
+		if (!(maxSaving >= 0)) maxSaving = 0.0;
+		maxSaving = Math.min(0.99, maxSaving);
+
+		double requiredSaving = requiredSavingForDegree(degree, scale, maxSaving, minDegree);
+		double sumDirectDistances = 0;
+		for (DrtRequest r : setRequests) sumDirectDistances += r.directDistance;
+
+		return (1.0 - requiredSaving) * sumDirectDistances;
 	}
 
 	private static double requiredSavingForDegree(int degree, double scale, double maxSaving, int minDegree) {

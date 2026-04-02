@@ -1,9 +1,17 @@
 package org.matsim.contrib.demand_extraction.algorithm.extension;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
+import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.network.Link;
+import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
+import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
 import it.unimi.dsi.fastutil.ints.IntList;
 
@@ -61,6 +69,219 @@ public final class OrderingEnumerator {
 			}
 		}
 		return result;
+	}
+
+	/**
+	 * Enumerate valid orderings with distance-based branch pruning.
+	 *
+	 * <p>At each recursion depth, candidates are sorted by routed segment distance
+	 * from the previous stop. The accumulated partial ride distance is tracked with
+	 * cumulative departure times (matching {@code RideExtender.buildRideFromOrdering}
+	 * exactly). When partial distance exceeds the threshold, all remaining sorted
+	 * candidates are pruned via {@code break}.
+	 *
+	 * <p>Provably complete: any ordering whose total ride distance &le; threshold is
+	 * found. Proof: partial distance is monotonically increasing, so if it exceeds
+	 * threshold at step k, total distance (adding more steps) also exceeds.
+	 *
+	 * @param requestIndices sorted request indices for the set
+	 * @param graph the shareability graph
+	 * @param network network cache for routed segment lookups
+	 * @param requests DrtRequest objects (requests[i] corresponds to requestIndices[i])
+	 * @param maxRideDistance maximum allowed total ride distance (meters)
+	 * @return list of valid orderings within distance threshold
+	 */
+	public static List<Ordering> enumeratePruned(
+			int[] requestIndices, ShareabilityGraph graph,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			double maxRideDistance) {
+
+		// Delegate to unpruned enumeration if pruning is disabled
+		if (maxRideDistance >= Double.MAX_VALUE / 2) {
+			return enumerate(requestIndices, graph);
+		}
+
+		int n = requestIndices.length;
+		PairInfo[] pairs = extractConstraints(requestIndices, n, graph);
+		if (pairs == null) return List.of();
+
+		// Build origin adjacency matrix (same logic as enumerateOriginOrderings)
+		Boolean[][] origAdj = new Boolean[n][n];
+		for (int a = 0; a < n; a++) {
+			for (int b = a + 1; b < n; b++) {
+				PairInfo p = lookup(pairs, n, a, b);
+				if (p.forwardOnly()) {
+					origAdj[a][b] = true; origAdj[b][a] = false;
+				} else if (p.reverseOnly()) {
+					origAdj[b][a] = true; origAdj[a][b] = false;
+				}
+			}
+		}
+
+		List<Ordering> result = new ArrayList<>();
+		enumerateOriginsPruned(origAdj, n, pairs, network, requests,
+				maxRideDistance, new boolean[n], new int[n], 0,
+				0.0, 0.0, result);
+		return result;
+	}
+
+	private static void enumerateOriginsPruned(
+			Boolean[][] adj, int n, PairInfo[] pairs,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			double maxRideDistance,
+			boolean[] used, int[] perm, int depth,
+			double partialDist, double currentTime,
+			List<Ordering> result) {
+
+		if (depth == n) {
+			enumerateDestinationsPruned(n, perm, pairs, network, requests,
+					maxRideDistance, partialDist, currentTime, result);
+			return;
+		}
+
+		// Collect valid candidates (predecessors satisfied in topo sort)
+		List<Integer> candidates = new ArrayList<>();
+		for (int c = 0; c < n; c++) {
+			if (used[c]) continue;
+			boolean valid = true;
+			for (int other = 0; other < n; other++) {
+				if (other == c || used[other]) continue;
+				if (adj[other][c] != null && adj[other][c]) {
+					valid = false; break;
+				}
+			}
+			if (valid) candidates.add(c);
+		}
+
+		if (depth == 0) {
+			// First origin: no segment to previous stop. Try each candidate.
+			for (int c : candidates) {
+				used[c] = true;
+				perm[0] = c;
+				enumerateOriginsPruned(adj, n, pairs, network, requests,
+						maxRideDistance, used, perm, 1,
+						0.0, requests[c].getRequestTime(), result);
+				used[c] = false;
+			}
+			return;
+		}
+
+		// Compute routed segments from previous origin to each candidate
+		Id<Link> prevLink = requests[perm[depth - 1]].originLinkId;
+		Map<Integer, TravelSegment> segMap = new HashMap<>();
+		for (int c : candidates) {
+			segMap.put(c, network.getSegment(prevLink, requests[c].originLinkId, currentTime));
+		}
+
+		// Sort candidates by routed distance (unreachable = infinity, sorts to end)
+		candidates.sort(Comparator.comparingDouble(c -> segMap.get(c).getDistance()));
+
+		// Iterate with break on threshold
+		for (int c : candidates) {
+			TravelSegment seg = segMap.get(c);
+			double newPartialDist = partialDist + seg.getDistance();
+			if (newPartialDist > maxRideDistance) break; // sorted — all remaining farther
+
+			used[c] = true;
+			perm[depth] = c;
+			enumerateOriginsPruned(adj, n, pairs, network, requests,
+					maxRideDistance, used, perm, depth + 1,
+					newPartialDist, currentTime + seg.getTravelTime(), result);
+			used[c] = false;
+		}
+	}
+
+	private static void enumerateDestinationsPruned(
+			int n, int[] origPerm, PairInfo[] pairs,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			double maxRideDistance,
+			double partialDist, double currentTime,
+			List<Ordering> result) {
+
+		// Build destination adjacency (same logic as enumerateDestOrderings)
+		int[] origPos = new int[n];
+		for (int i = 0; i < n; i++) origPos[origPerm[i]] = i;
+
+		Boolean[][] adj = new Boolean[n][n];
+		for (int a = 0; a < n; a++) {
+			for (int b = a + 1; b < n; b++) {
+				PairInfo p = lookup(pairs, n, a, b);
+				boolean aBeforeB = origPos[a] < origPos[b];
+				boolean hasFifo = aBeforeB ? p.forwardFifo() : p.reverseFifo();
+				boolean hasLifo = aBeforeB ? p.forwardLifo() : p.reverseLifo();
+
+				if (hasFifo && hasLifo) {
+					// no constraint
+				} else if (hasFifo) {
+					if (aBeforeB) { adj[a][b] = true; adj[b][a] = false; }
+					else          { adj[b][a] = true; adj[a][b] = false; }
+				} else if (hasLifo) {
+					if (aBeforeB) { adj[b][a] = true; adj[a][b] = false; }
+					else          { adj[a][b] = true; adj[b][a] = false; }
+				} else {
+					return; // infeasible
+				}
+			}
+		}
+
+		// Previous link = last origin's origin link (transition point)
+		Id<Link> prevLink = requests[origPerm[n - 1]].originLinkId;
+
+		enumerateDestTopoSortPruned(adj, n, origPerm, network, requests,
+				maxRideDistance, new boolean[n], new int[n], 0,
+				partialDist, currentTime, prevLink, result);
+	}
+
+	private static void enumerateDestTopoSortPruned(
+			Boolean[][] adj, int n, int[] origPerm,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			double maxRideDistance,
+			boolean[] used, int[] perm, int depth,
+			double partialDist, double currentTime,
+			Id<Link> prevLinkId,
+			List<Ordering> result) {
+
+		if (depth == n) {
+			result.add(new Ordering(origPerm.clone(), perm.clone()));
+			return;
+		}
+
+		// Collect valid candidates (predecessors satisfied)
+		List<Integer> candidates = new ArrayList<>();
+		for (int c = 0; c < n; c++) {
+			if (used[c]) continue;
+			boolean valid = true;
+			for (int other = 0; other < n; other++) {
+				if (other == c || used[other]) continue;
+				if (adj[other][c] != null && adj[other][c]) {
+					valid = false; break;
+				}
+			}
+			if (valid) candidates.add(c);
+		}
+
+		// Compute routed segments and sort by distance
+		Map<Integer, TravelSegment> segMap = new HashMap<>();
+		for (int c : candidates) {
+			segMap.put(c, network.getSegment(prevLinkId,
+					requests[c].destinationLinkId, currentTime));
+		}
+		candidates.sort(Comparator.comparingDouble(c -> segMap.get(c).getDistance()));
+
+		// Iterate with break on threshold
+		for (int c : candidates) {
+			TravelSegment seg = segMap.get(c);
+			double newPartialDist = partialDist + seg.getDistance();
+			if (newPartialDist > maxRideDistance) break;
+
+			used[c] = true;
+			perm[depth] = c;
+			enumerateDestTopoSortPruned(adj, n, origPerm, network, requests,
+					maxRideDistance, used, perm, depth + 1,
+					newPartialDist, currentTime + seg.getTravelTime(),
+					requests[c].destinationLinkId, result);
+			used[c] = false;
+		}
 	}
 
 	// --- Constraint extraction ---
