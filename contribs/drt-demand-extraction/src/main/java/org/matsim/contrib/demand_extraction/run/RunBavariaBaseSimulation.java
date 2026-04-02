@@ -316,7 +316,7 @@ public class RunBavariaBaseSimulation {
 		// Car uses network routing. All other modes use teleportation.
 		// Eqasim mode names (bicycle, car_passenger) are gone — all legs reset to walk,
 		// SubtourModeChoice assigns standard modes (car, bike, pt, walk).
-		config.routing().setNetworkModes(java.util.List.of("car"));
+		config.routing().setNetworkModes(java.util.List.of("car", "ride"));
 
 		// Teleportation speeds matching Kelheim v3.0 config (NOT MATSim defaults!)
 		// MATSim defaults are too fast: bike 4.17 m/s (15 km/h), walk 1.39 m/s (5 km/h)
@@ -364,9 +364,11 @@ public class RunBavariaBaseSimulation {
 		car.setDailyMonetaryConstant(-5.3);
 		scoring.addModeParams(car);
 
-		// Ride (= car_passenger in eqasim)
-		ModeParams ride = new ModeParams("car_passenger");
-		ride.setConstant(-0.4487);
+		// Ride (= car_passenger in eqasim) — available for everyone in SubtourModeChoice,
+		// controlled by high margUtilOfTraveling (-12.0/hr) and negative ASC.
+		// Not chain-based: you don't need to "bring the ride back".
+		ModeParams ride = new ModeParams(TransportMode.ride);
+		ride.setConstant(ascOverrides.getOrDefault("ride", -0.4487));
 		ride.setMarginalUtilityOfTraveling(-12.0);
 		ride.setMarginalUtilityOfDistance(0.0);
 		ride.setMonetaryDistanceRate(-2.0E-4);
@@ -499,11 +501,10 @@ public class RunBavariaBaseSimulation {
 		subtourModeChoice.setWeight(dmcStartRate);
 		config.replanning().addStrategySettings(subtourModeChoice);
 
-		// SubtourModeChoice: base modes only (no DRT)
-		// Use MATSim-standard mode names (bike not bicycle, ride not car_passenger)
-		// that match registered routing modules
-		// No "ride" — it's not freely choosable (requires someone to drive you)
-		config.subtourModeChoice().setModes(new String[]{"car", "pt", "bike", "walk"});
+		// SubtourModeChoice: base modes including ride (matching Kelheim v3.0)
+		// ride is not chain-based — you don't need to bring the vehicle back
+		// The high margUtilOfTraveling (-12.0/hr) and negative ASC control ride share
+		config.subtourModeChoice().setModes(new String[]{"car", "pt", "bike", "walk", "ride"});
 		config.subtourModeChoice().setChainBasedModes(new String[]{"car", "bike"});
 		config.subtourModeChoice().setConsiderCarAvailability(true);
 		config.subtourModeChoice().setBehavior(

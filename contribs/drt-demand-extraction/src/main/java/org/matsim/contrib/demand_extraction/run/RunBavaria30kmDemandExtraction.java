@@ -90,6 +90,7 @@ public class RunBavaria30kmDemandExtraction {
 		double tripFilterRadiusKm = 0.0; // km, 0 = disabled (trip-level: O+D both inside)
 		String travelTimesFile = null; // path to pre-computed travel_times.tsv
 		boolean noPruning = false; // disable all pruning (for baseline comparison)
+		boolean noPredecessors = false; // disable predecessor/successor + Shapley calculation
 		int postExtMaxPerSet = 0;
 		double postExtKeepTop = 1.0;
 		int maxDegree = 16;
@@ -118,6 +119,7 @@ public class RunBavaria30kmDemandExtraction {
 				case "--trip-filter-radius" -> tripFilterRadiusKm = Double.parseDouble(args[++i]);
 				case "--travel-times" -> travelTimesFile = args[++i];
 				case "--no-pruning" -> noPruning = true;
+				case "--no-predecessors" -> noPredecessors = true;
 				case "--post-ext-max-per-set" -> postExtMaxPerSet = Integer.parseInt(args[++i]);
 				case "--post-ext-keep-top" -> postExtKeepTop = Double.parseDouble(args[++i]);
 				case "--max-degree" -> maxDegree = Integer.parseInt(args[++i]);
@@ -184,7 +186,7 @@ public class RunBavaria30kmDemandExtraction {
 
 		configureForDemandExtraction(config, outDir, sampleSize, iterations,
 				algorithmProcessCount, heuristicsProcessCount, deterministic, noPruning,
-				postExtMaxPerSet, postExtKeepTop, maxDegree);
+				noPredecessors, postExtMaxPerSet, postExtKeepTop, maxDegree);
 		String runId = config.controller().getRunId();
 
 		// Trip-level spatial filter: uses resolved filter center (from --filter-municipality or --filter-center)
@@ -589,7 +591,7 @@ public class RunBavaria30kmDemandExtraction {
 	private static void configureForDemandExtraction(Config config, Path outputDir,
 			int sampleSize, int iterations, int algorithmProcessCount,
 			int heuristicsProcessCount, boolean deterministic, boolean noPruning,
-			int postExtMaxPerSet, double postExtKeepTop, int maxDegree) {
+			boolean noPredecessors, int postExtMaxPerSet, double postExtKeepTop, int maxDegree) {
 
 		// VSP defaults
 		config.vspExperimental().setVspDefaultsCheckingLevel(
@@ -615,8 +617,8 @@ public class RunBavaria30kmDemandExtraction {
 		// DemandExtractionModule reads DRT fare params from Config, not from Guice bindings.
 
 		// Configure ExMAS (same as RunKelheimDemandExtraction)
-		configureExMas(config, algorithmProcessCount, heuristicsProcessCount, deterministic, noPruning,
-				postExtMaxPerSet, postExtKeepTop, maxDegree);
+		configureExMas(config, algorithmProcessCount, heuristicsProcessCount, deterministic,
+				noPruning, noPredecessors, postExtMaxPerSet, postExtKeepTop, maxDegree);
 
 		logScoringParameters(config);
 	}
@@ -630,7 +632,7 @@ public class RunBavaria30kmDemandExtraction {
 	 * Settings aligned with ExMasKelheimE2ETest for consistency.
 	 */
 	private static void configureExMas(Config config, int algorithmProcessCount, int heuristicsProcessCount, boolean deterministic, boolean noPruning,
-			int postExtMaxPerSet, double postExtKeepTop, int maxDegree) {
+			boolean noPredecessors, int postExtMaxPerSet, double postExtKeepTop, int maxDegree) {
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 
 		// DRT mode must match Kelheim config
@@ -681,13 +683,19 @@ public class RunBavaria30kmDemandExtraction {
 		exMasConfig.setMaxAbsoluteDetour(3600); // Max 1 hour absolute detour
 		exMasConfig.setMaxPoolingDegree(maxDegree);  // CLI: --max-degree (default: 16)
 
-		// Enable predecessor calculation for connection_cache.csv output
-		// This is needed for optimization empty vehicle kilometer calculations
-		exMasConfig.setCalcPredecessors(true);
-		exMasConfig.setPredecessorsFilterDistanceFactor(0.5);
-		// Only consider predecessors that ended within 0.5 hours before successor starts
-		exMasConfig.setPredecessorsFilterTime(1800.0);
-		exMasConfig.setCalcShapleyValues(true);
+		// Predecessor/successor calculation for connection_cache.csv output
+		// Needed for optimization empty vehicle kilometer calculations
+		if (!noPredecessors) {
+			exMasConfig.setCalcPredecessors(true);
+			exMasConfig.setPredecessorsFilterDistanceFactor(0.5);
+			// Only consider predecessors that ended within 0.5 hours before successor starts
+			exMasConfig.setPredecessorsFilterTime(1800.0);
+			exMasConfig.setCalcShapleyValues(true);
+		} else {
+			exMasConfig.setCalcPredecessors(false);
+			exMasConfig.setCalcShapleyValues(false);
+			log.info("Predecessor/successor and Shapley calculation disabled (--no-predecessors)");
+		}
 
 		// Pruning settings: heuristic pruning controls combinatorial growth during ride
 		// extension
