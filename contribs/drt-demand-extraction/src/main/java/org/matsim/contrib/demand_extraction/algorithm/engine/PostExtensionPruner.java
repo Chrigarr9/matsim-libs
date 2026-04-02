@@ -34,11 +34,13 @@ public final class PostExtensionPruner {
 	private final ExMasConfigGroup config;
 	private final int maxPerSetOverride;
 	private final double keepTopOverride;
+	private final int minRidesPerRequest;
 
 	public PostExtensionPruner(ExMasConfigGroup config) {
 		this.config = config;
 		this.maxPerSetOverride = -1; // use config
 		this.keepTopOverride = -1; // use config
+		this.minRidesPerRequest = 0;
 	}
 
 	/**
@@ -49,6 +51,7 @@ public final class PostExtensionPruner {
 		this.config = null;
 		this.maxPerSetOverride = maxPerSet;
 		this.keepTopOverride = 1.0;
+		this.minRidesPerRequest = 0;
 	}
 
 	/**
@@ -56,9 +59,19 @@ public final class PostExtensionPruner {
 	 * Set maxPerSet=0 to disable MaxPerSet, keepTopFraction=1.0 to disable percentile.
 	 */
 	public PostExtensionPruner(int maxPerSet, double keepTopFraction) {
+		this(maxPerSet, keepTopFraction, 0);
+	}
+
+	/**
+	 * Explicit pruner with maxPerSet, keepTopFraction, and per-request floor.
+	 * Set maxPerSet=0 to disable MaxPerSet, keepTopFraction=1.0 to disable percentile,
+	 * minRidesPerRequest=0 to disable per-request floor.
+	 */
+	public PostExtensionPruner(int maxPerSet, double keepTopFraction, int minRidesPerRequest) {
 		this.config = null;
 		this.maxPerSetOverride = maxPerSet > 0 ? maxPerSet : -1;
 		this.keepTopOverride = keepTopFraction;
+		this.minRidesPerRequest = minRidesPerRequest;
 	}
 
 	/**
@@ -186,6 +199,51 @@ public final class PostExtensionPruner {
 			log.info("  Degree {}: threshold={}, kept {}/{} ({})",
 					degree, String.format("%+.3f", threshold), keptAtDegree, group.size(),
 					String.format("%.1f%%", keptAtDegree * 100.0 / group.size()));
+
+			// Per-request floor: rescue rides for requests with too few options
+			if (minRidesPerRequest > 0) {
+				Map<Integer, Integer> requestRideCount = new HashMap<>();
+				for (Ride ride : kept) {
+					if (ride.getDegree() <= 1) continue;
+					for (DrtRequest req : ride.getRequests()) {
+						requestRideCount.merge(req.index, 1, Integer::sum);
+					}
+				}
+
+				// Collect pruned rides for this degree, sorted by savings descending
+				List<int[]> prunedWithSavings = new ArrayList<>();
+				for (int i = 0; i < group.size(); i++) {
+					if (savings[i] < threshold) {
+						prunedWithSavings.add(new int[]{i});
+					}
+				}
+				// Sort by savings descending (index into group/savings arrays)
+				prunedWithSavings.sort((a, b) -> Double.compare(savings[b[0]], savings[a[0]]));
+
+				int rescued = 0;
+				for (int[] idx : prunedWithSavings) {
+					Ride ride = group.get(idx[0]);
+					boolean needed = false;
+					for (DrtRequest req : ride.getRequests()) {
+						if (requestRideCount.getOrDefault(req.index, 0) < minRidesPerRequest) {
+							needed = true;
+							break;
+						}
+					}
+					if (needed) {
+						kept.add(ride);
+						rescued++;
+						for (DrtRequest req : ride.getRequests()) {
+							requestRideCount.merge(req.index, 1, Integer::sum);
+						}
+					}
+				}
+
+				if (rescued > 0) {
+					log.info("  Degree {}: rescued {} rides for per-request floor (min={})",
+							degree, rescued, minRidesPerRequest);
+				}
+			}
 		}
 
 		return kept;

@@ -209,6 +209,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// 1.0 = disabled (keep all). 0.05 = keep top 5%.
 	private double postExtensionKeepTopFraction = 1.0;
 
+	// Inter-degree pruning: keep only the top fraction of rides after EACH degree extension.
+	// Applied directly (no sqrt scaling). 1.0 = disabled. 0.10 = keep top 10%.
+	private double interDegreeKeepFraction = 0.10;
+	// Per-request floor: ensure each request appears in at least N rides after pruning. 0 = disabled.
+	private int interDegreeMinRidesPerRequest = 0;
+
 	// Calculate Shapley values for rides (distance contribution per passenger)
 	private boolean calcShapleyValues = true;
 
@@ -849,6 +855,26 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.postExtensionKeepTopFraction = postExtensionKeepTopFraction;
 	}
 
+	@StringGetter("interDegreeKeepFraction")
+	public double getInterDegreeKeepFraction() {
+		return interDegreeKeepFraction;
+	}
+
+	@StringSetter("interDegreeKeepFraction")
+	public void setInterDegreeKeepFraction(double interDegreeKeepFraction) {
+		this.interDegreeKeepFraction = interDegreeKeepFraction;
+	}
+
+	@StringGetter("interDegreeMinRidesPerRequest")
+	public int getInterDegreeMinRidesPerRequest() {
+		return interDegreeMinRidesPerRequest;
+	}
+
+	@StringSetter("interDegreeMinRidesPerRequest")
+	public void setInterDegreeMinRidesPerRequest(int interDegreeMinRidesPerRequest) {
+		this.interDegreeMinRidesPerRequest = interDegreeMinRidesPerRequest;
+	}
+
 	@StringGetter("calcShapleyValues")
 	public boolean isCalcShapleyValues() {
 		return calcShapleyValues;
@@ -1219,6 +1245,14 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("postExtensionKeepTopFraction",
 				"Post-extension pruning: keep only the top fraction of rides (by distanceSavings) within each degree. "
 				+ "1.0 = disabled. 0.10 = keep top 10% per degree. 0.05 = keep top 5%. Applied after MaxPerSet. Default: 1.0");
+		map.put("interDegreeKeepFraction",
+				"Inter-degree pruning: keep only the top fraction of rides (by distanceSavings) after EACH degree extension. "
+				+ "Applied directly (no sqrt scaling). Survivors become base sets for next degree AND final output. "
+				+ "1.0 = disabled. 0.10 = keep top 10%. Default: 0.10");
+		map.put("interDegreeMinRidesPerRequest",
+				"Per-request floor for inter-degree pruning: ensure each request appears in at least N rides after pruning. "
+				+ "If a request has fewer rides above the threshold, its best rides are rescued. "
+				+ "0 = disabled. Default: 0");
 		map.put("calcShapleyValues", "Calculate Shapley values for each ride (distance contribution per passenger). Default: true");
 		map.put("calcPredecessors",
 				"Calculate predecessor/successor relationships between rides. When enabled, connection cache is automatically written. Default: true");

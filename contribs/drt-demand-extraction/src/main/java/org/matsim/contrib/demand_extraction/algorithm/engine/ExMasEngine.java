@@ -140,11 +140,8 @@ public final class ExMasEngine {
 		log.info("");
 		log.info("PHASE 4: Iterative Ride Extension");
 		log.info("======================================================================");
-		double finalKeepTop = exMasConfig.getPostExtensionKeepTopFraction();
-		// Inter-degree: keep top 50% (sqrt of final fraction, minimum 0.5)
-		// Gentler than final P90/P95 to preserve base diversity for higher degrees
-		double interDegreeKeepTop = finalKeepTop < 1.0
-				? Math.max(0.5, Math.sqrt(finalKeepTop)) : 1.0;
+		double interDegreeKeepFraction = exMasConfig.getInterDegreeKeepFraction();
+		int interDegreeMinPerRequest = exMasConfig.getInterDegreeMinRidesPerRequest();
 		int nextRideIndex = allRides.size();
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
@@ -156,17 +153,13 @@ public final class ExMasEngine {
 				break;
 			}
 
-			// Inter-degree percentile pruning to bound memory:
-			// Drop bottom sets by savings (preserves base diversity for higher degrees)
+			// Mandatory inter-degree pruning: keep top X% by distance savings.
+			// Direct fraction (no sqrt scaling). Survivors = output + base sets for next degree.
 			int generatedCount = extended.size();
-			if (interDegreeKeepTop < 1.0 && extended.size() > 1000) {
-				PostExtensionPruner pct = new PostExtensionPruner(0, interDegreeKeepTop);
-				extended = pct.prune(extended);
-				if (extended.size() < generatedCount) {
-					log.info("Inter-degree pruning at degree {}: {} -> {} rides (keepTop={})",
-							degree + 1, generatedCount, extended.size(),
-							String.format("%.2f", interDegreeKeepTop));
-				}
+			if (interDegreeKeepFraction < 1.0) {
+				PostExtensionPruner pruner = new PostExtensionPruner(
+						0, interDegreeKeepFraction, interDegreeMinPerRequest);
+				extended = pruner.prune(extended);
 			}
 
 			nextRideIndex += generatedCount; // index space reserved for all generated rides

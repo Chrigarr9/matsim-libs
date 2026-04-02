@@ -94,6 +94,8 @@ public class RunBavaria30kmDemandExtraction {
 		int postExtMaxPerSet = 0;
 		double postExtKeepTop = 1.0;
 		int maxDegree = 16;
+		double interDegreeKeep = 0.10;
+		int interDegreeMinPerReq = 0;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -123,6 +125,8 @@ public class RunBavaria30kmDemandExtraction {
 				case "--post-ext-max-per-set" -> postExtMaxPerSet = Integer.parseInt(args[++i]);
 				case "--post-ext-keep-top" -> postExtKeepTop = Double.parseDouble(args[++i]);
 				case "--max-degree" -> maxDegree = Integer.parseInt(args[++i]);
+				case "--inter-degree-keep" -> interDegreeKeep = Double.parseDouble(args[++i]);
+				case "--inter-degree-min-per-request" -> interDegreeMinPerReq = Integer.parseInt(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -186,7 +190,8 @@ public class RunBavaria30kmDemandExtraction {
 
 		configureForDemandExtraction(config, outDir, sampleSize, iterations,
 				algorithmProcessCount, heuristicsProcessCount, deterministic, noPruning,
-				noPredecessors, postExtMaxPerSet, postExtKeepTop, maxDegree);
+				noPredecessors, postExtMaxPerSet, postExtKeepTop, maxDegree,
+				interDegreeKeep, interDegreeMinPerReq);
 		String runId = config.controller().getRunId();
 
 		// Trip-level spatial filter: uses resolved filter center (from --filter-municipality or --filter-center)
@@ -591,7 +596,8 @@ public class RunBavaria30kmDemandExtraction {
 	private static void configureForDemandExtraction(Config config, Path outputDir,
 			int sampleSize, int iterations, int algorithmProcessCount,
 			int heuristicsProcessCount, boolean deterministic, boolean noPruning,
-			boolean noPredecessors, int postExtMaxPerSet, double postExtKeepTop, int maxDegree) {
+			boolean noPredecessors, int postExtMaxPerSet, double postExtKeepTop, int maxDegree,
+			double interDegreeKeep, int interDegreeMinPerReq) {
 
 		// VSP defaults
 		config.vspExperimental().setVspDefaultsCheckingLevel(
@@ -618,7 +624,8 @@ public class RunBavaria30kmDemandExtraction {
 
 		// Configure ExMAS (same as RunKelheimDemandExtraction)
 		configureExMas(config, algorithmProcessCount, heuristicsProcessCount, deterministic,
-				noPruning, noPredecessors, postExtMaxPerSet, postExtKeepTop, maxDegree);
+				noPruning, noPredecessors, postExtMaxPerSet, postExtKeepTop, maxDegree,
+				interDegreeKeep, interDegreeMinPerReq);
 
 		logScoringParameters(config);
 	}
@@ -632,7 +639,8 @@ public class RunBavaria30kmDemandExtraction {
 	 * Settings aligned with ExMasKelheimE2ETest for consistency.
 	 */
 	private static void configureExMas(Config config, int algorithmProcessCount, int heuristicsProcessCount, boolean deterministic, boolean noPruning,
-			boolean noPredecessors, int postExtMaxPerSet, double postExtKeepTop, int maxDegree) {
+			boolean noPredecessors, int postExtMaxPerSet, double postExtKeepTop, int maxDegree,
+			double interDegreeKeep, int interDegreeMinPerReq) {
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 
 		// DRT mode must match Kelheim config
@@ -725,6 +733,8 @@ public class RunBavaria30kmDemandExtraction {
 			exMasConfig.setPruningMinRidesToKeepPerRequestSet(0);
 			exMasConfig.setPruningMaxRidesToKeepPerRequestSet(0);
 			exMasConfig.setPruningKeepTopNExtensionsPerBaseRide(0);
+			interDegreeKeep = 1.0; // disable inter-degree pruning in no-pruning mode
+			interDegreeMinPerReq = 0;
 		}
 
 		// Limit successors to improve performance (Top-K pruning)
@@ -745,6 +755,12 @@ public class RunBavaria30kmDemandExtraction {
 			log.info("  Post-extension pruning: maxPerSet={}, keepTopFraction={}",
 					postExtMaxPerSet, postExtKeepTop);
 		}
+
+		// Inter-degree pruning: mandatory, direct fraction (no sqrt scaling)
+		exMasConfig.setInterDegreeKeepFraction(interDegreeKeep);
+		exMasConfig.setInterDegreeMinRidesPerRequest(interDegreeMinPerReq);
+		log.info("  Inter-degree pruning: keepFraction={}, minRidesPerRequest={}",
+				interDegreeKeep, interDegreeMinPerReq);
 
 		log.info("ExMAS config:");
 		log.info("  DRT mode: {}", exMasConfig.getDrtMode());
