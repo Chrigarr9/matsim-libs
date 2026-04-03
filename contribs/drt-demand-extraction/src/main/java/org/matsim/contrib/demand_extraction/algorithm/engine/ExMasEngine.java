@@ -146,10 +146,14 @@ public final class ExMasEngine {
 		double interDegreeKeepFraction = exMasConfig.getInterDegreeKeepFraction();
 		int interDegreeMinPerRequest = exMasConfig.getInterDegreeMinRidesPerRequest();
 		int nextRideIndex = allRides.size();
+		java.util.Set<Long> prevConstraintFeasibleHashes = null;
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
-													 requests, exMasConfig);
+													 requests, exMasConfig, prevConstraintFeasibleHashes);
 			List<Ride> extended = extender.extendRides(currentDegreeRides, nextRideIndex);
+			prevConstraintFeasibleHashes = extender.getConstraintFeasibleHashes();
+			log.info("  Constraint-feasible sets at degree {}: {} (graph node count)",
+					degree + 1, prevConstraintFeasibleHashes.size());
 
 			if (extended.isEmpty()) {
 				log.info("No extensions possible at degree {}. Stopping.", (degree + 1));

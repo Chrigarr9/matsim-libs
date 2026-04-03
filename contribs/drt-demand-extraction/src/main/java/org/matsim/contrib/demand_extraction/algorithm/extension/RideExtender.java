@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ForkJoinPool;
@@ -46,15 +47,31 @@ public final class RideExtender {
 	private final ExMasConfigGroup exMasConfig;
 	private static final double EPSILON = 1e-9;
 
+	// For degree-specific graph analysis: hashes of constraint-feasible sets from previous degree
+	private final Set<Long> prevConstraintFeasibleHashes;
+	// Collected during this extension: hashes of constraint-feasible sets at this degree
+	private ConcurrentHashMap.KeySetView<Long, Boolean> constraintFeasibleHashes;
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig) {
+		this(network, graph, budgetValidator, requests, exMasConfig, null);
+	}
+
+	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
+						List<DrtRequest> requests, ExMasConfigGroup exMasConfig,
+						Set<Long> prevConstraintFeasibleHashes) {
 		this.network = network;
 		this.graph = graph;
 		this.budgetValidator = budgetValidator;
 		this.requestMap = new HashMap<>();
 		for (DrtRequest r : requests) requestMap.put(r.index, r);
 		this.exMasConfig = exMasConfig;
+		this.prevConstraintFeasibleHashes = prevConstraintFeasibleHashes;
+	}
+
+	/** Returns hashes of all constraint-feasible sets discovered during the last extendRides call. */
+	public Set<Long> getConstraintFeasibleHashes() {
+		return constraintFeasibleHashes != null ? constraintFeasibleHashes : java.util.Collections.emptySet();
 	}
 
 	/**
@@ -99,6 +116,7 @@ public final class RideExtender {
 		// - resultBySetHash: successful rides
 		ConcurrentHashMap.KeySetView<Long, Boolean> claimedSets = ConcurrentHashMap.newKeySet();
 		ConcurrentHashMap<Long, Ride> resultBySetHash = new ConcurrentHashMap<>();
+		constraintFeasibleHashes = ConcurrentHashMap.newKeySet();
 
 		// Progress counters (thread-safe)
 		AtomicInteger baseSetsCompleted = new AtomicInteger();
@@ -130,6 +148,16 @@ public final class RideExtender {
 						}
 
 						setsProcessed.incrementAndGet();
+
+						// Sub-set feasibility analysis: count how many (degree-1) sub-sets
+						// from the previous degree are constraint-feasible
+						if (prevConstraintFeasibleHashes != null && newSet.length >= 3) {
+							EnumerationStats s = EnumerationStats.get();
+							int feasibleCount = countFeasibleSubsets(newSet, prevConstraintFeasibleHashes);
+							if (feasibleCount < s.subsetFeasibilityHisto.length) {
+								s.subsetFeasibilityHisto[feasibleCount]++;
+							}
+						}
 
 						Ride bestRide = processSet(newSet);
 						if (bestRide != null) {
@@ -165,7 +193,10 @@ public final class RideExtender {
 			threadStatsMap.values().forEach(s -> {
 				s.setsProcessed = 0; s.orderingsEvaluated = 0; s.ridesBuilt = 0;
 				s.ridesPassedConstraints = 0; s.budgetValidations = 0; s.budgetPassed = 0;
-				s.segmentLookups = 0; s.prunedByTravelTime = 0; s.timeTotal = 0; s.timeEnumeration = 0;
+				s.segmentLookups = 0; s.prunedByTravelTime = 0;
+				s.setsConstraintFeasible = 0; s.setsBudgetFeasible = 0;
+				java.util.Arrays.fill(s.subsetFeasibilityHisto, 0);
+				s.timeTotal = 0; s.timeEnumeration = 0;
 				s.timeRideConstruction = 0; s.timeBudgetValidation = 0;
 			});
 		}
@@ -217,6 +248,7 @@ public final class RideExtender {
 		// Bound only tightens on VALID orderings → provably correct.
 		double[] bestValidDist = { maxAllowedRideDistance };
 		Ride[] bestRide = { null };
+		boolean[] feasibilityFlags = { false, false }; // [0] = constraint-feasible, [1] = budget-feasible
 
 		long tEnum0 = System.nanoTime();
 		OrderingEnumerator.enumerateAndEvaluate(
@@ -237,6 +269,7 @@ public final class RideExtender {
 					stats.ridesBuilt++;
 					if (ride == null) return;
 					stats.ridesPassedConstraints++;
+					feasibilityFlags[0] = true;
 
 					long tBudget0 = System.nanoTime();
 					Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
@@ -244,6 +277,7 @@ public final class RideExtender {
 					stats.budgetValidations++;
 					if (validated == null) return;
 					stats.budgetPassed++;
+					feasibilityFlags[1] = true;
 
 					double dist = validated.getRideDistance();
 					if (dist < bestValidDist[0]) {
@@ -252,6 +286,13 @@ public final class RideExtender {
 					}
 				});
 		stats.timeEnumeration += System.nanoTime() - tEnum0;
+
+		if (feasibilityFlags[0]) {
+			stats.setsConstraintFeasible++;
+			constraintFeasibleHashes.add(hashRequestSet(newSet));
+		}
+		if (feasibilityFlags[1]) stats.setsBudgetFeasible++;
+
 		stats.timeTotal += System.nanoTime() - t0;
 
 		return bestRide[0];
@@ -561,5 +602,23 @@ public final class RideExtender {
 			h = h * 1000003L + idx;
 		}
 		return h;
+	}
+
+	/**
+	 * Count how many (n-1)-element sub-sets of the given sorted set are in the feasibility hash set.
+	 * For a set of size k, generates C(k, k-1) = k sub-sets by omitting each element in turn.
+	 */
+	private static int countFeasibleSubsets(int[] sortedSet, Set<Long> feasibleHashes) {
+		int count = 0;
+		int n = sortedSet.length;
+		int[] subset = new int[n - 1];
+		for (int skip = 0; skip < n; skip++) {
+			int pos = 0;
+			for (int j = 0; j < n; j++) {
+				if (j != skip) subset[pos++] = sortedSet[j];
+			}
+			if (feasibleHashes.contains(hashRequestSet(subset))) count++;
+		}
+		return count;
 	}
 }

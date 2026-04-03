@@ -21,6 +21,12 @@ public final class EnumerationStats {
 	public long budgetPassed;
 	public long segmentLookups;
 	public long prunedByTravelTime;
+	// Per-set feasibility counters (for degree-specific graph analysis)
+	public long setsConstraintFeasible;  // sets where ≥1 ordering passed constraint checks
+	public long setsBudgetFeasible;      // sets where ≥1 ordering also passed budget
+	// Sub-set feasibility histogram: index = number of feasible sub-sets, value = candidate count
+	// E.g. subsetFeasibilityHisto[3] = N means N candidates had exactly 3 feasible sub-sets
+	public long[] subsetFeasibilityHisto = new long[32]; // up to degree 31
 
 	// Timing (nanos)
 	public long timeTotal;
@@ -43,6 +49,11 @@ public final class EnumerationStats {
 			total.budgetPassed += s.budgetPassed;
 			total.segmentLookups += s.segmentLookups;
 			total.prunedByTravelTime += s.prunedByTravelTime;
+			total.setsConstraintFeasible += s.setsConstraintFeasible;
+			total.setsBudgetFeasible += s.setsBudgetFeasible;
+			for (int i = 0; i < total.subsetFeasibilityHisto.length; i++) {
+				total.subsetFeasibilityHisto[i] += s.subsetFeasibilityHisto[i];
+			}
 			total.timeTotal += s.timeTotal;
 			total.timeEnumeration += s.timeEnumeration;
 			total.timeRideConstruction += s.timeRideConstruction;
@@ -66,6 +77,30 @@ public final class EnumerationStats {
 				setsProcessed > 0 ? String.format("%.0f", (double) segmentLookups / setsProcessed) : "N/A");
 		log.info("  Pruned by travel time: {} ({} per set)", prunedByTravelTime,
 				setsProcessed > 0 ? String.format("%.1f", (double) prunedByTravelTime / setsProcessed) : "N/A");
+		log.info("  Sets constraint-feasible: {} ({}% of processed)", setsConstraintFeasible,
+				setsProcessed > 0 ? String.format("%.1f", 100.0 * setsConstraintFeasible / setsProcessed) : "N/A");
+		log.info("  Sets budget-feasible: {} ({}% of processed)", setsBudgetFeasible,
+				setsProcessed > 0 ? String.format("%.1f", 100.0 * setsBudgetFeasible / setsProcessed) : "N/A");
+		// Sub-set feasibility histogram
+		StringBuilder histo = new StringBuilder();
+		for (int i = 0; i < subsetFeasibilityHisto.length; i++) {
+			if (subsetFeasibilityHisto[i] > 0) {
+				if (histo.length() > 0) histo.append(", ");
+				histo.append(i).append("=").append(subsetFeasibilityHisto[i]);
+			}
+		}
+		if (histo.length() > 0) {
+			log.info("  Sub-set feasibility histogram (feasible_sub_count=candidates): {}", histo);
+			// Compute graph candidate count: candidates with ALL sub-sets feasible
+			long allFeasible = subsetFeasibilityHisto[degree];  // degree = target degree, need all (degree-1 choose degree-2) = degree-1 sub-sets... actually index = degree
+			long totalCandidates = 0;
+			for (long v : subsetFeasibilityHisto) totalCandidates += v;
+			if (totalCandidates > 0) {
+				log.info("  Graph would keep: {} / {} candidates ({}% reduction)",
+						allFeasible, totalCandidates,
+						String.format("%.1f", 100.0 * (1.0 - (double) allFeasible / totalCandidates)));
+			}
+		}
 		// timeEnumeration includes ride construction + budget validation (evaluator runs inside)
 		long timePureEnum = timeEnumeration - timeRideConstruction - timeBudgetValidation;
 		long timeOther = timeTotal - timeEnumeration;
