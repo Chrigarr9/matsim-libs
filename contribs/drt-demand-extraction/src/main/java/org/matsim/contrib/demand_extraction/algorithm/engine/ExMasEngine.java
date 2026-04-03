@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.apache.logging.log4j.LogManager;
@@ -15,6 +14,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
 import org.matsim.contrib.demand_extraction.algorithm.extension.RideExtender;
+import org.matsim.contrib.demand_extraction.algorithm.graph.DegreeGraph;
 import org.matsim.contrib.demand_extraction.algorithm.generation.PairGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.generation.SingleRideGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.generation.StopBasedRideGenerator;
@@ -146,14 +146,16 @@ public final class ExMasEngine {
 		double interDegreeKeepFraction = exMasConfig.getInterDegreeKeepFraction();
 		int interDegreeMinPerRequest = exMasConfig.getInterDegreeMinRidesPerRequest();
 		int nextRideIndex = allRides.size();
-		java.util.Set<Long> prevConstraintFeasibleHashes = null;
+		DegreeGraph prevDegreeGraph = null;
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
-													 requests, exMasConfig, prevConstraintFeasibleHashes);
+													 requests, exMasConfig, prevDegreeGraph);
 			List<Ride> extended = extender.extendRides(currentDegreeRides, nextRideIndex);
-			prevConstraintFeasibleHashes = extender.getConstraintFeasibleHashes();
-			log.info("  Constraint-feasible sets at degree {}: {} (graph node count)",
-					degree + 1, prevConstraintFeasibleHashes.size());
+			long graphBuildStart = System.currentTimeMillis();
+			prevDegreeGraph = extender.buildDegreeGraph(degree + 1);
+			long graphBuildMs = System.currentTimeMillis() - graphBuildStart;
+			log.info("  Degree-{} graph: {} feasible sets, built in {}ms",
+					degree + 1, extender.getFeasibleSetCount(), graphBuildMs);
 
 			if (extended.isEmpty()) {
 				log.info("No extensions possible at degree {}. Stopping.", (degree + 1));

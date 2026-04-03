@@ -2,11 +2,9 @@ package org.matsim.contrib.demand_extraction.algorithm.extension;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ForkJoinPool;
@@ -19,6 +17,7 @@ import org.matsim.api.core.v01.network.Link;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
+import org.matsim.contrib.demand_extraction.algorithm.graph.DegreeGraph;
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
@@ -47,10 +46,10 @@ public final class RideExtender {
 	private final ExMasConfigGroup exMasConfig;
 	private static final double EPSILON = 1e-9;
 
-	// For degree-specific graph analysis: hashes of constraint-feasible sets from previous degree
-	private final Set<Long> prevConstraintFeasibleHashes;
-	// Collected during this extension: hashes of constraint-feasible sets at this degree
-	private ConcurrentHashMap.KeySetView<Long, Boolean> constraintFeasibleHashes;
+	// DegreeGraph from previous degree for candidate generation (null at degree 3)
+	private final DegreeGraph prevDegreeGraph;
+	// Collected during this extension: constraint-feasible sets for building next DegreeGraph
+	private final ConcurrentHashMap<Long, DegreeGraph.FeasibleSetResult> feasibleSetResults = new ConcurrentHashMap<>();
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig) {
@@ -59,19 +58,24 @@ public final class RideExtender {
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig,
-						Set<Long> prevConstraintFeasibleHashes) {
+						DegreeGraph prevDegreeGraph) {
 		this.network = network;
 		this.graph = graph;
 		this.budgetValidator = budgetValidator;
 		this.requestMap = new HashMap<>();
 		for (DrtRequest r : requests) requestMap.put(r.index, r);
 		this.exMasConfig = exMasConfig;
-		this.prevConstraintFeasibleHashes = prevConstraintFeasibleHashes;
+		this.prevDegreeGraph = prevDegreeGraph;
 	}
 
-	/** Returns hashes of all constraint-feasible sets discovered during the last extendRides call. */
-	public Set<Long> getConstraintFeasibleHashes() {
-		return constraintFeasibleHashes != null ? constraintFeasibleHashes : java.util.Collections.emptySet();
+	/** Build a DegreeGraph from the constraint-feasible sets collected during extension. */
+	public DegreeGraph buildDegreeGraph(int degree) {
+		return DegreeGraph.build(feasibleSetResults.values(), degree);
+	}
+
+	/** Returns the number of constraint-feasible sets collected during the last extendRides call. */
+	public int getFeasibleSetCount() {
+		return feasibleSetResults.size();
 	}
 
 	/**
@@ -116,7 +120,6 @@ public final class RideExtender {
 		// - resultBySetHash: successful rides
 		ConcurrentHashMap.KeySetView<Long, Boolean> claimedSets = ConcurrentHashMap.newKeySet();
 		ConcurrentHashMap<Long, Ride> resultBySetHash = new ConcurrentHashMap<>();
-		constraintFeasibleHashes = ConcurrentHashMap.newKeySet();
 
 		// Progress counters (thread-safe)
 		AtomicInteger baseSetsCompleted = new AtomicInteger();
@@ -135,7 +138,12 @@ public final class RideExtender {
 					// Register this thread's stats for collection
 					threadStatsMap.putIfAbsent(Thread.currentThread().getId(), EnumerationStats.get());
 
-					int[] neighbors = graph.findCommonNeighborsSorted(baseSetIndices);
+					int[] neighbors;
+					if (prevDegreeGraph != null) {
+						neighbors = prevDegreeGraph.findExtensions(baseSetIndices);
+					} else {
+						neighbors = graph.findCommonNeighborsSorted(baseSetIndices);
+					}
 
 					for (int newReq : neighbors) {
 						int[] newSet = buildSortedRequestSet(baseSetIndices, newReq);
@@ -148,16 +156,6 @@ public final class RideExtender {
 						}
 
 						setsProcessed.incrementAndGet();
-
-						// Sub-set feasibility analysis: count how many (degree-1) sub-sets
-						// from the previous degree are constraint-feasible
-						if (prevConstraintFeasibleHashes != null && newSet.length >= 3) {
-							EnumerationStats s = EnumerationStats.get();
-							int feasibleCount = countFeasibleSubsets(newSet, prevConstraintFeasibleHashes);
-							if (feasibleCount < s.subsetFeasibilityHisto.length) {
-								s.subsetFeasibilityHisto[feasibleCount]++;
-							}
-						}
 
 						Ride bestRide = processSet(newSet);
 						if (bestRide != null) {
@@ -195,7 +193,6 @@ public final class RideExtender {
 				s.ridesPassedConstraints = 0; s.budgetValidations = 0; s.budgetPassed = 0;
 				s.segmentLookups = 0; s.prunedByTravelTime = 0;
 				s.setsConstraintFeasible = 0; s.setsBudgetFeasible = 0;
-				java.util.Arrays.fill(s.subsetFeasibilityHisto, 0);
 				s.timeTotal = 0; s.timeEnumeration = 0;
 				s.timeRideConstruction = 0; s.timeBudgetValidation = 0;
 			});
@@ -289,7 +286,9 @@ public final class RideExtender {
 
 		if (feasibilityFlags[0]) {
 			stats.setsConstraintFeasible++;
-			constraintFeasibleHashes.add(hashRequestSet(newSet));
+			long setHash = hashRequestSet(newSet);
+			feasibleSetResults.put(setHash, new DegreeGraph.FeasibleSetResult(
+				newSet.clone(), setHash, java.util.Collections.emptyList()));
 		}
 		if (feasibilityFlags[1]) stats.setsBudgetFeasible++;
 
@@ -604,21 +603,4 @@ public final class RideExtender {
 		return h;
 	}
 
-	/**
-	 * Count how many (n-1)-element sub-sets of the given sorted set are in the feasibility hash set.
-	 * For a set of size k, generates C(k, k-1) = k sub-sets by omitting each element in turn.
-	 */
-	private static int countFeasibleSubsets(int[] sortedSet, Set<Long> feasibleHashes) {
-		int count = 0;
-		int n = sortedSet.length;
-		int[] subset = new int[n - 1];
-		for (int skip = 0; skip < n; skip++) {
-			int pos = 0;
-			for (int j = 0; j < n; j++) {
-				if (j != skip) subset[pos++] = sortedSet[j];
-			}
-			if (feasibleHashes.contains(hashRequestSet(subset))) count++;
-		}
-		return count;
-	}
 }
