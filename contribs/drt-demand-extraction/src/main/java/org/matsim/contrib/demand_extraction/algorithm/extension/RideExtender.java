@@ -239,17 +239,29 @@ public final class RideExtender {
 
 		double maxAllowedRideDistance = computeMaxAllowedRideDistance(setRequests);
 
-		// Branch-and-bound with inline validation:
-		// The evaluator builds and validates each ordering as it's found.
-		// If valid, it tightens bestValidDist → pruning subsequent branches.
-		// Bound only tightens on VALID orderings → provably correct.
-		double[] bestValidDist = { maxAllowedRideDistance };
+		// Extract pairwise constraints and optionally tighten with sub-set orderings
+		OrderingEnumerator.PairInfo[] pairConstraints =
+			OrderingEnumerator.extractConstraints(newSet, graph);
+		if (pairConstraints == null) {
+			stats.timeTotal += System.nanoTime() - t0;
+			return null;
+		}
+
+		// Tighten with sub-set ordering constraints from previous degree graph
+		if (prevDegreeGraph != null) {
+			pairConstraints = tightenConstraints(pairConstraints, newSet, prevDegreeGraph);
+		}
+
+		// No distance B&B — evaluate ALL constraint-feasible orderings.
+		// Distance savings is applied as a post-filter on the best ride.
+		double[] bestValidDist = { Double.MAX_VALUE };
+		double[] bestRideDist = { Double.MAX_VALUE };
 		Ride[] bestRide = { null };
-		boolean[] feasibilityFlags = { false, false }; // [0] = constraint-feasible, [1] = budget-feasible
+		List<DegreeGraph.OrderingPair> allValidOrderings = new ArrayList<>();
 
 		long tEnum0 = System.nanoTime();
 		OrderingEnumerator.enumerateAndEvaluate(
-				newSet, graph, network, setRequests, bestValidDist,
+				newSet, graph, pairConstraints, network, setRequests, bestValidDist,
 				(ordering) -> {
 					stats.orderingsEvaluated++;
 					int n = newSet.length;
@@ -266,7 +278,6 @@ public final class RideExtender {
 					stats.ridesBuilt++;
 					if (ride == null) return;
 					stats.ridesPassedConstraints++;
-					feasibilityFlags[0] = true;
 
 					long tBudget0 = System.nanoTime();
 					Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
@@ -274,27 +285,78 @@ public final class RideExtender {
 					stats.budgetValidations++;
 					if (validated == null) return;
 					stats.budgetPassed++;
-					feasibilityFlags[1] = true;
 
+					// Collect valid ordering for degree graph
+					byte[] origBytes = new byte[newSet.length];
+					byte[] destBytes = new byte[newSet.length];
+					for (int i = 0; i < newSet.length; i++) {
+						origBytes[i] = (byte) ordering.originPerm()[i];
+						destBytes[i] = (byte) ordering.destPerm()[i];
+					}
+					allValidOrderings.add(new DegreeGraph.OrderingPair(origBytes, destBytes));
+
+					// Track best ride (shortest distance)
 					double dist = validated.getRideDistance();
-					if (dist < bestValidDist[0]) {
-						bestValidDist[0] = dist; // tighten bound for subsequent branches
+					if (dist < bestRideDist[0]) {
+						bestRideDist[0] = dist;
 						bestRide[0] = validated;
 					}
 				});
 		stats.timeEnumeration += System.nanoTime() - tEnum0;
 
-		if (feasibilityFlags[0]) {
+		// Record constraint-feasible sets with orderings for degree graph
+		if (!allValidOrderings.isEmpty()) {
 			stats.setsConstraintFeasible++;
 			long setHash = hashRequestSet(newSet);
 			feasibleSetResults.put(setHash, new DegreeGraph.FeasibleSetResult(
-				newSet.clone(), setHash, java.util.Collections.emptyList()));
+				newSet.clone(), setHash, allValidOrderings));
+			stats.setsBudgetFeasible++;
 		}
-		if (feasibilityFlags[1]) stats.setsBudgetFeasible++;
+
+		// Apply distance savings threshold as post-filter
+		if (bestRide[0] != null && bestRide[0].getRideDistance() > maxAllowedRideDistance) {
+			bestRide[0] = null;  // Passes constraints but fails distance savings
+		}
 
 		stats.timeTotal += System.nanoTime() - t0;
 
 		return bestRide[0];
+	}
+
+	/**
+	 * Tighten pairwise ordering constraints using sub-set orderings from the degree graph.
+	 * For each pair that currently allows both origin directions,
+	 * check if all sub-set orderings agree on one direction.
+	 */
+	private OrderingEnumerator.PairInfo[] tightenConstraints(
+			OrderingEnumerator.PairInfo[] original, int[] requestIndices, DegreeGraph degreeGraph) {
+		int n = requestIndices.length;
+		OrderingEnumerator.PairInfo[] result = original.clone();
+
+		for (int i = 0; i < n; i++) {
+			for (int j = i + 1; j < n; j++) {
+				int idx = i * (2 * n - i - 1) / 2 + (j - i - 1);
+				OrderingEnumerator.PairInfo pi = result[idx];
+
+				// Only tighten pairs that currently allow both directions
+				if (pi.forwardOnly() || pi.reverseOnly()) continue;
+
+				Boolean originDir = degreeGraph.getOriginConsensus(requestIndices, i, j);
+
+				if (originDir != null) {
+					if (originDir) {
+						// a always before b → remove reverse directions
+						result[idx] = new OrderingEnumerator.PairInfo(
+							pi.forwardFifo(), pi.forwardLifo(), false, false);
+					} else {
+						// b always before a → remove forward directions
+						result[idx] = new OrderingEnumerator.PairInfo(
+							false, false, pi.reverseFifo(), pi.reverseLifo());
+					}
+				}
+			}
+		}
+		return result;
 	}
 
 	// --- Ride construction from explicit orderings ---

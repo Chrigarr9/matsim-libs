@@ -33,7 +33,7 @@ import it.unimi.dsi.fastutil.ints.IntList;
 public final class OrderingEnumerator {
 
 	/** Pairwise constraint: which FIFO/LIFO pair ride kinds exist in each direction */
-	record PairInfo(
+	public record PairInfo(
 			boolean forwardFifo, boolean forwardLifo,
 			boolean reverseFifo, boolean reverseLifo
 	) {
@@ -155,14 +155,38 @@ public final class OrderingEnumerator {
 			double[] bestValidDist,
 			Consumer<Ordering> evaluator) {
 
+		PairInfo[] constraints = extractConstraints(requestIndices, graph);
+		enumerateAndEvaluate(requestIndices, graph, constraints, network, requests,
+				bestValidDist, evaluator);
+	}
+
+	/**
+	 * Enumerate orderings using pre-computed pairwise constraints.
+	 * This allows callers to tighten constraints (e.g., from sub-set orderings)
+	 * before enumeration.
+	 *
+	 * @param requestIndices sorted request indices for the set
+	 * @param graph the shareability graph (used for FIFO/LIFO kinds if needed)
+	 * @param pairConstraints pre-computed/tightened pairwise constraints
+	 * @param network network cache for routed segment lookups
+	 * @param requests DrtRequest objects
+	 * @param bestValidDist mutable single-element array for distance pruning bound
+	 * @param evaluator called for each complete ordering
+	 */
+	public static void enumerateAndEvaluate(
+			int[] requestIndices, ShareabilityGraph graph,
+			PairInfo[] pairConstraints,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			double[] bestValidDist,
+			Consumer<Ordering> evaluator) {
+
+		if (pairConstraints == null) return;
 		int n = requestIndices.length;
-		PairInfo[] pairs = extractConstraints(requestIndices, n, graph);
-		if (pairs == null) return;
 
 		Boolean[][] origAdj = new Boolean[n][n];
 		for (int a = 0; a < n; a++) {
 			for (int b = a + 1; b < n; b++) {
-				PairInfo p = lookup(pairs, n, a, b);
+				PairInfo p = lookup(pairConstraints, n, a, b);
 				if (p.forwardOnly()) {
 					origAdj[a][b] = true; origAdj[b][a] = false;
 				} else if (p.reverseOnly()) {
@@ -171,10 +195,7 @@ public final class OrderingEnumerator {
 			}
 		}
 
-		// Reuse the same recursive methods — bestValidDist acts as the tightening bound,
-		// and the evaluator is called at each leaf (complete ordering) via a result list
-		// that we drain inline.
-		enumerateOriginsPrunedWithEval(origAdj, n, pairs, network, requests,
+		enumerateOriginsPrunedWithEval(origAdj, n, pairConstraints, network, requests,
 				bestValidDist, new boolean[n], new int[n], new double[n], 0,
 				0.0, 0.0, evaluator);
 	}
@@ -515,6 +536,16 @@ public final class OrderingEnumerator {
 
 	// --- Constraint extraction ---
 
+	/**
+	 * Extract pairwise ordering constraints from the shareability graph.
+	 * @param requestIndices sorted request indices
+	 * @param graph the shareability graph
+	 * @return PairInfo array, or null if any pair has no shared ride (infeasible set)
+	 */
+	public static PairInfo[] extractConstraints(int[] requestIndices, ShareabilityGraph graph) {
+		return extractConstraints(requestIndices, requestIndices.length, graph);
+	}
+
 	private static PairInfo[] extractConstraints(int[] requestIndices, int n, ShareabilityGraph graph) {
 		PairInfo[] pairs = new PairInfo[n * (n - 1) / 2];
 		int idx = 0;
@@ -552,7 +583,7 @@ public final class OrderingEnumerator {
 		return pairs;
 	}
 
-	static PairInfo lookup(PairInfo[] pairs, int n, int a, int b) {
+	public static PairInfo lookup(PairInfo[] pairs, int n, int a, int b) {
 		return pairs[a * (2 * n - a - 1) / 2 + (b - a - 1)];
 	}
 
