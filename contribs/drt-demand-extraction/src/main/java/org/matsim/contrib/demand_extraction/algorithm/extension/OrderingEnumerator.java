@@ -5,6 +5,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
@@ -118,7 +119,6 @@ public final class OrderingEnumerator {
 			}
 		}
 
-		// Tightening bound: starts at maxRideDistance, shrinks as shorter orderings are found.
 		double[] bestFoundDist = { maxRideDistance };
 
 		List<Ordering> result = new ArrayList<>();
@@ -126,6 +126,209 @@ public final class OrderingEnumerator {
 				maxRideDistance, bestFoundDist, new boolean[n], new int[n], 0,
 				0.0, 0.0, result);
 		return result;
+	}
+
+	/**
+	 * Enumerate orderings with inline evaluation and tightening on valid results.
+	 *
+	 * <p>For each complete ordering, calls the {@code evaluator} which should build the
+	 * ride, validate budget, and — if valid — update {@code bestValidDist[0]} to the
+	 * ride's distance. The enumeration uses {@code bestValidDist[0]} as the pruning
+	 * bound, so the bound tightens only on VALID orderings.
+	 *
+	 * <p>This is provably correct: if a valid ordering with distance V exists, its
+	 * partial distance never exceeds V at any step, and V &le; bestValidDist[0]
+	 * (which only decreases), so it is never pruned.
+	 *
+	 * @param requestIndices sorted request indices for the set
+	 * @param graph the shareability graph
+	 * @param network network cache for routed segment lookups
+	 * @param requests DrtRequest objects (requests[i] corresponds to requestIndices[i])
+	 * @param bestValidDist mutable single-element array; starts at maxRideDistance,
+	 *        updated by evaluator when a valid ride is found. Used as pruning bound.
+	 * @param evaluator called for each complete ordering; should update bestValidDist[0]
+	 *        if the ordering produces a valid ride shorter than the current bound
+	 */
+	public static void enumerateAndEvaluate(
+			int[] requestIndices, ShareabilityGraph graph,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			double[] bestValidDist,
+			Consumer<Ordering> evaluator) {
+
+		int n = requestIndices.length;
+		PairInfo[] pairs = extractConstraints(requestIndices, n, graph);
+		if (pairs == null) return;
+
+		Boolean[][] origAdj = new Boolean[n][n];
+		for (int a = 0; a < n; a++) {
+			for (int b = a + 1; b < n; b++) {
+				PairInfo p = lookup(pairs, n, a, b);
+				if (p.forwardOnly()) {
+					origAdj[a][b] = true; origAdj[b][a] = false;
+				} else if (p.reverseOnly()) {
+					origAdj[b][a] = true; origAdj[a][b] = false;
+				}
+			}
+		}
+
+		// Reuse the same recursive methods — bestValidDist acts as the tightening bound,
+		// and the evaluator is called at each leaf (complete ordering) via a result list
+		// that we drain inline.
+		List<Ordering> singletonBuffer = new ArrayList<>(1);
+		enumerateOriginsPrunedWithEval(origAdj, n, pairs, network, requests,
+				bestValidDist, new boolean[n], new int[n], 0,
+				0.0, 0.0, evaluator);
+	}
+
+	private static void enumerateOriginsPrunedWithEval(
+			Boolean[][] adj, int n, PairInfo[] pairs,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			double[] bestValidDist,
+			boolean[] used, int[] perm, int depth,
+			double partialDist, double currentTime,
+			Consumer<Ordering> evaluator) {
+
+		if (depth == n) {
+			enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
+					bestValidDist, partialDist, currentTime, evaluator);
+			return;
+		}
+
+		List<Integer> candidates = new ArrayList<>();
+		for (int c = 0; c < n; c++) {
+			if (used[c]) continue;
+			boolean valid = true;
+			for (int other = 0; other < n; other++) {
+				if (other == c || used[other]) continue;
+				if (adj[other][c] != null && adj[other][c]) {
+					valid = false; break;
+				}
+			}
+			if (valid) candidates.add(c);
+		}
+
+		if (depth == 0) {
+			for (int c : candidates) {
+				used[c] = true;
+				perm[0] = c;
+				enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
+						bestValidDist, used, perm, 1,
+						0.0, requests[c].getRequestTime(), evaluator);
+				used[c] = false;
+			}
+			return;
+		}
+
+		Id<Link> prevLink = requests[perm[depth - 1]].originLinkId;
+		Map<Integer, TravelSegment> segMap = new HashMap<>();
+		for (int c : candidates) {
+			segMap.put(c, network.getSegment(prevLink, requests[c].originLinkId, currentTime));
+		}
+		candidates.sort(Comparator.comparingDouble(c -> segMap.get(c).getDistance()));
+
+		for (int c : candidates) {
+			TravelSegment seg = segMap.get(c);
+			double newPartialDist = partialDist + seg.getDistance();
+			if (newPartialDist > bestValidDist[0]) break;
+
+			used[c] = true;
+			perm[depth] = c;
+			enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
+					bestValidDist, used, perm, depth + 1,
+					newPartialDist, currentTime + seg.getTravelTime(), evaluator);
+			used[c] = false;
+		}
+	}
+
+	private static void enumerateDestPrunedWithEval(
+			int n, int[] origPerm, PairInfo[] pairs,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			double[] bestValidDist,
+			double partialDist, double currentTime,
+			Consumer<Ordering> evaluator) {
+
+		int[] origPos = new int[n];
+		for (int i = 0; i < n; i++) origPos[origPerm[i]] = i;
+
+		Boolean[][] adj = new Boolean[n][n];
+		for (int a = 0; a < n; a++) {
+			for (int b = a + 1; b < n; b++) {
+				PairInfo p = lookup(pairs, n, a, b);
+				boolean aBeforeB = origPos[a] < origPos[b];
+				boolean hasFifo = aBeforeB ? p.forwardFifo() : p.reverseFifo();
+				boolean hasLifo = aBeforeB ? p.forwardLifo() : p.reverseLifo();
+
+				if (hasFifo && hasLifo) {
+					// no constraint
+				} else if (hasFifo) {
+					if (aBeforeB) { adj[a][b] = true; adj[b][a] = false; }
+					else          { adj[b][a] = true; adj[a][b] = false; }
+				} else if (hasLifo) {
+					if (aBeforeB) { adj[b][a] = true; adj[a][b] = false; }
+					else          { adj[a][b] = true; adj[b][a] = false; }
+				} else {
+					return;
+				}
+			}
+		}
+
+		Id<Link> prevLink = requests[origPerm[n - 1]].originLinkId;
+
+		enumerateDestTopoWithEval(adj, n, origPerm, network, requests,
+				bestValidDist, new boolean[n], new int[n], 0,
+				partialDist, currentTime, prevLink, evaluator);
+	}
+
+	private static void enumerateDestTopoWithEval(
+			Boolean[][] adj, int n, int[] origPerm,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			double[] bestValidDist,
+			boolean[] used, int[] perm, int depth,
+			double partialDist, double currentTime,
+			Id<Link> prevLinkId,
+			Consumer<Ordering> evaluator) {
+
+		if (depth == n) {
+			// Complete ordering — call evaluator inline.
+			// The evaluator may update bestValidDist[0] if this ordering is valid,
+			// which tightens the bound for all subsequent branches.
+			evaluator.accept(new Ordering(origPerm.clone(), perm.clone(), partialDist));
+			return;
+		}
+
+		List<Integer> candidates = new ArrayList<>();
+		for (int c = 0; c < n; c++) {
+			if (used[c]) continue;
+			boolean valid = true;
+			for (int other = 0; other < n; other++) {
+				if (other == c || used[other]) continue;
+				if (adj[other][c] != null && adj[other][c]) {
+					valid = false; break;
+				}
+			}
+			if (valid) candidates.add(c);
+		}
+
+		Map<Integer, TravelSegment> segMap = new HashMap<>();
+		for (int c : candidates) {
+			segMap.put(c, network.getSegment(prevLinkId,
+					requests[c].destinationLinkId, currentTime));
+		}
+		candidates.sort(Comparator.comparingDouble(c -> segMap.get(c).getDistance()));
+
+		for (int c : candidates) {
+			TravelSegment seg = segMap.get(c);
+			double newPartialDist = partialDist + seg.getDistance();
+			if (newPartialDist > bestValidDist[0]) break;
+
+			used[c] = true;
+			perm[depth] = c;
+			enumerateDestTopoWithEval(adj, n, origPerm, network, requests,
+					bestValidDist, used, perm, depth + 1,
+					newPartialDist, currentTime + seg.getTravelTime(),
+					requests[c].destinationLinkId, evaluator);
+			used[c] = false;
+		}
 	}
 
 	private static void enumerateOriginsPruned(

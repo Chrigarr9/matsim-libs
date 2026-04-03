@@ -46,6 +46,7 @@ public final class RideExtender {
 	private final ExMasConfigGroup exMasConfig;
 	private static final double EPSILON = 1e-9;
 
+
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig) {
 		this.network = network;
@@ -186,36 +187,38 @@ public final class RideExtender {
 
 		double maxAllowedRideDistance = computeMaxAllowedRideDistance(setRequests);
 
-		List<OrderingEnumerator.Ordering> orderings = OrderingEnumerator.enumeratePruned(
-				newSet, graph, network, setRequests, maxAllowedRideDistance);
+		// Branch-and-bound with inline validation:
+		// The evaluator builds and validates each ordering as it's found.
+		// If valid, it tightens bestValidDist → pruning subsequent branches.
+		// Bound only tightens on VALID orderings → provably correct.
+		double[] bestValidDist = { maxAllowedRideDistance };
+		Ride[] bestRide = { null };
 
-		if (orderings.isEmpty()) return null;
+		OrderingEnumerator.enumerateAndEvaluate(
+				newSet, graph, network, setRequests, bestValidDist,
+				(ordering) -> {
+					int n = newSet.length;
+					DrtRequest[] originsOrdered = new DrtRequest[n];
+					DrtRequest[] destsOrdered = new DrtRequest[n];
+					for (int i = 0; i < n; i++) {
+						originsOrdered[i] = setRequests[ordering.originPerm()[i]];
+						destsOrdered[i] = setRequests[ordering.destPerm()[i]];
+					}
 
-		// Sort by ride distance (shortest first) — enables early exit
-		orderings.sort(Comparator.comparingDouble(OrderingEnumerator.Ordering::rideDistance));
+					Ride ride = buildRideFromOrdering(originsOrdered, destsOrdered, 0);
+					if (ride == null) return;
 
-		// Try shortest ordering first. If it passes budget validation, it's the
-		// optimal ride for this set (shortest distance = best objective).
-		// If it fails, try next shortest, etc.
-		for (OrderingEnumerator.Ordering ord : orderings) {
-			int n = newSet.length;
-			DrtRequest[] originsOrdered = new DrtRequest[n];
-			DrtRequest[] destsOrdered = new DrtRequest[n];
-			for (int i = 0; i < n; i++) {
-				originsOrdered[i] = setRequests[ord.originPerm()[i]];
-				destsOrdered[i] = setRequests[ord.destPerm()[i]];
-			}
+					Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
+					if (validated == null) return;
 
-			Ride ride = buildRideFromOrdering(originsOrdered, destsOrdered, 0);
-			if (ride == null) continue;
+					double dist = validated.getRideDistance();
+					if (dist < bestValidDist[0]) {
+						bestValidDist[0] = dist; // tighten bound for subsequent branches
+						bestRide[0] = validated;
+					}
+				});
 
-			Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
-			if (validated == null) continue;
-
-			// First valid ride is the best (sorted by distance = objective)
-			return validated;
-		}
-		return null;
+		return bestRide[0];
 	}
 
 	// --- Ride construction from explicit orderings ---
