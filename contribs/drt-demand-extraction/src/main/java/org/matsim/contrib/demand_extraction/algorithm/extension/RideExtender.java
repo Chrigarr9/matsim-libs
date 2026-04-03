@@ -106,11 +106,17 @@ public final class RideExtender {
 		AtomicInteger setsSkippedDedup = new AtomicInteger();
 		int totalBaseSets = uniqueBaseSets.size();
 
+		// Per-thread profiling stats (keyed by thread ID for reliable collection)
+		ConcurrentHashMap<Long, EnumerationStats> threadStatsMap = new ConcurrentHashMap<>();
+
 		// Parallel processing over base sets
 		ForkJoinPool pool = new ForkJoinPool(parallelism);
 		try {
 			pool.submit(() ->
 				uniqueBaseSets.parallelStream().forEach(baseSetIndices -> {
+					// Register this thread's stats for collection
+					threadStatsMap.putIfAbsent(Thread.currentThread().getId(), EnumerationStats.get());
+
 					int[] neighbors = graph.findCommonNeighborsSorted(baseSetIndices);
 
 					for (int newReq : neighbors) {
@@ -151,6 +157,19 @@ public final class RideExtender {
 			pool.shutdown();
 		}
 
+		// Log profiling stats (thread-local values captured via threadStatsMap)
+		if (!threadStatsMap.isEmpty()) {
+			EnumerationStats total = EnumerationStats.sum(threadStatsMap.values());
+			total.log(log, targetDegree, parallelism);
+			// Reset thread-local stats for next degree
+			threadStatsMap.values().forEach(s -> {
+				s.setsProcessed = 0; s.orderingsEvaluated = 0; s.ridesBuilt = 0;
+				s.ridesPassedConstraints = 0; s.budgetValidations = 0; s.budgetPassed = 0;
+				s.segmentLookups = 0; s.prunedByTravelTime = 0; s.timeTotal = 0; s.timeEnumeration = 0;
+				s.timeRideConstruction = 0; s.timeBudgetValidation = 0;
+			});
+		}
+
 		// Assign sequential indices (sequential, fast)
 		List<Ride> results = new ArrayList<>(resultBySetHash.values());
 		for (int i = 0; i < results.size(); i++) {
@@ -172,6 +191,10 @@ public final class RideExtender {
 	 * @return best validated ride for this set, or null if no valid ordering exists
 	 */
 	private Ride processSet(int[] newSet) {
+		long t0 = System.nanoTime();
+		EnumerationStats stats = EnumerationStats.get();
+		stats.setsProcessed++;
+
 		DrtRequest[] setRequests = new DrtRequest[newSet.length];
 		for (int i = 0; i < newSet.length; i++) {
 			setRequests[i] = requestMap.get(newSet[i]);
@@ -180,6 +203,7 @@ public final class RideExtender {
 		for (int i = 0; i < setRequests.length; i++) {
 			for (int j = i + 1; j < setRequests.length; j++) {
 				if (setRequests[i].getPaxId().equals(setRequests[j].getPaxId())) {
+					stats.timeTotal += System.nanoTime() - t0;
 					return null;
 				}
 			}
@@ -194,9 +218,11 @@ public final class RideExtender {
 		double[] bestValidDist = { maxAllowedRideDistance };
 		Ride[] bestRide = { null };
 
+		long tEnum0 = System.nanoTime();
 		OrderingEnumerator.enumerateAndEvaluate(
 				newSet, graph, network, setRequests, bestValidDist,
 				(ordering) -> {
+					stats.orderingsEvaluated++;
 					int n = newSet.length;
 					DrtRequest[] originsOrdered = new DrtRequest[n];
 					DrtRequest[] destsOrdered = new DrtRequest[n];
@@ -205,11 +231,19 @@ public final class RideExtender {
 						destsOrdered[i] = setRequests[ordering.destPerm()[i]];
 					}
 
+					long tBuild0 = System.nanoTime();
 					Ride ride = buildRideFromOrdering(originsOrdered, destsOrdered, 0);
+					stats.timeRideConstruction += System.nanoTime() - tBuild0;
+					stats.ridesBuilt++;
 					if (ride == null) return;
+					stats.ridesPassedConstraints++;
 
+					long tBudget0 = System.nanoTime();
 					Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
+					stats.timeBudgetValidation += System.nanoTime() - tBudget0;
+					stats.budgetValidations++;
 					if (validated == null) return;
+					stats.budgetPassed++;
 
 					double dist = validated.getRideDistance();
 					if (dist < bestValidDist[0]) {
@@ -217,6 +251,8 @@ public final class RideExtender {
 						bestRide[0] = validated;
 					}
 				});
+		stats.timeEnumeration += System.nanoTime() - tEnum0;
+		stats.timeTotal += System.nanoTime() - t0;
 
 		return bestRide[0];
 	}
@@ -258,8 +294,10 @@ public final class RideExtender {
 		double[] connUtil = new double[degree * 2 - 1];
 
 		double currentTime = startTime;
+		EnumerationStats stats = EnumerationStats.get();
 		for (int i = 0; i < degree * 2 - 1; i++) {
 			TravelSegment seg = network.getSegment(sequence[i], sequence[i + 1], currentTime);
+			stats.segmentLookups++;
 			if (!seg.isReachable()) return null;
 			connTT[i] = seg.getTravelTime();
 			connDist[i] = seg.getDistance();

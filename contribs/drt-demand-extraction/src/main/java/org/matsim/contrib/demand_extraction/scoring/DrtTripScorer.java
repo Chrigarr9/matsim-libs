@@ -193,6 +193,86 @@ public final class DrtTripScorer {
 	}
 
 	/**
+	 * Score a DRT trip using pre-computed scoring context.
+	 * Avoids plan parsing, activity resolution, object allocation.
+	 * Only travelTime, distance, and delay vary per call.
+	 *
+	 * <p>IMPORTANT: The template Leg objects in the context are MUTATED (departure time,
+	 * travel time updated). This is safe because processSet runs sequentially per set
+	 * within a single thread. The Leg objects are not shared across threads — each
+	 * DrtRequest has its own ScoringContext with its own template objects.
+	 */
+	public static double scoreWithContext(
+			DrtRequest.ScoringContext ctx,
+			DrtRequest request,
+			DemandExtractionScoringAdapter adapter,
+			String drtMode,
+			OpportunityCostModel opportunityCostModel,
+			double travelTime,
+			double distance,
+			double delay,
+			double walkSpeed) {
+
+		if (!Double.isFinite(delay) || !Double.isFinite(travelTime) || !Double.isFinite(distance)) {
+			return Double.NEGATIVE_INFINITY;
+		}
+
+		double accessTime = ctx.accessWalkRoute().getTravelTime().seconds();
+		double egressTime = ctx.egressWalkRoute().getTravelTime().seconds();
+		double pickupTime = request.requestTime + delay;
+
+		// Update mutable template objects with ordering-specific values
+		ctx.accessWalkLeg().setDepartureTime(pickupTime - accessTime);
+
+		Leg drtLeg = PopulationUtils.createLeg(drtMode);
+		drtLeg.setDepartureTime(pickupTime);
+		drtLeg.setTravelTime(travelTime);
+		// Clone the DRT route template and set ordering-specific travel time
+		DrtRoute drtRoute = new DrtRoute(request.originLinkId, request.destinationLinkId);
+		drtRoute.setDirectRideTime(request.directTravelTime);
+		drtRoute.setDistance(request.directDistance);
+		drtRoute.setTravelTime(travelTime);
+		drtLeg.setRoute(drtRoute);
+
+		ctx.egressWalkLeg().setDepartureTime(pickupTime + travelTime);
+
+		// Build trip elements using pre-built legs
+		List<Leg> elements = List.of(ctx.accessWalkLeg(), drtLeg, ctx.egressWalkLeg());
+
+		// Score via adapter (using pre-built synthetic activities)
+		TripScoreRequest scoreRequest = new TripScoreRequest(
+				ctx.person(), drtMode, elements,
+				ctx.syntheticOriginActivity(), ctx.syntheticDestActivity(),
+				request.requestTime, null, request.tripIndex);
+
+		TripScoreResult result = adapter.scoreTrip(scoreRequest);
+		double score = result.utility();
+
+		// Wait time penalty
+		if (!result.waitingDisutilityIncluded()) {
+			double marginalUtilityOfWaitingPt_s = ctx.scoringParams().marginalUtilityOfWaitingPt_s;
+			double detour = travelTime - request.directTravelTime;
+			double waitTime = 0.0;
+			if (delay > 0) {
+				waitTime = delay;
+			} else if (delay < 0) {
+				waitTime = Math.max(0.0, Math.abs(delay) - detour);
+			}
+			score += marginalUtilityOfWaitingPt_s * waitTime;
+		}
+
+		// Opportunity cost
+		if (opportunityCostModel != OpportunityCostModel.NONE && !adapter.includesOpportunityCost()) {
+			double totalTravelTime = accessTime + travelTime + egressTime;
+			score -= OpportunityCostCalculator.compute(opportunityCostModel, ctx.scoringParams(),
+					totalTravelTime, ctx.originActivity(), ctx.destActivity(),
+					ctx.originDuration(), ctx.destDuration());
+		}
+
+		return score;
+	}
+
+	/**
 	 * Resolve origin/destination activities from the person's plan and delegate to
 	 * {@link #score}.
 	 *

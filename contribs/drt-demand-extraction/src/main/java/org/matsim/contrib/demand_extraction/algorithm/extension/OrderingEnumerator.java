@@ -174,9 +174,8 @@ public final class OrderingEnumerator {
 		// Reuse the same recursive methods — bestValidDist acts as the tightening bound,
 		// and the evaluator is called at each leaf (complete ordering) via a result list
 		// that we drain inline.
-		List<Ordering> singletonBuffer = new ArrayList<>(1);
 		enumerateOriginsPrunedWithEval(origAdj, n, pairs, network, requests,
-				bestValidDist, new boolean[n], new int[n], 0,
+				bestValidDist, new boolean[n], new int[n], new double[n], 0,
 				0.0, 0.0, evaluator);
 	}
 
@@ -184,13 +183,13 @@ public final class OrderingEnumerator {
 			Boolean[][] adj, int n, PairInfo[] pairs,
 			MatsimNetworkCache network, DrtRequest[] requests,
 			double[] bestValidDist,
-			boolean[] used, int[] perm, int depth,
+			boolean[] used, int[] perm, double[] pickupTimes, int depth,
 			double partialDist, double currentTime,
 			Consumer<Ordering> evaluator) {
 
 		if (depth == n) {
 			enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
-					bestValidDist, partialDist, currentTime, evaluator);
+					bestValidDist, partialDist, currentTime, pickupTimes, evaluator);
 			return;
 		}
 
@@ -211,8 +210,9 @@ public final class OrderingEnumerator {
 			for (int c : candidates) {
 				used[c] = true;
 				perm[0] = c;
+				pickupTimes[c] = requests[c].getRequestTime();
 				enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
-						bestValidDist, used, perm, 1,
+						bestValidDist, used, perm, pickupTimes, 1,
 						0.0, requests[c].getRequestTime(), evaluator);
 				used[c] = false;
 			}
@@ -233,8 +233,9 @@ public final class OrderingEnumerator {
 
 			used[c] = true;
 			perm[depth] = c;
+			pickupTimes[c] = currentTime + seg.getTravelTime();
 			enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
-					bestValidDist, used, perm, depth + 1,
+					bestValidDist, used, perm, pickupTimes, depth + 1,
 					newPartialDist, currentTime + seg.getTravelTime(), evaluator);
 			used[c] = false;
 		}
@@ -245,6 +246,7 @@ public final class OrderingEnumerator {
 			MatsimNetworkCache network, DrtRequest[] requests,
 			double[] bestValidDist,
 			double partialDist, double currentTime,
+			double[] pickupTimes,
 			Consumer<Ordering> evaluator) {
 
 		int[] origPos = new int[n];
@@ -276,7 +278,7 @@ public final class OrderingEnumerator {
 
 		enumerateDestTopoWithEval(adj, n, origPerm, network, requests,
 				bestValidDist, new boolean[n], new int[n], 0,
-				partialDist, currentTime, prevLink, evaluator);
+				partialDist, currentTime, prevLink, pickupTimes, evaluator);
 	}
 
 	private static void enumerateDestTopoWithEval(
@@ -286,6 +288,7 @@ public final class OrderingEnumerator {
 			boolean[] used, int[] perm, int depth,
 			double partialDist, double currentTime,
 			Id<Link> prevLinkId,
+			double[] pickupTimes,
 			Consumer<Ordering> evaluator) {
 
 		if (depth == n) {
@@ -294,6 +297,18 @@ public final class OrderingEnumerator {
 			// which tightens the bound for all subsequent branches.
 			evaluator.accept(new Ordering(origPerm.clone(), perm.clone(), partialDist));
 			return;
+		}
+
+		// Check A: prune entire subtree if any in-vehicle passenger already exceeds maxTravelTime.
+		// Their time can only increase as more stops are visited before their dropoff.
+		EnumerationStats stats = EnumerationStats.get();
+		for (int p = 0; p < n; p++) {
+			if (used[p]) continue; // already dropped off
+			double inVehicleTime = currentTime - pickupTimes[p];
+			if (inVehicleTime > requests[p].getMaxTravelTime()) {
+				stats.prunedByTravelTime++;
+				return;
+			}
 		}
 
 		List<Integer> candidates = new ArrayList<>();
@@ -321,12 +336,28 @@ public final class OrderingEnumerator {
 			double newPartialDist = partialDist + seg.getDistance();
 			if (newPartialDist > bestValidDist[0]) break;
 
+			// Check B: after routing to this candidate's destination, would any
+			// remaining in-vehicle passenger exceed their maxTravelTime?
+			double newTime = currentTime + seg.getTravelTime();
+			boolean busted = false;
+			for (int p = 0; p < n; p++) {
+				if (used[p] || p == c) continue; // already dropped off, or being dropped off now
+				if (newTime - pickupTimes[p] > requests[p].getMaxTravelTime()) {
+					busted = true;
+					break;
+				}
+			}
+			if (busted) {
+				stats.prunedByTravelTime++;
+				continue;
+			}
+
 			used[c] = true;
 			perm[depth] = c;
 			enumerateDestTopoWithEval(adj, n, origPerm, network, requests,
 					bestValidDist, used, perm, depth + 1,
-					newPartialDist, currentTime + seg.getTravelTime(),
-					requests[c].destinationLinkId, evaluator);
+					newPartialDist, newTime,
+					requests[c].destinationLinkId, pickupTimes, evaluator);
 			used[c] = false;
 		}
 	}

@@ -2,8 +2,12 @@ package org.matsim.contrib.demand_extraction.algorithm.validation;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.matsim.api.core.v01.TransportMode;
+import org.matsim.api.core.v01.population.Activity;
+import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Population;
+import org.matsim.api.core.v01.population.Route;
 import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
@@ -106,6 +110,103 @@ public class BudgetValidator {
 		double actualDrtScore = calculateDrtScore(request, 0.0, request.getTravelTime(), request.getDistance(),
 				walkDistance, walkDistance);
 		return actualDrtScore - request.bestModeScore;
+	}
+
+	/**
+	 * Pre-compute and cache scoring context for all requests.
+	 * Called once before ride generation to avoid repeated plan parsing
+	 * and object allocation during budget validation.
+	 *
+	 * <p>Thread-safe: contexts are published via volatile field on DrtRequest.
+	 * ForkJoinPool worker threads read the context after this method completes.
+	 */
+	public void precomputeScoringContexts(java.util.List<DrtRequest> requests) {
+		log.info("Pre-computing scoring contexts for {} requests...", requests.size());
+		long start = System.currentTimeMillis();
+
+		String drtMode = exMasConfig.getDrtMode();
+		double walkDist = exMasConfig.getMinDrtAccessEgressDistance();
+		double accessTime = walkDist / walkSpeed;
+		double egressTime = walkDist / walkSpeed;
+		ExMasConfigGroup.OpportunityCostModel ocModel = exMasConfig.getOpportunityCostModel();
+
+		for (DrtRequest request : requests) {
+			Person person = population.getPersons().get(request.personId);
+			if (person == null) continue;
+
+			// Resolve activities (expensive plan parsing — done once here)
+			Activity originActivity = null;
+			Activity destActivity = null;
+			double originDuration = 0.0;
+			double destDuration = 0.0;
+
+			if (ocModel == ExMasConfigGroup.OpportunityCostModel.LOG) {
+				java.util.List<org.matsim.core.router.TripStructureUtils.Trip> trips =
+						org.matsim.core.router.TripStructureUtils.getTrips(person.getSelectedPlan());
+				if (request.tripIndex >= 0 && request.tripIndex < trips.size()) {
+					org.matsim.core.router.TripStructureUtils.Trip trip = trips.get(request.tripIndex);
+					originActivity = trip.getOriginActivity();
+					destActivity = trip.getDestinationActivity();
+					double[] actDurations = org.matsim.contrib.demand_extraction.scoring.OpportunityCostCalculator
+							.computeActivityDurations(person.getSelectedPlan());
+					if (request.tripIndex < actDurations.length)
+						originDuration = actDurations[request.tripIndex];
+					if (request.tripIndex + 1 < actDurations.length)
+						destDuration = actDurations[request.tripIndex + 1];
+				}
+			}
+			if (originActivity == null) {
+				originActivity = org.matsim.core.population.PopulationUtils
+						.createActivityFromLinkId("unknown", request.originLinkId);
+			}
+			if (destActivity == null) {
+				destActivity = org.matsim.core.population.PopulationUtils
+						.createActivityFromLinkId("unknown", request.destinationLinkId);
+			}
+
+			// Scoring parameters
+			org.matsim.core.scoring.functions.ScoringParameters scoringParams =
+					scoringParametersForPerson.getScoringParameters(person);
+
+			// Pre-build template legs (access walk, egress walk, DRT route)
+			Leg accessLeg = org.matsim.core.population.PopulationUtils.createLeg(TransportMode.walk);
+			accessLeg.setTravelTime(accessTime);
+			Route accessRoute = org.matsim.core.population.routes.RouteUtils
+					.createGenericRouteImpl(request.originLinkId, request.originLinkId);
+			accessRoute.setDistance(walkDist);
+			accessRoute.setTravelTime(accessTime);
+			accessLeg.setRoute(accessRoute);
+
+			Leg egressLeg = org.matsim.core.population.PopulationUtils.createLeg(TransportMode.walk);
+			egressLeg.setTravelTime(egressTime);
+			Route egressRoute = org.matsim.core.population.routes.RouteUtils
+					.createGenericRouteImpl(request.destinationLinkId, request.destinationLinkId);
+			egressRoute.setDistance(walkDist);
+			egressRoute.setTravelTime(egressTime);
+			egressLeg.setRoute(egressRoute);
+
+			org.matsim.contrib.drt.routing.DrtRoute drtRouteTemplate =
+					new org.matsim.contrib.drt.routing.DrtRoute(
+							request.originLinkId, request.destinationLinkId);
+			drtRouteTemplate.setDirectRideTime(request.directTravelTime);
+			drtRouteTemplate.setDistance(request.directDistance);
+
+			Activity synOrigAct = org.matsim.core.population.PopulationUtils
+					.createActivityFromLinkId("drt_interaction", request.originLinkId);
+			synOrigAct.setCoord(new org.matsim.api.core.v01.Coord(request.originX, request.originY));
+			synOrigAct.setEndTime(request.requestTime);
+			Activity synDestAct = org.matsim.core.population.PopulationUtils
+					.createActivityFromLinkId("drt_interaction", request.destinationLinkId);
+			synDestAct.setCoord(new org.matsim.api.core.v01.Coord(request.destinationX, request.destinationY));
+
+			request.setScoringContext(new DrtRequest.ScoringContext(
+					person, originActivity, destActivity, originDuration, destDuration,
+					scoringParams, accessLeg, accessRoute, egressLeg, egressRoute,
+					drtRouteTemplate, synOrigAct, synDestAct));
+		}
+
+		long elapsed = System.currentTimeMillis() - start;
+		log.info("Pre-computed scoring contexts for {} requests in {}ms", requests.size(), elapsed);
 	}
 
 	/**
@@ -228,6 +329,16 @@ public class BudgetValidator {
 	private double calculateDrtScore(DrtRequest request, double delay,
 			double actualTravelTime, double actualDistance,
 			double actualWalkDistanceAccess, double actualWalkDistanceEgress) {
+
+		// Use pre-computed scoring context if available (fast path)
+		DrtRequest.ScoringContext ctx = request.getScoringContext();
+		if (ctx != null) {
+			return DrtTripScorer.scoreWithContext(ctx, request, adapter,
+					exMasConfig.getDrtMode(), exMasConfig.getOpportunityCostModel(),
+					actualTravelTime, actualDistance, delay, walkSpeed);
+		}
+
+		// Fallback: full scoring (for single rides generated before precompute)
 		Person person = population.getPersons().get(request.personId);
 		return DrtTripScorer.scoreWithActivityResolution(person, request, adapter,
 				scoringParametersForPerson, exMasConfig.getDrtMode(),

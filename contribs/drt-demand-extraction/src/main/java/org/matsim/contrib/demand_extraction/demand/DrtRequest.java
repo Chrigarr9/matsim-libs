@@ -2,7 +2,12 @@ package org.matsim.contrib.demand_extraction.demand;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
+import org.matsim.api.core.v01.population.Activity;
+import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
+import org.matsim.api.core.v01.population.Route;
+import org.matsim.contrib.drt.routing.DrtRoute;
+import org.matsim.core.scoring.functions.ScoringParameters;
 
 /**
  * Unified request class for DRT demand extraction and ExMAS ride generation.
@@ -72,6 +77,39 @@ public class DrtRequest {
     public final double ptTravelTime; // PT travel time for this trip (seconds)
 	public final double ptAccessibility; // Ratio: ptTravelTime / carTravelTime (higher = PT slower/worse, lower = PT
 											// faster/better)
+
+	/**
+	 * Pre-computed scoring context for fast budget validation.
+	 * Populated once per request by BudgetValidator.precomputeScoringContexts().
+	 * Contains all data that is constant across orderings/sets/degrees.
+	 * Volatile for thread-safe publication to ForkJoinPool worker threads.
+	 */
+	private volatile ScoringContext scoringContext;
+
+	/**
+	 * Cached scoring context holding pre-resolved activities, durations,
+	 * scoring parameters, and template trip objects for a DRT request.
+	 * All fields are constant for a given request regardless of ride ordering.
+	 */
+	public record ScoringContext(
+		Person person,
+		Activity originActivity,
+		Activity destActivity,
+		double originDuration,
+		double destDuration,
+		ScoringParameters scoringParams,
+		// Pre-built template objects (walk legs have fixed distances, DRT route has fixed direct metrics)
+		Leg accessWalkLeg,
+		Route accessWalkRoute,
+		Leg egressWalkLeg,
+		Route egressWalkRoute,
+		DrtRoute drtRouteTemplate,
+		Activity syntheticOriginActivity,
+		Activity syntheticDestActivity
+	) {}
+
+	public ScoringContext getScoringContext() { return scoringContext; }
+	public void setScoringContext(ScoringContext ctx) { this.scoringContext = ctx; }
 
     private DrtRequest(Builder builder) {
         this.index = builder.index;
