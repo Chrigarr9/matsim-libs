@@ -48,8 +48,10 @@ public final class RideExtender {
 
 	// DegreeGraph from previous degree for candidate generation (null at degree 3)
 	private final DegreeGraph prevDegreeGraph;
-	// Collected during this extension: constraint-feasible sets for building next DegreeGraph
-	private final ConcurrentHashMap<Long, DegreeGraph.FeasibleSetResult> feasibleSetResults = new ConcurrentHashMap<>();
+	// Stored after extendRides completes: valid rides by set hash, used for graph building
+	private ConcurrentHashMap<Long, Ride> lastResultBySetHash;
+	// Consensus bitmasks accumulated during processSet, keyed by set hash
+	private ConcurrentHashMap<Long, Long> lastConsensusBySetHash;
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig) {
@@ -68,14 +70,15 @@ public final class RideExtender {
 		this.prevDegreeGraph = prevDegreeGraph;
 	}
 
-	/** Build a DegreeGraph from the constraint-feasible sets collected during extension. */
+	/** Build a DegreeGraph from the valid rides produced by the last extendRides call. */
 	public DegreeGraph buildDegreeGraph(int degree) {
-		return DegreeGraph.build(feasibleSetResults.values(), degree);
+		if (lastResultBySetHash == null || lastResultBySetHash.isEmpty()) return null;
+		return DegreeGraph.buildFromRides(lastResultBySetHash.values(), lastConsensusBySetHash, degree);
 	}
 
-	/** Returns the number of constraint-feasible sets collected during the last extendRides call. */
+	/** Returns the number of feasible sets from the last extendRides call. */
 	public int getFeasibleSetCount() {
-		return feasibleSetResults.size();
+		return lastResultBySetHash != null ? lastResultBySetHash.size() : 0;
 	}
 
 	/**
@@ -120,6 +123,7 @@ public final class RideExtender {
 		// - resultBySetHash: successful rides
 		ConcurrentHashMap.KeySetView<Long, Boolean> claimedSets = ConcurrentHashMap.newKeySet();
 		ConcurrentHashMap<Long, Ride> resultBySetHash = new ConcurrentHashMap<>();
+		ConcurrentHashMap<Long, Long> consensusBySetHash = new ConcurrentHashMap<>();
 
 		// Progress counters (thread-safe)
 		AtomicInteger baseSetsCompleted = new AtomicInteger();
@@ -157,7 +161,7 @@ public final class RideExtender {
 
 						setsProcessed.incrementAndGet();
 
-						Ride bestRide = processSet(newSet);
+						Ride bestRide = processSet(newSet, newSetHash, consensusBySetHash);
 						if (bestRide != null) {
 							resultBySetHash.put(newSetHash, bestRide);
 						}
@@ -198,6 +202,10 @@ public final class RideExtender {
 			});
 		}
 
+		// Store results for graph building (accessed by buildDegreeGraph)
+		this.lastResultBySetHash = resultBySetHash;
+		this.lastConsensusBySetHash = consensusBySetHash;
+
 		// Assign sequential indices (sequential, fast)
 		List<Ride> results = new ArrayList<>(resultBySetHash.values());
 		for (int i = 0; i < results.size(); i++) {
@@ -216,9 +224,21 @@ public final class RideExtender {
 	 * Process a single candidate set: enumerate orderings, route, validate, return best ride.
 	 * Thread-safe — only reads shared immutable/thread-safe resources.
 	 *
+	 * <p>Two code paths:
+	 * <ul>
+	 *   <li>Degree 3 (prevDegreeGraph == null): use 6-param enumerateAndEvaluate — no
+	 *       extractConstraints or tightenConstraints overhead.</li>
+	 *   <li>Degree 4+ (prevDegreeGraph != null): extract + tighten constraints using
+	 *       degree graph, then 7-param enumerateAndEvaluate.</li>
+	 * </ul>
+	 *
+	 * <p>No FeasibleSetResult collection, no consensus bits, no array cloning.
+	 * The DegreeGraph is built post-hoc from valid rides in resultBySetHash.
+	 *
 	 * @return best validated ride for this set, or null if no valid ordering exists
 	 */
-	private Ride processSet(int[] newSet) {
+	private Ride processSet(int[] newSet, long setHash,
+						ConcurrentHashMap<Long, Long> consensusBySetHash) {
 		long t0 = System.nanoTime();
 		EnumerationStats stats = EnumerationStats.get();
 		stats.setsProcessed++;
@@ -238,78 +258,86 @@ public final class RideExtender {
 		}
 
 		double maxAllowedRideDistance = computeMaxAllowedRideDistance(setRequests);
-
-		// Extract pairwise constraints and optionally tighten with sub-set orderings
-		OrderingEnumerator.PairInfo[] pairConstraints =
-			OrderingEnumerator.extractConstraints(newSet, graph);
-		if (pairConstraints == null) {
-			stats.timeTotal += System.nanoTime() - t0;
-			return null;
-		}
-
-		// Tighten with sub-set ordering constraints from previous degree graph
-		if (prevDegreeGraph != null) {
-			pairConstraints = tightenConstraints(pairConstraints, newSet, prevDegreeGraph);
-		}
-
-		// Distance B&B with ordering collection: evaluate orderings within distance
-		// bound, collect valid orderings for the degree graph, tighten bound on valid.
 		double[] bestValidDist = { maxAllowedRideDistance };
 		Ride[] bestRide = { null };
 		long[] consensusBits = { 0L };
 
 		long tEnum0 = System.nanoTime();
-		OrderingEnumerator.enumerateAndEvaluate(
-				newSet, graph, pairConstraints, network, setRequests, bestValidDist,
-				(ordering) -> {
-					stats.orderingsEvaluated++;
-					int n = newSet.length;
-					DrtRequest[] originsOrdered = new DrtRequest[n];
-					DrtRequest[] destsOrdered = new DrtRequest[n];
-					for (int i = 0; i < n; i++) {
-						originsOrdered[i] = setRequests[ordering.originPerm()[i]];
-						destsOrdered[i] = setRequests[ordering.destPerm()[i]];
-					}
 
-					long tBuild0 = System.nanoTime();
-					Ride ride = buildRideFromOrdering(originsOrdered, destsOrdered, 0);
-					stats.timeRideConstruction += System.nanoTime() - tBuild0;
-					stats.ridesBuilt++;
-					if (ride == null) return;
-					stats.ridesPassedConstraints++;
+		if (prevDegreeGraph != null) {
+			// Degree 4+: extract and tighten constraints using degree graph
+			OrderingEnumerator.PairInfo[] pairConstraints =
+				OrderingEnumerator.extractConstraints(newSet, graph);
+			if (pairConstraints == null) {
+				stats.timeTotal += System.nanoTime() - t0;
+				return null;
+			}
+			pairConstraints = tightenConstraints(pairConstraints, newSet, prevDegreeGraph);
+			OrderingEnumerator.enumerateAndEvaluate(
+					newSet, graph, pairConstraints, network, setRequests, bestValidDist,
+					(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
+							bestValidDist, bestRide, consensusBits, stats));
+		} else {
+			// Degree 3: use original code path — no graph overhead
+			OrderingEnumerator.enumerateAndEvaluate(
+					newSet, graph, network, setRequests, bestValidDist,
+					(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
+							bestValidDist, bestRide, consensusBits, stats));
+		}
 
-					long tBudget0 = System.nanoTime();
-					Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
-					stats.timeBudgetValidation += System.nanoTime() - tBudget0;
-					stats.budgetValidations++;
-					if (validated == null) return;
-					stats.budgetPassed++;
-
-					// Accumulate pairwise consensus bits (zero allocation)
-					consensusBits[0] |= DegreeGraph.computeOrderingBits(
-						ordering.originPerm(), ordering.destPerm(), newSet.length);
-
-					// Tighten B&B bound and track best ride
-					double dist = validated.getRideDistance();
-					if (dist < bestValidDist[0]) {
-						bestValidDist[0] = dist;
-						bestRide[0] = validated;
-					}
-				});
 		stats.timeEnumeration += System.nanoTime() - tEnum0;
+		stats.timeTotal += System.nanoTime() - t0;
 
-		// Record constraint-feasible sets with consensus bitmask for degree graph
-		if (consensusBits[0] != 0L || bestRide[0] != null) {
+		if (bestRide[0] != null) {
 			stats.setsConstraintFeasible++;
-			long setHash = hashRequestSet(newSet);
-			feasibleSetResults.put(setHash, new DegreeGraph.FeasibleSetResult(
-				newSet.clone(), setHash, consensusBits[0]));
 			stats.setsBudgetFeasible++;
 		}
 
-		stats.timeTotal += System.nanoTime() - t0;
+		// Store consensus bits (lightweight: just a long per set, no array cloning)
+		if (consensusBits[0] != 0L) {
+			consensusBySetHash.put(setHash, consensusBits[0]);
+		}
 
 		return bestRide[0];
+	}
+
+	/** Shared evaluator logic for both degree-3 and degree-4+ code paths. */
+	private void evaluateOrdering(OrderingEnumerator.Ordering ordering, int[] newSet,
+								   DrtRequest[] setRequests, double[] bestValidDist,
+								   Ride[] bestRide, long[] consensusBits,
+								   EnumerationStats stats) {
+		stats.orderingsEvaluated++;
+		int n = newSet.length;
+		DrtRequest[] originsOrdered = new DrtRequest[n];
+		DrtRequest[] destsOrdered = new DrtRequest[n];
+		for (int i = 0; i < n; i++) {
+			originsOrdered[i] = setRequests[ordering.originPerm()[i]];
+			destsOrdered[i] = setRequests[ordering.destPerm()[i]];
+		}
+
+		long tBuild0 = System.nanoTime();
+		Ride ride = buildRideFromOrdering(originsOrdered, destsOrdered, 0);
+		stats.timeRideConstruction += System.nanoTime() - tBuild0;
+		stats.ridesBuilt++;
+		if (ride == null) return;
+		stats.ridesPassedConstraints++;
+
+		long tBudget0 = System.nanoTime();
+		Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
+		stats.timeBudgetValidation += System.nanoTime() - tBudget0;
+		stats.budgetValidations++;
+		if (validated == null) return;
+		stats.budgetPassed++;
+
+		// Accumulate pairwise consensus bits (zero allocation, just arithmetic)
+		consensusBits[0] |= DegreeGraph.computeOrderingBits(
+			ordering.originPerm(), ordering.destPerm(), n);
+
+		double dist = validated.getRideDistance();
+		if (dist < bestValidDist[0]) {
+			bestValidDist[0] = dist;
+			bestRide[0] = validated;
+		}
 	}
 
 	/**

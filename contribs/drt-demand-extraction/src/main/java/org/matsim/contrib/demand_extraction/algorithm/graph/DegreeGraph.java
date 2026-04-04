@@ -2,6 +2,9 @@ package org.matsim.contrib.demand_extraction.algorithm.graph;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Map;
+
+import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
@@ -254,6 +257,65 @@ public final class DegreeGraph {
             }
         }
 
+        for (var entry : tempIndex.long2ObjectEntrySet()) {
+            int[] arr = entry.getValue().toIntArray();
+            Arrays.sort(arr);
+            extIndex.put(entry.getLongKey(), arr);
+        }
+
+        return new DegreeGraph(degree, extIndex, consensus);
+    }
+
+    /**
+     * Build a DegreeGraph from valid Ride objects and pre-computed consensus bitmasks.
+     *
+     * <p>Builds the extension index from rides (for candidate generation) and uses
+     * the pre-accumulated consensus map (for ordering constraint tightening).
+     * This avoids collecting FeasibleSetResults during the hot parallel loop.
+     *
+     * @param rides valid rides from resultBySetHash
+     * @param consensusMap pre-accumulated consensus bitmasks (setHash -> OR'd consensus bits)
+     * @param degree the degree of rides in this graph
+     * @return built graph
+     */
+    public static DegreeGraph buildFromRides(Collection<Ride> rides,
+                                              Map<Long, Long> consensusMap,
+                                              int degree) {
+        Long2ObjectOpenHashMap<int[]> extIndex = new Long2ObjectOpenHashMap<>();
+        Long2LongOpenHashMap consensus = new Long2LongOpenHashMap();
+        consensus.defaultReturnValue(0L);
+
+        // Copy pre-computed consensus into fastutil map
+        if (consensusMap != null) {
+            for (Map.Entry<Long, Long> entry : consensusMap.entrySet()) {
+                if (entry.getValue() != 0L) {
+                    consensus.put(entry.getKey().longValue(), entry.getValue().longValue());
+                }
+            }
+        }
+
+        int estimatedBuckets = rides.size() * degree;
+        Long2ObjectOpenHashMap<IntArrayList> tempIndex =
+            new Long2ObjectOpenHashMap<>(estimatedBuckets);
+
+        for (Ride ride : rides) {
+            int[] reqIndices = ride.getRequestIndices();
+            int k = reqIndices.length;
+            if (k != degree) continue;
+
+            // Sort request indices (they should already be sorted, but ensure)
+            int[] sorted = reqIndices.clone();
+            Arrays.sort(sorted);
+
+            // Build extension index: for each element, hash the (k-1)-subset without it
+            for (int skip = 0; skip < k; skip++) {
+                long subHash = hashSubsetSkipping(sorted, skip);
+                int extraElement = sorted[skip];
+                tempIndex.computeIfAbsent(subHash, h -> new IntArrayList()).add(extraElement);
+            }
+        }
+
+        // Convert IntArrayLists to sorted int arrays
         for (var entry : tempIndex.long2ObjectEntrySet()) {
             int[] arr = entry.getValue().toIntArray();
             Arrays.sort(arr);
