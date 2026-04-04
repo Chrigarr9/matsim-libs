@@ -2,8 +2,9 @@ package org.matsim.contrib.demand_extraction.algorithm.graph;
 
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.List;
 
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 
 /**
@@ -12,33 +13,45 @@ import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
  * <p>Built from constraint-feasible sets at degree k, used to generate
  * degree-(k+1) candidates. Two components:
  * <ul>
- *   <li><b>Extension index:</b> (k-1)-subset hash → sorted extension elements.
+ *   <li><b>Extension index:</b> (k-1)-subset hash -> sorted extension elements.
  *       Used by {@link #findExtensions} for candidate generation.</li>
- *   <li><b>Valid orderings:</b> set hash → list of valid (origin, dest) permutations.
- *       Used for ordering constraint propagation to tighten enumeration DAGs.</li>
+ *   <li><b>Consensus bitmask:</b> set hash -> compact long encoding pairwise
+ *       ordering consensus. Used for ordering constraint propagation to tighten
+ *       enumeration DAGs.</li>
  * </ul>
  *
  * <p>Replaces pair-graph-based candidate generation at degree 4+.
  * The pair graph is still needed for FIFO/LIFO ordering constraints.
+ *
+ * <h3>Bitmask encoding</h3>
+ * For a set of degree k, each pair (i,j) with i &lt; j gets 4 bits at offset
+ * {@code pairIdx * 4} where {@code pairIdx = i*(2*k-i-1)/2 + (j-i-1)}:
+ * <ul>
+ *   <li>bit +0: i before j in ORIGINS seen in some valid ordering</li>
+ *   <li>bit +1: j before i in ORIGINS seen in some valid ordering</li>
+ *   <li>bit +2: i before j in DESTINATIONS seen in some valid ordering</li>
+ *   <li>bit +3: j before i in DESTINATIONS seen in some valid ordering</li>
+ * </ul>
+ * A pair has consensus if exactly one of the two direction bits is set (for origins
+ * or destinations respectively). For degree &gt; 5, the bitmask is 0 (disabled)
+ * since C(6,2)*4 = 60 bits is fine but C(7,2)*4 = 84 exceeds long capacity.
+ * We conservatively enable only for degree &le; 5 (40 bits max).
  */
 public final class DegreeGraph {
 
-    /** A valid (origin, destination) ordering for a feasible set. */
-    public record OrderingPair(byte[] originPerm, byte[] destPerm) {}
-
-    /** Result from processing a candidate set: the set, best ride info, and all valid orderings. */
-    public record FeasibleSetResult(int[] sortedRequestSet, long setHash, List<OrderingPair> validOrderings) {}
+    /** Result from processing a candidate set: the set, its hash, and consensus bitmask. */
+    public record FeasibleSetResult(int[] sortedRequestSet, long setHash, long consensusBitmask) {}
 
     private final int degree;
     private final Long2ObjectOpenHashMap<int[]> extensionIndex;
-    private final Long2ObjectOpenHashMap<List<OrderingPair>> orderingsBySetHash;
+    private final Long2LongOpenHashMap consensusBySetHash;
 
     private DegreeGraph(int degree,
                         Long2ObjectOpenHashMap<int[]> extensionIndex,
-                        Long2ObjectOpenHashMap<List<OrderingPair>> orderingsBySetHash) {
+                        Long2LongOpenHashMap consensusBySetHash) {
         this.degree = degree;
         this.extensionIndex = extensionIndex;
-        this.orderingsBySetHash = orderingsBySetHash;
+        this.consensusBySetHash = consensusBySetHash;
     }
 
     public int getDegree() { return degree; }
@@ -80,15 +93,6 @@ public final class DegreeGraph {
     }
 
     /**
-     * Get valid orderings for a set (for ordering constraint propagation).
-     * @param setHash hash of the sorted request set
-     * @return list of valid orderings, or null if not in graph
-     */
-    public List<OrderingPair> getOrderings(long setHash) {
-        return orderingsBySetHash.get(setHash);
-    }
-
-    /**
      * Check if request a is always before request b in origin orderings
      * across all sub-sets of fullSet that contain both a and b.
      *
@@ -98,94 +102,155 @@ public final class DegreeGraph {
      * @return Boolean.TRUE if always a before b, Boolean.FALSE if always b before a, null if mixed/unknown
      */
     public Boolean getOriginConsensus(int[] fullSet, int idxA, int idxB) {
-        Boolean consensus = null;
         int n = fullSet.length;
+        boolean seenForward = false; // a before b
+        boolean seenReverse = false; // b before a
 
         for (int skip = 0; skip < n; skip++) {
             if (skip == idxA || skip == idxB) continue;
 
             long subHash = hashSubsetSkipping(fullSet, skip);
-            List<OrderingPair> orderings = orderingsBySetHash.get(subHash);
-            if (orderings == null) continue;
+            long bitmask = consensusBySetHash.get(subHash);
+            if (bitmask == 0L) continue;
 
             // Map idxA/idxB to positions in the subset
-            // After removing element at 'skip', indices shift:
             int subIdxA = idxA < skip ? idxA : idxA - 1;
             int subIdxB = idxB < skip ? idxB : idxB - 1;
+            // Ensure lo < hi for the pair index formula
+            int lo = Math.min(subIdxA, subIdxB);
+            int hi = Math.max(subIdxA, subIdxB);
+            int subDegree = n - 1;
+            int pairIdx = lo * (2 * subDegree - lo - 1) / 2 + (hi - lo - 1);
 
-            for (OrderingPair op : orderings) {
-                int posA = -1, posB = -1;
-                for (int p = 0; p < op.originPerm().length; p++) {
-                    if (op.originPerm()[p] == subIdxA) posA = p;
-                    if (op.originPerm()[p] == subIdxB) posB = p;
-                }
-                if (posA < 0 || posB < 0) continue;
-
-                boolean aFirst = posA < posB;
-                if (consensus == null) consensus = aFirst;
-                else if (consensus != aFirst) return null;
+            boolean fwd, rev;
+            if (subIdxA < subIdxB) {
+                // lo=subIdxA, hi=subIdxB: bit 0 = A before B, bit 1 = B before A
+                fwd = (bitmask & (1L << (pairIdx * 4))) != 0;
+                rev = (bitmask & (1L << (pairIdx * 4 + 1))) != 0;
+            } else {
+                // lo=subIdxB, hi=subIdxA: bit 0 = B before A, bit 1 = A before B
+                fwd = (bitmask & (1L << (pairIdx * 4 + 1))) != 0;
+                rev = (bitmask & (1L << (pairIdx * 4))) != 0;
             }
+
+            if (fwd) seenForward = true;
+            if (rev) seenReverse = true;
+            if (seenForward && seenReverse) return null; // Both directions seen
         }
-        return consensus;
+
+        if (seenForward && !seenReverse) return Boolean.TRUE;
+        if (seenReverse && !seenForward) return Boolean.FALSE;
+        return null; // No data or mixed
     }
 
     /** Same as getOriginConsensus but for destination orderings. */
     public Boolean getDestConsensus(int[] fullSet, int idxA, int idxB) {
-        Boolean consensus = null;
         int n = fullSet.length;
+        boolean seenForward = false; // a before b
+        boolean seenReverse = false; // b before a
 
         for (int skip = 0; skip < n; skip++) {
             if (skip == idxA || skip == idxB) continue;
 
             long subHash = hashSubsetSkipping(fullSet, skip);
-            List<OrderingPair> orderings = orderingsBySetHash.get(subHash);
-            if (orderings == null) continue;
+            long bitmask = consensusBySetHash.get(subHash);
+            if (bitmask == 0L) continue;
 
             int subIdxA = idxA < skip ? idxA : idxA - 1;
             int subIdxB = idxB < skip ? idxB : idxB - 1;
+            int lo = Math.min(subIdxA, subIdxB);
+            int hi = Math.max(subIdxA, subIdxB);
+            int subDegree = n - 1;
+            int pairIdx = lo * (2 * subDegree - lo - 1) / 2 + (hi - lo - 1);
 
-            for (OrderingPair op : orderings) {
-                int posA = -1, posB = -1;
-                for (int p = 0; p < op.destPerm().length; p++) {
-                    if (op.destPerm()[p] == subIdxA) posA = p;
-                    if (op.destPerm()[p] == subIdxB) posB = p;
+            boolean fwd, rev;
+            if (subIdxA < subIdxB) {
+                // lo=subIdxA, hi=subIdxB: bit 2 = A before B in dests, bit 3 = B before A
+                fwd = (bitmask & (1L << (pairIdx * 4 + 2))) != 0;
+                rev = (bitmask & (1L << (pairIdx * 4 + 3))) != 0;
+            } else {
+                // lo=subIdxB, hi=subIdxA: bit 2 = B before A, bit 3 = A before B
+                fwd = (bitmask & (1L << (pairIdx * 4 + 3))) != 0;
+                rev = (bitmask & (1L << (pairIdx * 4 + 2))) != 0;
+            }
+
+            if (fwd) seenForward = true;
+            if (rev) seenReverse = true;
+            if (seenForward && seenReverse) return null;
+        }
+
+        if (seenForward && !seenReverse) return Boolean.TRUE;
+        if (seenReverse && !seenForward) return Boolean.FALSE;
+        return null;
+    }
+
+    /**
+     * Compute pairwise consensus bits for a single ordering.
+     * Call this for each valid ordering found during enumeration,
+     * OR the results together to build the full consensus bitmask.
+     *
+     * @param originPerm origin permutation (position -> request index within set)
+     * @param destPerm destination permutation
+     * @param degree number of requests in the set
+     * @return bitmask with direction bits set, or 0L if degree > 5
+     */
+    public static long computeOrderingBits(int[] originPerm, int[] destPerm, int degree) {
+        if (degree > 5) return 0L; // Too many pairs for a single long
+        long bits = 0L;
+        int n = degree;
+        for (int i = 0; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                int pairIdx = i * (2 * n - i - 1) / 2 + (j - i - 1);
+                // Origin: find positions of i and j in originPerm
+                int posI = -1, posJ = -1;
+                for (int p = 0; p < n; p++) {
+                    if (originPerm[p] == i) posI = p;
+                    if (originPerm[p] == j) posJ = p;
                 }
-                if (posA < 0 || posB < 0) continue;
-
-                boolean aFirst = posA < posB;
-                if (consensus == null) consensus = aFirst;
-                else if (consensus != aFirst) return null;
+                if (posI >= 0 && posJ >= 0) {
+                    bits |= 1L << (pairIdx * 4 + (posI < posJ ? 0 : 1));
+                }
+                // Dest: find positions of i and j in destPerm
+                posI = -1; posJ = -1;
+                for (int p = 0; p < n; p++) {
+                    if (destPerm[p] == i) posI = p;
+                    if (destPerm[p] == j) posJ = p;
+                }
+                if (posI >= 0 && posJ >= 0) {
+                    bits |= 1L << (pairIdx * 4 + 2 + (posI < posJ ? 0 : 1));
+                }
             }
         }
-        return consensus;
+        return bits;
     }
 
     /**
      * Build a DegreeGraph from feasible set results.
      *
-     * @param feasibleSets results from processSet — each contains sorted request set + valid orderings
+     * @param feasibleSets results from processSet -- each contains sorted request set + consensus bitmask
      * @param degree the degree of sets in this graph
      * @return built graph
      */
     public static DegreeGraph build(Collection<FeasibleSetResult> feasibleSets, int degree) {
         Long2ObjectOpenHashMap<int[]> extIndex = new Long2ObjectOpenHashMap<>();
-        Long2ObjectOpenHashMap<List<OrderingPair>> orderings = new Long2ObjectOpenHashMap<>();
+        Long2LongOpenHashMap consensus = new Long2LongOpenHashMap();
+        consensus.defaultReturnValue(0L);
 
-        Long2ObjectOpenHashMap<it.unimi.dsi.fastutil.ints.IntArrayList> tempIndex = new Long2ObjectOpenHashMap<>();
+        int estimatedBuckets = feasibleSets.size() * degree;
+        Long2ObjectOpenHashMap<IntArrayList> tempIndex = new Long2ObjectOpenHashMap<>(estimatedBuckets);
 
         for (FeasibleSetResult fsr : feasibleSets) {
             int[] set = fsr.sortedRequestSet();
             int k = set.length;
 
-            if (fsr.validOrderings() != null && !fsr.validOrderings().isEmpty()) {
-                orderings.put(fsr.setHash(), fsr.validOrderings());
+            if (fsr.consensusBitmask() != 0L) {
+                consensus.put(fsr.setHash(), fsr.consensusBitmask());
             }
 
             for (int skip = 0; skip < k; skip++) {
                 long subHash = hashSubsetSkipping(set, skip);
                 int extraElement = set[skip];
-                tempIndex.computeIfAbsent(subHash,
-                    h -> new it.unimi.dsi.fastutil.ints.IntArrayList()).add(extraElement);
+                tempIndex.computeIfAbsent(subHash, h -> new IntArrayList()).add(extraElement);
             }
         }
 
@@ -195,7 +260,7 @@ public final class DegreeGraph {
             extIndex.put(entry.getLongKey(), arr);
         }
 
-        return new DegreeGraph(degree, extIndex, orderings);
+        return new DegreeGraph(degree, extIndex, consensus);
     }
 
     // --- Utility methods ---

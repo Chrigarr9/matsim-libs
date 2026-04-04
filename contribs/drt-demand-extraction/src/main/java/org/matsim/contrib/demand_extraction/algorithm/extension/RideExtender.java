@@ -256,7 +256,7 @@ public final class RideExtender {
 		// bound, collect valid orderings for the degree graph, tighten bound on valid.
 		double[] bestValidDist = { maxAllowedRideDistance };
 		Ride[] bestRide = { null };
-		List<DegreeGraph.OrderingPair> allValidOrderings = new ArrayList<>();
+		long[] consensusBits = { 0L };
 
 		long tEnum0 = System.nanoTime();
 		OrderingEnumerator.enumerateAndEvaluate(
@@ -285,14 +285,9 @@ public final class RideExtender {
 					if (validated == null) return;
 					stats.budgetPassed++;
 
-					// Collect valid ordering for degree graph
-					byte[] origBytes = new byte[newSet.length];
-					byte[] destBytes = new byte[newSet.length];
-					for (int i = 0; i < newSet.length; i++) {
-						origBytes[i] = (byte) ordering.originPerm()[i];
-						destBytes[i] = (byte) ordering.destPerm()[i];
-					}
-					allValidOrderings.add(new DegreeGraph.OrderingPair(origBytes, destBytes));
+					// Accumulate pairwise consensus bits (zero allocation)
+					consensusBits[0] |= DegreeGraph.computeOrderingBits(
+						ordering.originPerm(), ordering.destPerm(), newSet.length);
 
 					// Tighten B&B bound and track best ride
 					double dist = validated.getRideDistance();
@@ -303,12 +298,12 @@ public final class RideExtender {
 				});
 		stats.timeEnumeration += System.nanoTime() - tEnum0;
 
-		// Record constraint-feasible sets with orderings for degree graph
-		if (!allValidOrderings.isEmpty()) {
+		// Record constraint-feasible sets with consensus bitmask for degree graph
+		if (consensusBits[0] != 0L || bestRide[0] != null) {
 			stats.setsConstraintFeasible++;
 			long setHash = hashRequestSet(newSet);
 			feasibleSetResults.put(setHash, new DegreeGraph.FeasibleSetResult(
-				newSet.clone(), setHash, allValidOrderings));
+				newSet.clone(), setHash, consensusBits[0]));
 			stats.setsBudgetFeasible++;
 		}
 
