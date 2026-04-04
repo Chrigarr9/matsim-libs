@@ -252,10 +252,9 @@ public final class RideExtender {
 			pairConstraints = tightenConstraints(pairConstraints, newSet, prevDegreeGraph);
 		}
 
-		// No distance B&B — evaluate ALL constraint-feasible orderings.
-		// Distance savings is applied as a post-filter on the best ride.
-		double[] bestValidDist = { Double.MAX_VALUE };
-		double[] bestRideDist = { Double.MAX_VALUE };
+		// Distance B&B with ordering collection: evaluate orderings within distance
+		// bound, collect valid orderings for the degree graph, tighten bound on valid.
+		double[] bestValidDist = { maxAllowedRideDistance };
 		Ride[] bestRide = { null };
 		List<DegreeGraph.OrderingPair> allValidOrderings = new ArrayList<>();
 
@@ -295,10 +294,10 @@ public final class RideExtender {
 					}
 					allValidOrderings.add(new DegreeGraph.OrderingPair(origBytes, destBytes));
 
-					// Track best ride (shortest distance)
+					// Tighten B&B bound and track best ride
 					double dist = validated.getRideDistance();
-					if (dist < bestRideDist[0]) {
-						bestRideDist[0] = dist;
+					if (dist < bestValidDist[0]) {
+						bestValidDist[0] = dist;
 						bestRide[0] = validated;
 					}
 				});
@@ -311,11 +310,6 @@ public final class RideExtender {
 			feasibleSetResults.put(setHash, new DegreeGraph.FeasibleSetResult(
 				newSet.clone(), setHash, allValidOrderings));
 			stats.setsBudgetFeasible++;
-		}
-
-		// Apply distance savings threshold as post-filter
-		if (bestRide[0] != null && bestRide[0].getRideDistance() > maxAllowedRideDistance) {
-			bestRide[0] = null;  // Passes constraints but fails distance savings
 		}
 
 		stats.timeTotal += System.nanoTime() - t0;
