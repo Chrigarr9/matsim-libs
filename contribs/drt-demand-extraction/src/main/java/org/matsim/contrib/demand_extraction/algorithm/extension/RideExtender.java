@@ -51,7 +51,7 @@ public final class RideExtender {
 	// Stored after extendRides completes: valid rides by set hash, used for graph building
 	private ConcurrentHashMap<Long, Ride> lastResultBySetHash;
 	// Consensus bitmasks accumulated during processSet, keyed by set hash
-	private ConcurrentHashMap<Long, Long> lastConsensusBySetHash;
+	private ConcurrentHashMap<Long, long[]> lastConsensusBySetHash;
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig) {
@@ -123,7 +123,7 @@ public final class RideExtender {
 		// - resultBySetHash: successful rides
 		ConcurrentHashMap.KeySetView<Long, Boolean> claimedSets = ConcurrentHashMap.newKeySet();
 		ConcurrentHashMap<Long, Ride> resultBySetHash = new ConcurrentHashMap<>();
-		ConcurrentHashMap<Long, Long> consensusBySetHash = new ConcurrentHashMap<>();
+		ConcurrentHashMap<Long, long[]> consensusBySetHash = new ConcurrentHashMap<>();
 
 		// Progress counters (thread-safe)
 		AtomicInteger baseSetsCompleted = new AtomicInteger();
@@ -161,7 +161,7 @@ public final class RideExtender {
 
 						setsProcessed.incrementAndGet();
 
-						Ride bestRide = processSet(newSet, newSetHash, consensusBySetHash);
+						Ride bestRide = processSet(newSet, newSetHash, targetDegree, consensusBySetHash);
 						if (bestRide != null) {
 							resultBySetHash.put(newSetHash, bestRide);
 						}
@@ -237,8 +237,8 @@ public final class RideExtender {
 	 *
 	 * @return best validated ride for this set, or null if no valid ordering exists
 	 */
-	private Ride processSet(int[] newSet, long setHash,
-						ConcurrentHashMap<Long, Long> consensusBySetHash) {
+	private Ride processSet(int[] newSet, long setHash, int targetDegree,
+						ConcurrentHashMap<Long, long[]> consensusBySetHash) {
 		long t0 = System.nanoTime();
 		EnumerationStats stats = EnumerationStats.get();
 		stats.setsProcessed++;
@@ -260,7 +260,7 @@ public final class RideExtender {
 		double maxAllowedRideDistance = computeMaxAllowedRideDistance(setRequests);
 		double[] bestValidDist = { maxAllowedRideDistance };
 		Ride[] bestRide = { null };
-		long[] consensusBits = { 0L };
+		long[] consensusBits = new long[DegreeGraph.consensusLongCount(targetDegree)];
 
 		long tEnum0 = System.nanoTime();
 
@@ -293,9 +293,11 @@ public final class RideExtender {
 			stats.setsBudgetFeasible++;
 		}
 
-		// Store consensus bits (lightweight: just a long per set, no array cloning)
-		if (consensusBits[0] != 0L) {
-			consensusBySetHash.put(setHash, consensusBits[0]);
+		// Store consensus bits (lightweight long[] per set)
+		boolean hasConsensus = false;
+		for (long b : consensusBits) if (b != 0L) { hasConsensus = true; break; }
+		if (hasConsensus) {
+			consensusBySetHash.put(setHash, consensusBits);
 		}
 
 		return bestRide[0];
@@ -329,9 +331,9 @@ public final class RideExtender {
 		if (validated == null) return;
 		stats.budgetPassed++;
 
-		// Accumulate pairwise consensus bits (zero allocation, just arithmetic)
-		consensusBits[0] |= DegreeGraph.computeOrderingBits(
-			ordering.originPerm(), ordering.destPerm(), n);
+		// Accumulate pairwise consensus bits (works for any degree)
+		DegreeGraph.accumulateOrderingBits(
+			consensusBits, ordering.originPerm(), ordering.destPerm(), n);
 
 		double dist = validated.getRideDistance();
 		if (dist < bestValidDist[0]) {
