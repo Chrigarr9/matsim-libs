@@ -214,6 +214,19 @@ public final class OrderingEnumerator {
 			return;
 		}
 
+		// Origin-phase Check A: prune if any picked-up passenger already exceeds
+		// maxTravelTime from origin traversal alone. No destination ordering can help.
+		if (depth > 1) {
+			EnumerationStats stats = EnumerationStats.get();
+			for (int p = 0; p < depth; p++) {
+				double inVehicle = currentTime - pickupTimes[perm[p]];
+				if (inVehicle > requests[perm[p]].getMaxTravelTime()) {
+					stats.prunedByTravelTime++;
+					return;
+				}
+			}
+		}
+
 		List<Integer> candidates = new ArrayList<>();
 		for (int c = 0; c < n; c++) {
 			if (used[c]) continue;
