@@ -48,6 +48,8 @@ public final class RideExtender {
 
 	// DegreeGraph from previous degree for candidate generation (null at degree 3)
 	private final DegreeGraph prevDegreeGraph;
+	// OrderingConflicts store for cross-degree conflict clause learning (null if disabled)
+	private final OrderingConflicts conflicts;
 	// Stored after extendRides completes: valid rides by set hash, used for graph building
 	private ConcurrentHashMap<Long, Ride> lastResultBySetHash;
 	// Consensus bitmasks accumulated during processSet, keyed by set hash
@@ -55,12 +57,18 @@ public final class RideExtender {
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig) {
-		this(network, graph, budgetValidator, requests, exMasConfig, null);
+		this(network, graph, budgetValidator, requests, exMasConfig, null, null);
 	}
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig,
 						DegreeGraph prevDegreeGraph) {
+		this(network, graph, budgetValidator, requests, exMasConfig, prevDegreeGraph, null);
+	}
+
+	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
+						List<DrtRequest> requests, ExMasConfigGroup exMasConfig,
+						DegreeGraph prevDegreeGraph, OrderingConflicts conflicts) {
 		this.network = network;
 		this.graph = graph;
 		this.budgetValidator = budgetValidator;
@@ -68,6 +76,7 @@ public final class RideExtender {
 		for (DrtRequest r : requests) requestMap.put(r.index, r);
 		this.exMasConfig = exMasConfig;
 		this.prevDegreeGraph = prevDegreeGraph;
+		this.conflicts = conflicts;
 	}
 
 	/** Build a DegreeGraph from the valid rides produced by the last extendRides call. */
@@ -277,14 +286,14 @@ public final class RideExtender {
 					newSet, graph, pairConstraints, network, setRequests, bestValidDist,
 					(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
 							bestValidDist, bestRide, consensusBits, stats),
-					null);  // conflicts - wired in Task 7
+					this.conflicts);
 		} else {
 			// Degree 3: use original code path — no graph overhead
 			OrderingEnumerator.enumerateAndEvaluate(
 					newSet, graph, network, setRequests, bestValidDist,
 					(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
 							bestValidDist, bestRide, consensusBits, stats),
-					null);  // conflicts - wired in Task 7
+					this.conflicts);
 		}
 
 		stats.timeEnumeration += System.nanoTime() - tEnum0;
