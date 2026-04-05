@@ -423,13 +423,10 @@ public final class OrderingEnumerator {
 				}
 			}
 			if (!valid) continue;
-			if (conflicts != null) {
-				int candidateStop = OrderingConflicts.destStop(requests[c].index);
-				if (conflicts.hasConflict(pathStops, n + depth, candidateStop)) {
-					EnumerationStats.get().prunedByConflict++;
-					continue;
-				}
-			}
+			// Conflict lookup disabled during destination enumeration:
+			// path length (n + depth) makes subsequence enumeration O(2^(n+d)),
+			// which costs more than just trying the ordering and letting Check A/B prune.
+			// Conflicts are still RECORDED from dest-phase Check A (above) for cross-degree transfer.
 			candidates.add(c);
 		}
 
