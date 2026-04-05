@@ -195,7 +195,7 @@ public final class RideExtender {
 			threadStatsMap.values().forEach(s -> {
 				s.setsProcessed = 0; s.orderingsEvaluated = 0; s.ridesBuilt = 0;
 				s.ridesPassedConstraints = 0; s.budgetValidations = 0; s.budgetPassed = 0;
-				s.segmentLookups = 0; s.prunedByTravelTime = 0;
+				s.segmentLookups = 0; s.prunedByTravelTime = 0; s.prunedByConflict = 0;
 				s.setsConstraintFeasible = 0; s.setsBudgetFeasible = 0;
 				s.timeTotal = 0; s.timeEnumeration = 0;
 				s.timeRideConstruction = 0; s.timeBudgetValidation = 0;

@@ -21,6 +21,7 @@ public final class EnumerationStats {
 	public long budgetPassed;
 	public long segmentLookups;
 	public long prunedByTravelTime;
+	public long prunedByConflict;
 	// Per-set feasibility counters (for degree-specific graph analysis)
 	public long setsConstraintFeasible;  // sets where ≥1 ordering passed constraint checks
 	public long setsBudgetFeasible;      // sets where ≥1 ordering also passed budget
@@ -49,6 +50,7 @@ public final class EnumerationStats {
 			total.budgetPassed += s.budgetPassed;
 			total.segmentLookups += s.segmentLookups;
 			total.prunedByTravelTime += s.prunedByTravelTime;
+			total.prunedByConflict += s.prunedByConflict;
 			total.setsConstraintFeasible += s.setsConstraintFeasible;
 			total.setsBudgetFeasible += s.setsBudgetFeasible;
 			for (int i = 0; i < total.subsetFeasibilityHisto.length; i++) {
@@ -77,6 +79,8 @@ public final class EnumerationStats {
 				setsProcessed > 0 ? String.format("%.0f", (double) segmentLookups / setsProcessed) : "N/A");
 		log.info("  Pruned by travel time: {} ({} per set)", prunedByTravelTime,
 				setsProcessed > 0 ? String.format("%.1f", (double) prunedByTravelTime / setsProcessed) : "N/A");
+		log.info("  Pruned by conflict: {} ({} per set)", prunedByConflict,
+				setsProcessed > 0 ? String.format("%.1f", (double) prunedByConflict / setsProcessed) : "N/A");
 		log.info("  Sets constraint-feasible: {} ({}% of processed)", setsConstraintFeasible,
 				setsProcessed > 0 ? String.format("%.1f", 100.0 * setsConstraintFeasible / setsProcessed) : "N/A");
 		log.info("  Sets budget-feasible: {} ({}% of processed)", setsBudgetFeasible,
