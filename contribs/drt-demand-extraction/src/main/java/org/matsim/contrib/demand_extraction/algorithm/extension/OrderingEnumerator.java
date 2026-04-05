@@ -213,26 +213,15 @@ public final class OrderingEnumerator {
 			OrderingConflicts conflicts, int[] pathStops) {
 
 		if (depth == n) {
-			if (conflicts != null) {
-				boolean[] anyValid = {false};
-				Consumer<Ordering> wrappedEvaluator = (ordering) -> {
-					anyValid[0] = true;
-					evaluator.accept(ordering);
-				};
-				enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
-						bestValidDist, partialDist, currentTime, pickupTimes,
-						wrappedEvaluator, conflicts, pathStops);
-				if (!anyValid[0] && n >= 3) {
-					int[] conflict = new int[n];
-					for (int i = 0; i < n; i++)
-						conflict[i] = OrderingConflicts.originStop(requests[perm[i]].index);
-					conflicts.recordPending(conflict, 0, n);
-				}
-			} else {
-				enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
-						bestValidDist, partialDist, currentTime, pickupTimes,
-						evaluator, conflicts, pathStops);
-			}
+			// Trigger 2 (all-dest-fail) REMOVED: it recorded conflicts from orderings
+			// pruned by distance B&B (a relative threshold), not just travel time
+			// (an absolute constraint). Distance B&B failures are NOT transferable —
+			// an ordering "worse than best found" at degree k may be optimal at degree k+1.
+			// Conflicts are now only recorded from absolute violations:
+			// mechanism 1 (origin Check A) and dest-phase Check A.
+			enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
+					bestValidDist, partialDist, currentTime, pickupTimes,
+					evaluator, conflicts, pathStops);
 			return;
 		}
 

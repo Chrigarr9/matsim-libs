@@ -151,12 +151,7 @@ public final class ExMasEngine {
 		// Create ordering conflicts store for cross-degree learning
 		// Cap at 10 to avoid overflow when maxDegree is Integer.MAX_VALUE
 		int conflictsMaxLength = maxDegree > 5 ? 10 : Math.min(maxDegree * 2, 10);
-		// Ordering conflicts disabled: time-dependent routing violates the travel time
-		// monotonicity assumption, causing 15-68% ride losses at degrees 4-7.
-		// Mechanism 1 (origin-phase Check A) still provides a free 1.7x speedup.
-		// TODO: fix false positives before re-enabling (options: distance-based conflicts,
-		// per-set pre-filtering, or Bloom filter with tolerance)
-		OrderingConflicts conflicts = null;
+		OrderingConflicts conflicts = new OrderingConflicts(conflictsMaxLength);
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
 													 requests, exMasConfig, prevDegreeGraph, conflicts);
