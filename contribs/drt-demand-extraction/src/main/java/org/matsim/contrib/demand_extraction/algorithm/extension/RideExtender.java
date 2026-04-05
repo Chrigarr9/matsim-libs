@@ -276,13 +276,15 @@ public final class RideExtender {
 			OrderingEnumerator.enumerateAndEvaluate(
 					newSet, graph, pairConstraints, network, setRequests, bestValidDist,
 					(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
-							bestValidDist, bestRide, consensusBits, stats));
+							bestValidDist, bestRide, consensusBits, stats),
+					null);  // conflicts - wired in Task 7
 		} else {
 			// Degree 3: use original code path — no graph overhead
 			OrderingEnumerator.enumerateAndEvaluate(
 					newSet, graph, network, setRequests, bestValidDist,
 					(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
-							bestValidDist, bestRide, consensusBits, stats));
+							bestValidDist, bestRide, consensusBits, stats),
+					null);  // conflicts - wired in Task 7
 		}
 
 		stats.timeEnumeration += System.nanoTime() - tEnum0;

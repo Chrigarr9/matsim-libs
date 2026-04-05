@@ -153,11 +153,12 @@ public final class OrderingEnumerator {
 			int[] requestIndices, ShareabilityGraph graph,
 			MatsimNetworkCache network, DrtRequest[] requests,
 			double[] bestValidDist,
-			Consumer<Ordering> evaluator) {
+			Consumer<Ordering> evaluator,
+			OrderingConflicts conflicts) {
 
 		PairInfo[] constraints = extractConstraints(requestIndices, graph);
 		enumerateAndEvaluate(requestIndices, graph, constraints, network, requests,
-				bestValidDist, evaluator);
+				bestValidDist, evaluator, conflicts);
 	}
 
 	/**
@@ -178,7 +179,8 @@ public final class OrderingEnumerator {
 			PairInfo[] pairConstraints,
 			MatsimNetworkCache network, DrtRequest[] requests,
 			double[] bestValidDist,
-			Consumer<Ordering> evaluator) {
+			Consumer<Ordering> evaluator,
+			OrderingConflicts conflicts) {
 
 		if (pairConstraints == null) return;
 		int n = requestIndices.length;
@@ -195,9 +197,10 @@ public final class OrderingEnumerator {
 			}
 		}
 
+		int[] pathStops = new int[2 * n];
 		enumerateOriginsPrunedWithEval(origAdj, n, pairConstraints, network, requests,
 				bestValidDist, new boolean[n], new int[n], new double[n], 0,
-				0.0, 0.0, evaluator);
+				0.0, 0.0, evaluator, conflicts, pathStops);
 	}
 
 	private static void enumerateOriginsPrunedWithEval(
@@ -206,11 +209,30 @@ public final class OrderingEnumerator {
 			double[] bestValidDist,
 			boolean[] used, int[] perm, double[] pickupTimes, int depth,
 			double partialDist, double currentTime,
-			Consumer<Ordering> evaluator) {
+			Consumer<Ordering> evaluator,
+			OrderingConflicts conflicts, int[] pathStops) {
 
 		if (depth == n) {
-			enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
-					bestValidDist, partialDist, currentTime, pickupTimes, evaluator);
+			if (conflicts != null) {
+				boolean[] anyValid = {false};
+				Consumer<Ordering> wrappedEvaluator = (ordering) -> {
+					anyValid[0] = true;
+					evaluator.accept(ordering);
+				};
+				enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
+						bestValidDist, partialDist, currentTime, pickupTimes,
+						wrappedEvaluator, conflicts, pathStops);
+				if (!anyValid[0] && n >= 3) {
+					int[] conflict = new int[n];
+					for (int i = 0; i < n; i++)
+						conflict[i] = OrderingConflicts.originStop(requests[perm[i]].index);
+					conflicts.recordPending(conflict, 0, n);
+				}
+			} else {
+				enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
+						bestValidDist, partialDist, currentTime, pickupTimes,
+						evaluator, conflicts, pathStops);
+			}
 			return;
 		}
 
@@ -221,6 +243,16 @@ public final class OrderingEnumerator {
 			for (int p = 0; p < depth; p++) {
 				double inVehicle = currentTime - pickupTimes[perm[p]];
 				if (inVehicle > requests[perm[p]].getMaxTravelTime()) {
+					// Record conflict: origin stops from victim p to current depth
+					if (conflicts != null) {
+						int len = depth - p;
+						if (len >= 3) {
+							int[] conflict = new int[len];
+							for (int i = 0; i < len; i++)
+								conflict[i] = OrderingConflicts.originStop(requests[perm[p + i]].index);
+							conflicts.recordPending(conflict, 0, len);
+						}
+					}
 					stats.prunedByTravelTime++;
 					return;
 				}
@@ -237,17 +269,27 @@ public final class OrderingEnumerator {
 					valid = false; break;
 				}
 			}
-			if (valid) candidates.add(c);
+			if (!valid) continue;
+			if (conflicts != null) {
+				int candidateStop = OrderingConflicts.originStop(requests[c].index);
+				if (conflicts.hasConflict(pathStops, depth, candidateStop)) {
+					EnumerationStats.get().prunedByConflict++;
+					continue;
+				}
+			}
+			candidates.add(c);
 		}
 
 		if (depth == 0) {
 			for (int c : candidates) {
 				used[c] = true;
 				perm[0] = c;
+				pathStops[0] = OrderingConflicts.originStop(requests[c].index);
 				pickupTimes[c] = requests[c].getRequestTime();
 				enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
 						bestValidDist, used, perm, pickupTimes, 1,
-						0.0, requests[c].getRequestTime(), evaluator);
+						0.0, requests[c].getRequestTime(), evaluator,
+						conflicts, pathStops);
 				used[c] = false;
 			}
 			return;
@@ -267,10 +309,12 @@ public final class OrderingEnumerator {
 
 			used[c] = true;
 			perm[depth] = c;
+			pathStops[depth] = OrderingConflicts.originStop(requests[c].index);
 			pickupTimes[c] = currentTime + seg.getTravelTime();
 			enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
 					bestValidDist, used, perm, pickupTimes, depth + 1,
-					newPartialDist, currentTime + seg.getTravelTime(), evaluator);
+					newPartialDist, currentTime + seg.getTravelTime(), evaluator,
+					conflicts, pathStops);
 			used[c] = false;
 		}
 	}
@@ -281,7 +325,8 @@ public final class OrderingEnumerator {
 			double[] bestValidDist,
 			double partialDist, double currentTime,
 			double[] pickupTimes,
-			Consumer<Ordering> evaluator) {
+			Consumer<Ordering> evaluator,
+			OrderingConflicts conflicts, int[] pathStops) {
 
 		int[] origPos = new int[n];
 		for (int i = 0; i < n; i++) origPos[origPerm[i]] = i;
@@ -312,7 +357,8 @@ public final class OrderingEnumerator {
 
 		enumerateDestTopoWithEval(adj, n, origPerm, network, requests,
 				bestValidDist, new boolean[n], new int[n], 0,
-				partialDist, currentTime, prevLink, pickupTimes, evaluator);
+				partialDist, currentTime, prevLink, pickupTimes, evaluator,
+				conflicts, pathStops);
 	}
 
 	private static void enumerateDestTopoWithEval(
@@ -323,7 +369,8 @@ public final class OrderingEnumerator {
 			double partialDist, double currentTime,
 			Id<Link> prevLinkId,
 			double[] pickupTimes,
-			Consumer<Ordering> evaluator) {
+			Consumer<Ordering> evaluator,
+			OrderingConflicts conflicts, int[] pathStops) {
 
 		if (depth == n) {
 			// Complete ordering — call evaluator inline.
@@ -340,6 +387,26 @@ public final class OrderingEnumerator {
 			if (used[p]) continue; // already dropped off
 			double inVehicleTime = currentTime - pickupTimes[p];
 			if (inVehicleTime > requests[p].getMaxTravelTime()) {
+				if (conflicts != null) {
+					// Find victim's origin position
+					int victimOrigPos = -1;
+					for (int i = 0; i < n; i++) {
+						if (origPerm[i] == p) { victimOrigPos = i; break; }
+					}
+					if (victimOrigPos >= 0) {
+						int origCount = n - victimOrigPos;
+						int len = origCount + depth;
+						if (len >= 3) {
+							int[] conflict = new int[len];
+							int idx = 0;
+							for (int i = victimOrigPos; i < n; i++)
+								conflict[idx++] = OrderingConflicts.originStop(requests[origPerm[i]].index);
+							for (int i = 0; i < depth; i++)
+								conflict[idx++] = OrderingConflicts.destStop(requests[perm[i]].index);
+							conflicts.recordPending(conflict, 0, len);
+						}
+					}
+				}
 				stats.prunedByTravelTime++;
 				return;
 			}
@@ -355,7 +422,15 @@ public final class OrderingEnumerator {
 					valid = false; break;
 				}
 			}
-			if (valid) candidates.add(c);
+			if (!valid) continue;
+			if (conflicts != null) {
+				int candidateStop = OrderingConflicts.destStop(requests[c].index);
+				if (conflicts.hasConflict(pathStops, n + depth, candidateStop)) {
+					EnumerationStats.get().prunedByConflict++;
+					continue;
+				}
+			}
+			candidates.add(c);
 		}
 
 		Map<Integer, TravelSegment> segMap = new HashMap<>();
@@ -388,10 +463,12 @@ public final class OrderingEnumerator {
 
 			used[c] = true;
 			perm[depth] = c;
+			pathStops[n + depth] = OrderingConflicts.destStop(requests[c].index);
 			enumerateDestTopoWithEval(adj, n, origPerm, network, requests,
 					bestValidDist, used, perm, depth + 1,
 					newPartialDist, newTime,
-					requests[c].destinationLinkId, pickupTimes, evaluator);
+					requests[c].destinationLinkId, pickupTimes, evaluator,
+					conflicts, pathStops);
 			used[c] = false;
 		}
 	}
