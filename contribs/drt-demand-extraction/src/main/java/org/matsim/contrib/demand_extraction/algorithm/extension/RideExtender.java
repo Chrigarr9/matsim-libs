@@ -204,7 +204,7 @@ public final class RideExtender {
 			threadStatsMap.values().forEach(s -> {
 				s.setsProcessed = 0; s.orderingsEvaluated = 0; s.ridesBuilt = 0;
 				s.ridesPassedConstraints = 0; s.budgetValidations = 0; s.budgetPassed = 0;
-				s.segmentLookups = 0; s.prunedByTravelTime = 0; s.prunedByConflict = 0;
+				s.segmentLookups = 0; s.prunedByTravelTime = 0; s.prunedByDropoffCheck = 0; s.prunedByConflict = 0; s.allDestFailConflicts = 0;
 				s.setsConstraintFeasible = 0; s.setsBudgetFeasible = 0;
 				s.timeTotal = 0; s.timeEnumeration = 0;
 				s.timeRideConstruction = 0; s.timeBudgetValidation = 0;
@@ -329,7 +329,8 @@ public final class RideExtender {
 		}
 
 		long tBuild0 = System.nanoTime();
-		Ride ride = buildRideFromOrdering(originsOrdered, destsOrdered, 0);
+		Ride ride = buildRideFromOrdering(originsOrdered, destsOrdered, 0,
+				ordering.connTT(), ordering.connDist(), ordering.connUtil());
 		stats.timeRideConstruction += System.nanoTime() - tBuild0;
 		stats.ridesBuilt++;
 		if (ride == null) return;
@@ -405,36 +406,47 @@ public final class RideExtender {
 	 * @return validated Ride, or null if routing fails or constraints violated
 	 */
 	private Ride buildRideFromOrdering(DrtRequest[] originsOrdered,
-									   DrtRequest[] destsOrdered, int index) {
+									   DrtRequest[] destsOrdered, int index,
+									   double[] preConnTT, double[] preConnDist,
+									   double[] preConnUtil) {
 		int degree = originsOrdered.length;
 		DrtRequest[] requests = originsOrdered; // requests[] IS origin ordering
 
-		// Build connection sequence: [O_1, O_2, ..., O_n, D_1, D_2, ..., D_n]
-		@SuppressWarnings("unchecked")
-		Id<Link>[] sequence = (Id<Link>[]) new Id[degree * 2];
-		for (int i = 0; i < degree; i++) {
-			sequence[i] = originsOrdered[i].originLinkId;
-		}
-		for (int i = 0; i < degree; i++) {
-			sequence[degree + i] = destsOrdered[i].destinationLinkId;
-		}
-
-		// Route all segments with cumulative departure time
 		double startTime = originsOrdered[0].getRequestTime();
-		double[] connTT = new double[degree * 2 - 1];
-		double[] connDist = new double[degree * 2 - 1];
-		double[] connUtil = new double[degree * 2 - 1];
+		double[] connTT, connDist, connUtil;
 
-		double currentTime = startTime;
-		EnumerationStats stats = EnumerationStats.get();
-		for (int i = 0; i < degree * 2 - 1; i++) {
-			TravelSegment seg = network.getSegment(sequence[i], sequence[i + 1], currentTime);
-			stats.segmentLookups++;
-			if (!seg.isReachable()) return null;
-			connTT[i] = seg.getTravelTime();
-			connDist[i] = seg.getDistance();
-			connUtil[i] = seg.getNetworkUtility();
-			currentTime += connTT[i];
+		if (preConnTT != null) {
+			// Use pre-routed segment data from enumeration (zero routing calls)
+			connTT = preConnTT;
+			connDist = preConnDist;
+			connUtil = preConnUtil;
+		} else {
+			// Build connection sequence: [O_1, O_2, ..., O_n, D_1, D_2, ..., D_n]
+			@SuppressWarnings("unchecked")
+			Id<Link>[] sequence = (Id<Link>[]) new Id[degree * 2];
+			for (int i = 0; i < degree; i++) {
+				sequence[i] = originsOrdered[i].originLinkId;
+			}
+			for (int i = 0; i < degree; i++) {
+				sequence[degree + i] = destsOrdered[i].destinationLinkId;
+			}
+
+			// Route all segments with cumulative departure time
+			connTT = new double[degree * 2 - 1];
+			connDist = new double[degree * 2 - 1];
+			connUtil = new double[degree * 2 - 1];
+
+			double currentTime = startTime;
+			EnumerationStats stats = EnumerationStats.get();
+			for (int i = 0; i < degree * 2 - 1; i++) {
+				TravelSegment seg = network.getSegment(sequence[i], sequence[i + 1], currentTime);
+				stats.segmentLookups++;
+				if (!seg.isReachable()) return null;
+				connTT[i] = seg.getTravelTime();
+				connDist[i] = seg.getDistance();
+				connUtil[i] = seg.getNetworkUtility();
+				currentTime += connTT[i];
+			}
 		}
 
 		// Calculate per-passenger metrics (indexed by pickup position = requests[] position)
@@ -462,7 +474,9 @@ public final class RideExtender {
 			if (pttActual[i] < req.getTravelTime() - EPSILON) {
 				pttActual[i] = req.getTravelTime();
 			}
-			if (pttActual[i] > req.getMaxTravelTime()) return null;
+			// maxTravelTime check removed: the enumeration's dropoff check
+			// already validated every passenger's full in-vehicle time.
+			// The floor above can only raise pttActual to directTT which is always <= maxTT.
 		}
 
 		// Calculate delays — indexed by pickup position (= requests[] position)

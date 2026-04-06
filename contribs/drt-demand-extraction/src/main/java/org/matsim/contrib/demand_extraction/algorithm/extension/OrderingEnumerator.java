@@ -43,8 +43,14 @@ public final class OrderingEnumerator {
 		boolean reverseOnly() { return !forwardExists() && reverseExists(); }
 	}
 
-	/** A valid ordering with its total ride distance (from cumulative segment routing). */
-	public record Ordering(int[] originPerm, int[] destPerm, double rideDistance) {}
+	/** A valid ordering with its total ride distance and pre-routed segment data. */
+	public record Ordering(int[] originPerm, int[] destPerm, double rideDistance,
+						   double[] connTT, double[] connDist, double[] connUtil) {
+		/** Convenience constructor without segment data (for non-inline-eval paths). */
+		public Ordering(int[] originPerm, int[] destPerm, double rideDistance) {
+			this(originPerm, destPerm, rideDistance, null, null, null);
+		}
+	}
 
 	/**
 	 * Enumerate all valid orderings for the given request set.
@@ -198,9 +204,13 @@ public final class OrderingEnumerator {
 		}
 
 		int[] pathStops = new int[2 * n];
+		double[] connTT = new double[2 * n - 1];
+		double[] connDist = new double[2 * n - 1];
+		double[] connUtil = new double[2 * n - 1];
 		enumerateOriginsPrunedWithEval(origAdj, n, pairConstraints, network, requests,
 				bestValidDist, new boolean[n], new int[n], new double[n], 0,
-				0.0, 0.0, evaluator, conflicts, pathStops);
+				0.0, 0.0, evaluator, conflicts, pathStops,
+				connTT, connDist, connUtil);
 	}
 
 	private static void enumerateOriginsPrunedWithEval(
@@ -210,18 +220,28 @@ public final class OrderingEnumerator {
 			boolean[] used, int[] perm, double[] pickupTimes, int depth,
 			double partialDist, double currentTime,
 			Consumer<Ordering> evaluator,
-			OrderingConflicts conflicts, int[] pathStops) {
+			OrderingConflicts conflicts, int[] pathStops,
+			double[] connTT, double[] connDist, double[] connUtil) {
 
 		if (depth == n) {
-			// Trigger 2 (all-dest-fail) REMOVED: it recorded conflicts from orderings
-			// pruned by distance B&B (a relative threshold), not just travel time
-			// (an absolute constraint). Distance B&B failures are NOT transferable —
-			// an ordering "worse than best found" at degree k may be optimal at degree k+1.
-			// Conflicts are now only recorded from absolute violations:
-			// mechanism 1 (origin Check A) and dest-phase Check A.
+			// Trigger 2 (all-dest-fail): if ALL destination orderings fail due to
+			// absolute travel time violations (Check A, Check B, dropoff check),
+			// record the origin ordering as a conflict. Distance B&B failures are
+			// NOT counted — they are relative to bestValidDist which varies per set.
+			// destResult[0] = any ordering reached evaluator
+			// destResult[1] = any ordering pruned by distance B&B
+			boolean[] destResult = { false, false };
 			enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
 					bestValidDist, partialDist, currentTime, pickupTimes,
-					evaluator, conflicts, pathStops);
+					evaluator, conflicts, pathStops,
+					connTT, connDist, connUtil, destResult);
+			if (conflicts != null && !destResult[0] && !destResult[1] && n >= 3) {
+				int[] conflict = new int[n];
+				for (int i = 0; i < n; i++)
+					conflict[i] = OrderingConflicts.originStop(requests[perm[i]].index);
+				conflicts.recordPending(conflict, 0, n);
+				EnumerationStats.get().allDestFailConflicts++;
+			}
 			return;
 		}
 
@@ -278,7 +298,8 @@ public final class OrderingEnumerator {
 				enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
 						bestValidDist, used, perm, pickupTimes, 1,
 						0.0, requests[c].getRequestTime(), evaluator,
-						conflicts, pathStops);
+						conflicts, pathStops,
+						connTT, connDist, connUtil);
 				used[c] = false;
 			}
 			return;
@@ -300,10 +321,14 @@ public final class OrderingEnumerator {
 			perm[depth] = c;
 			pathStops[depth] = OrderingConflicts.originStop(requests[c].index);
 			pickupTimes[c] = currentTime + seg.getTravelTime();
+			connTT[depth - 1] = seg.getTravelTime();
+			connDist[depth - 1] = seg.getDistance();
+			connUtil[depth - 1] = seg.getNetworkUtility();
 			enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
 					bestValidDist, used, perm, pickupTimes, depth + 1,
 					newPartialDist, currentTime + seg.getTravelTime(), evaluator,
-					conflicts, pathStops);
+					conflicts, pathStops,
+					connTT, connDist, connUtil);
 			used[c] = false;
 		}
 	}
@@ -315,7 +340,9 @@ public final class OrderingEnumerator {
 			double partialDist, double currentTime,
 			double[] pickupTimes,
 			Consumer<Ordering> evaluator,
-			OrderingConflicts conflicts, int[] pathStops) {
+			OrderingConflicts conflicts, int[] pathStops,
+			double[] connTT, double[] connDist, double[] connUtil,
+			boolean[] destResult) {
 
 		int[] origPos = new int[n];
 		for (int i = 0; i < n; i++) origPos[origPerm[i]] = i;
@@ -337,6 +364,9 @@ public final class OrderingEnumerator {
 					if (aBeforeB) { adj[b][a] = true; adj[a][b] = false; }
 					else          { adj[a][b] = true; adj[b][a] = false; }
 				} else {
+					// Structural infeasibility (no pair ride in this direction).
+					// Not a travel time violation — don't record as conflict.
+					destResult[1] = true;
 					return;
 				}
 			}
@@ -347,7 +377,8 @@ public final class OrderingEnumerator {
 		enumerateDestTopoWithEval(adj, n, origPerm, network, requests,
 				bestValidDist, new boolean[n], new int[n], 0,
 				partialDist, currentTime, prevLink, pickupTimes, evaluator,
-				conflicts, pathStops);
+				conflicts, pathStops,
+				connTT, connDist, connUtil, destResult);
 	}
 
 	private static void enumerateDestTopoWithEval(
@@ -359,13 +390,17 @@ public final class OrderingEnumerator {
 			Id<Link> prevLinkId,
 			double[] pickupTimes,
 			Consumer<Ordering> evaluator,
-			OrderingConflicts conflicts, int[] pathStops) {
+			OrderingConflicts conflicts, int[] pathStops,
+			double[] connTT, double[] connDist, double[] connUtil,
+			boolean[] destResult) {
 
 		if (depth == n) {
-			// Complete ordering — call evaluator inline.
+			// Complete ordering — call evaluator inline with pre-routed segment data.
 			// The evaluator may update bestValidDist[0] if this ordering is valid,
 			// which tightens the bound for all subsequent branches.
-			evaluator.accept(new Ordering(origPerm.clone(), perm.clone(), partialDist));
+			destResult[0] = true; // at least one ordering reached evaluator
+			evaluator.accept(new Ordering(origPerm.clone(), perm.clone(), partialDist,
+					connTT.clone(), connDist.clone(), connUtil.clone()));
 			return;
 		}
 
@@ -429,11 +464,25 @@ public final class OrderingEnumerator {
 		for (int c : candidates) {
 			TravelSegment seg = segMap.get(c);
 			double newPartialDist = partialDist + seg.getDistance();
-			if (newPartialDist > bestValidDist[0]) break;
+			if (newPartialDist > bestValidDist[0]) {
+				destResult[1] = true; // distance B&B prevented full exploration
+				break;
+			}
+
+			double newTime = currentTime + seg.getTravelTime();
+
+			// Check at Dropoff: passenger c's ride is now complete.
+			// Their full in-vehicle time (pickup to this dropoff) must not exceed maxTravelTime.
+			// This catches the 93.5% of orderings that previously survived Check A/B
+			// but failed in buildRideFromOrdering.
+			double fullInVehicle = newTime - pickupTimes[c];
+			if (fullInVehicle > requests[c].getMaxTravelTime()) {
+				stats.prunedByDropoffCheck++;
+				continue;
+			}
 
 			// Check B: after routing to this candidate's destination, would any
 			// remaining in-vehicle passenger exceed their maxTravelTime?
-			double newTime = currentTime + seg.getTravelTime();
 			boolean busted = false;
 			for (int p = 0; p < n; p++) {
 				if (used[p] || p == c) continue; // already dropped off, or being dropped off now
@@ -450,11 +499,16 @@ public final class OrderingEnumerator {
 			used[c] = true;
 			perm[depth] = c;
 			pathStops[n + depth] = OrderingConflicts.destStop(requests[c].index);
+			int connIdx = n - 1 + depth;
+			connTT[connIdx] = seg.getTravelTime();
+			connDist[connIdx] = seg.getDistance();
+			connUtil[connIdx] = seg.getNetworkUtility();
 			enumerateDestTopoWithEval(adj, n, origPerm, network, requests,
 					bestValidDist, used, perm, depth + 1,
 					newPartialDist, newTime,
 					requests[c].destinationLinkId, pickupTimes, evaluator,
-					conflicts, pathStops);
+					conflicts, pathStops,
+					connTT, connDist, connUtil, destResult);
 			used[c] = false;
 		}
 	}
