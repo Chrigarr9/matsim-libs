@@ -48,8 +48,8 @@ public final class RideExtender {
 
 	// DegreeGraph from previous degree for candidate generation (null at degree 3)
 	private final DegreeGraph prevDegreeGraph;
-	// OrderingConflicts store for cross-degree conflict clause learning (null if disabled)
-	private final OrderingConflicts conflicts;
+	// Sub-set ordering feasibility for cross-degree sub-set lookup (null if disabled)
+	private final SubSetOrderingFeasibility subsetFeasibility;
 	// Stored after extendRides completes: valid rides by set hash, used for graph building
 	private ConcurrentHashMap<Long, Ride> lastResultBySetHash;
 	// Consensus bitmasks accumulated during processSet, keyed by set hash
@@ -68,7 +68,8 @@ public final class RideExtender {
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig,
-						DegreeGraph prevDegreeGraph, OrderingConflicts conflicts) {
+						DegreeGraph prevDegreeGraph,
+						SubSetOrderingFeasibility subsetFeasibility) {
 		this.network = network;
 		this.graph = graph;
 		this.budgetValidator = budgetValidator;
@@ -76,7 +77,7 @@ public final class RideExtender {
 		for (DrtRequest r : requests) requestMap.put(r.index, r);
 		this.exMasConfig = exMasConfig;
 		this.prevDegreeGraph = prevDegreeGraph;
-		this.conflicts = conflicts;
+		this.subsetFeasibility = subsetFeasibility;
 	}
 
 	/** Build a DegreeGraph from the valid rides produced by the last extendRides call. */
@@ -204,7 +205,7 @@ public final class RideExtender {
 			threadStatsMap.values().forEach(s -> {
 				s.setsProcessed = 0; s.orderingsEvaluated = 0; s.ridesBuilt = 0;
 				s.ridesPassedConstraints = 0; s.budgetValidations = 0; s.budgetPassed = 0;
-				s.segmentLookups = 0; s.prunedByTravelTime = 0; s.prunedByDropoffCheck = 0; s.prunedByConflict = 0; s.allDestFailConflicts = 0;
+				s.segmentLookups = 0; s.prunedByTravelTime = 0; s.prunedByDropoffCheck = 0; s.prunedBySubsetLookup = 0; s.allDestFailRecorded = 0;
 				s.setsConstraintFeasible = 0; s.setsBudgetFeasible = 0;
 				s.timeTotal = 0; s.timeEnumeration = 0;
 				s.timeRideConstruction = 0; s.timeBudgetValidation = 0;
@@ -281,19 +282,21 @@ public final class RideExtender {
 				stats.timeTotal += System.nanoTime() - t0;
 				return null;
 			}
-			pairConstraints = tightenConstraints(pairConstraints, newSet, prevDegreeGraph);
+			if (exMasConfig.isEnableConsensusTightening()) {
+				pairConstraints = tightenConstraints(pairConstraints, newSet, prevDegreeGraph);
+			}
 			OrderingEnumerator.enumerateAndEvaluate(
 					newSet, graph, pairConstraints, network, setRequests, bestValidDist,
 					(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
 							bestValidDist, bestRide, consensusBits, stats),
-					this.conflicts);
+					this.subsetFeasibility);
 		} else {
 			// Degree 3: use original code path — no graph overhead
 			OrderingEnumerator.enumerateAndEvaluate(
 					newSet, graph, network, setRequests, bestValidDist,
 					(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
 							bestValidDist, bestRide, consensusBits, stats),
-					this.conflicts);
+					this.subsetFeasibility);
 		}
 
 		stats.timeEnumeration += System.nanoTime() - tEnum0;

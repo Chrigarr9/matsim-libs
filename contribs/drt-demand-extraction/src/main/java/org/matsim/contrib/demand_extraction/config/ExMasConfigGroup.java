@@ -209,6 +209,11 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// 1.0 = disabled (keep all). 0.05 = keep top 5%.
 	private double postExtensionKeepTopFraction = 1.0;
 
+	// Consensus tightening: use sub-set ordering consensus from the degree graph to
+	// eliminate pairwise directions at higher degrees. Heuristic — may miss valid orderings
+	// if lower-degree rides were pruned. Off by default.
+	private boolean enableConsensusTightening = false;
+
 	// Inter-degree pruning: keep only the top fraction of rides after EACH degree extension.
 	// Applied directly (no sqrt scaling). 1.0 = disabled. 0.10 = keep top 10%.
 	private double interDegreeKeepFraction = 0.10;
@@ -855,6 +860,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.postExtensionKeepTopFraction = postExtensionKeepTopFraction;
 	}
 
+	@StringGetter("enableConsensusTightening")
+	public boolean isEnableConsensusTightening() {
+		return enableConsensusTightening;
+	}
+
+	@StringSetter("enableConsensusTightening")
+	public void setEnableConsensusTightening(boolean enableConsensusTightening) {
+		this.enableConsensusTightening = enableConsensusTightening;
+	}
+
 	@StringGetter("interDegreeKeepFraction")
 	public double getInterDegreeKeepFraction() {
 		return interDegreeKeepFraction;
@@ -1245,6 +1260,9 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("postExtensionKeepTopFraction",
 				"Post-extension pruning: keep only the top fraction of rides (by distanceSavings) within each degree. "
 				+ "1.0 = disabled. 0.10 = keep top 10% per degree. 0.05 = keep top 5%. Applied after MaxPerSet. Default: 1.0");
+		map.put("enableConsensusTightening",
+				"Use sub-set ordering consensus from the degree graph to eliminate pairwise directions at higher degrees. "
+				+ "Heuristic — may miss valid orderings if lower-degree rides were pruned by inter-degree pruning. Default: false");
 		map.put("interDegreeKeepFraction",
 				"Inter-degree pruning: keep only the top fraction of rides (by distanceSavings) after EACH degree extension. "
 				+ "Applied directly (no sqrt scaling). Survivors become base sets for next degree AND final output. "

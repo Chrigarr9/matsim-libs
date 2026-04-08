@@ -160,11 +160,11 @@ public final class OrderingEnumerator {
 			MatsimNetworkCache network, DrtRequest[] requests,
 			double[] bestValidDist,
 			Consumer<Ordering> evaluator,
-			OrderingConflicts conflicts) {
+			SubSetOrderingFeasibility subsetFeasibility) {
 
 		PairInfo[] constraints = extractConstraints(requestIndices, graph);
 		enumerateAndEvaluate(requestIndices, graph, constraints, network, requests,
-				bestValidDist, evaluator, conflicts);
+				bestValidDist, evaluator, subsetFeasibility);
 	}
 
 	/**
@@ -172,13 +172,15 @@ public final class OrderingEnumerator {
 	 * This allows callers to tighten constraints (e.g., from sub-set orderings)
 	 * before enumeration.
 	 *
-	 * @param requestIndices sorted request indices for the set
-	 * @param graph the shareability graph (used for FIFO/LIFO kinds if needed)
-	 * @param pairConstraints pre-computed/tightened pairwise constraints
-	 * @param network network cache for routed segment lookups
-	 * @param requests DrtRequest objects
-	 * @param bestValidDist mutable single-element array for distance pruning bound
-	 * @param evaluator called for each complete ordering
+	 * <p>If {@code subsetFeasibility} is non-null, two pruning mechanisms apply:
+	 * <ol>
+	 *   <li><b>DAG tightening:</b> before enumeration, unconstrained pairs are checked
+	 *       against triple data. If all orderings with i&lt;j are infeasible, edge j→i
+	 *       is added — eliminating those orderings at the topological sort level.</li>
+	 *   <li><b>Per-candidate check:</b> during enumeration, each candidate is checked
+	 *       against triple data for the specific partial ordering. Catches ternary
+	 *       constraints that DAG edges (binary) cannot express.</li>
+	 * </ol>
 	 */
 	public static void enumerateAndEvaluate(
 			int[] requestIndices, ShareabilityGraph graph,
@@ -186,7 +188,7 @@ public final class OrderingEnumerator {
 			MatsimNetworkCache network, DrtRequest[] requests,
 			double[] bestValidDist,
 			Consumer<Ordering> evaluator,
-			OrderingConflicts conflicts) {
+			SubSetOrderingFeasibility subsetFeasibility) {
 
 		if (pairConstraints == null) return;
 		int n = requestIndices.length;
@@ -203,44 +205,42 @@ public final class OrderingEnumerator {
 			}
 		}
 
-		int[] pathStops = new int[2 * n];
 		double[] connTT = new double[2 * n - 1];
 		double[] connDist = new double[2 * n - 1];
 		double[] connUtil = new double[2 * n - 1];
 		enumerateOriginsPrunedWithEval(origAdj, n, pairConstraints, network, requests,
-				bestValidDist, new boolean[n], new int[n], new double[n], 0,
-				0.0, 0.0, evaluator, conflicts, pathStops,
+				requestIndices, bestValidDist, new boolean[n], new int[n], new double[n], 0,
+				0.0, 0.0, evaluator, subsetFeasibility,
 				connTT, connDist, connUtil);
 	}
 
 	private static void enumerateOriginsPrunedWithEval(
 			Boolean[][] adj, int n, PairInfo[] pairs,
 			MatsimNetworkCache network, DrtRequest[] requests,
+			int[] requestIndices,
 			double[] bestValidDist,
 			boolean[] used, int[] perm, double[] pickupTimes, int depth,
 			double partialDist, double currentTime,
 			Consumer<Ordering> evaluator,
-			OrderingConflicts conflicts, int[] pathStops,
+			SubSetOrderingFeasibility subsetFeasibility,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
 		if (depth == n) {
-			// Trigger 2 (all-dest-fail): if ALL destination orderings fail due to
-			// absolute travel time violations (Check A, Check B, dropoff check),
-			// record the origin ordering as a conflict. Distance B&B failures are
-			// NOT counted — they are relative to bestValidDist which varies per set.
-			// destResult[0] = any ordering reached evaluator
-			// destResult[1] = any ordering pruned by distance B&B
+			// All origins placed — enumerate destination orderings.
+			// Trigger 2: record origin ordering as infeasible if ALL dest orderings
+			// fail due to absolute travel time violations.
 			boolean[] destResult = { false, false };
 			enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
 					bestValidDist, partialDist, currentTime, pickupTimes,
-					evaluator, conflicts, pathStops,
-					connTT, connDist, connUtil, destResult);
-			if (conflicts != null && !destResult[0] && !destResult[1] && n >= 3) {
-				int[] conflict = new int[n];
-				for (int i = 0; i < n; i++)
-					conflict[i] = OrderingConflicts.originStop(requests[perm[i]].index);
-				conflicts.recordPending(conflict, 0, n);
-				EnumerationStats.get().allDestFailConflicts++;
+					evaluator, connTT, connDist, connUtil, destResult);
+			if (!destResult[0] && !destResult[1] && n >= 3) {
+				if (subsetFeasibility != null) {
+					// Record EXACT ordering at native degree only — do NOT decompose
+					// into sub-triples. Subset infeasibility does not follow from
+					// superset infeasibility (fewer stops = less time = might succeed).
+					subsetFeasibility.recordExactOrdering(requestIndices, perm, n);
+				}
+				EnumerationStats.get().allDestFailRecorded++;
 			}
 			return;
 		}
@@ -252,14 +252,13 @@ public final class OrderingEnumerator {
 			for (int p = 0; p < depth; p++) {
 				double inVehicle = currentTime - pickupTimes[perm[p]];
 				if (inVehicle > requests[perm[p]].getMaxTravelTime()) {
-					// Record conflict: origin stops from victim p to current depth
-					if (conflicts != null) {
+					// Record exact sub-ordering at native size (no sub-decomposition).
+					// Sub-triples from larger ranges are unsafe: fewer stops = less
+					// travel time = sub-triple might be feasible at degree 3.
+					if (subsetFeasibility != null) {
 						int len = depth - p;
-						if (len >= 3) {
-							int[] conflict = new int[len];
-							for (int i = 0; i < len; i++)
-								conflict[i] = OrderingConflicts.originStop(requests[perm[p + i]].index);
-							conflicts.recordPending(conflict, 0, len);
+						if (len >= 3 && len <= subsetFeasibility.getMaxSubsetSize()) {
+							subsetFeasibility.recordExactOrdering(requestIndices, perm, p, depth);
 						}
 					}
 					stats.prunedByTravelTime++;
@@ -279,10 +278,10 @@ public final class OrderingEnumerator {
 				}
 			}
 			if (!valid) continue;
-			if (conflicts != null) {
-				int candidateStop = OrderingConflicts.originStop(requests[c].index);
-				if (conflicts.hasConflict(pathStops, depth, candidateStop)) {
-					EnumerationStats.get().prunedByConflict++;
+			// Sub-set ordering feasibility: prune if any triple sub-ordering is infeasible
+			if (subsetFeasibility != null && depth >= 2) {
+				if (subsetFeasibility.isInfeasible(requestIndices, perm, depth, c)) {
+					EnumerationStats.get().prunedBySubsetLookup++;
 					continue;
 				}
 			}
@@ -293,12 +292,11 @@ public final class OrderingEnumerator {
 			for (int c : candidates) {
 				used[c] = true;
 				perm[0] = c;
-				pathStops[0] = OrderingConflicts.originStop(requests[c].index);
 				pickupTimes[c] = requests[c].getRequestTime();
 				enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
-						bestValidDist, used, perm, pickupTimes, 1,
+						requestIndices, bestValidDist, used, perm, pickupTimes, 1,
 						0.0, requests[c].getRequestTime(), evaluator,
-						conflicts, pathStops,
+						subsetFeasibility,
 						connTT, connDist, connUtil);
 				used[c] = false;
 			}
@@ -319,15 +317,14 @@ public final class OrderingEnumerator {
 
 			used[c] = true;
 			perm[depth] = c;
-			pathStops[depth] = OrderingConflicts.originStop(requests[c].index);
 			pickupTimes[c] = currentTime + seg.getTravelTime();
 			connTT[depth - 1] = seg.getTravelTime();
 			connDist[depth - 1] = seg.getDistance();
 			connUtil[depth - 1] = seg.getNetworkUtility();
 			enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
-					bestValidDist, used, perm, pickupTimes, depth + 1,
+					requestIndices, bestValidDist, used, perm, pickupTimes, depth + 1,
 					newPartialDist, currentTime + seg.getTravelTime(), evaluator,
-					conflicts, pathStops,
+					subsetFeasibility,
 					connTT, connDist, connUtil);
 			used[c] = false;
 		}
@@ -340,7 +337,6 @@ public final class OrderingEnumerator {
 			double partialDist, double currentTime,
 			double[] pickupTimes,
 			Consumer<Ordering> evaluator,
-			OrderingConflicts conflicts, int[] pathStops,
 			double[] connTT, double[] connDist, double[] connUtil,
 			boolean[] destResult) {
 
@@ -377,7 +373,6 @@ public final class OrderingEnumerator {
 		enumerateDestTopoWithEval(adj, n, origPerm, network, requests,
 				bestValidDist, new boolean[n], new int[n], 0,
 				partialDist, currentTime, prevLink, pickupTimes, evaluator,
-				conflicts, pathStops,
 				connTT, connDist, connUtil, destResult);
 	}
 
@@ -390,7 +385,6 @@ public final class OrderingEnumerator {
 			Id<Link> prevLinkId,
 			double[] pickupTimes,
 			Consumer<Ordering> evaluator,
-			OrderingConflicts conflicts, int[] pathStops,
 			double[] connTT, double[] connDist, double[] connUtil,
 			boolean[] destResult) {
 
@@ -411,26 +405,6 @@ public final class OrderingEnumerator {
 			if (used[p]) continue; // already dropped off
 			double inVehicleTime = currentTime - pickupTimes[p];
 			if (inVehicleTime > requests[p].getMaxTravelTime()) {
-				if (conflicts != null) {
-					// Find victim's origin position
-					int victimOrigPos = -1;
-					for (int i = 0; i < n; i++) {
-						if (origPerm[i] == p) { victimOrigPos = i; break; }
-					}
-					if (victimOrigPos >= 0) {
-						int origCount = n - victimOrigPos;
-						int len = origCount + depth;
-						if (len >= 3) {
-							int[] conflict = new int[len];
-							int idx = 0;
-							for (int i = victimOrigPos; i < n; i++)
-								conflict[idx++] = OrderingConflicts.originStop(requests[origPerm[i]].index);
-							for (int i = 0; i < depth; i++)
-								conflict[idx++] = OrderingConflicts.destStop(requests[perm[i]].index);
-							conflicts.recordPending(conflict, 0, len);
-						}
-					}
-				}
 				stats.prunedByTravelTime++;
 				return;
 			}
@@ -447,10 +421,6 @@ public final class OrderingEnumerator {
 				}
 			}
 			if (!valid) continue;
-			// Conflict lookup disabled during destination enumeration:
-			// path length (n + depth) makes subsequence enumeration O(2^(n+d)),
-			// which costs more than just trying the ordering and letting Check A/B prune.
-			// Conflicts are still RECORDED from dest-phase Check A (above) for cross-degree transfer.
 			candidates.add(c);
 		}
 
@@ -498,7 +468,6 @@ public final class OrderingEnumerator {
 
 			used[c] = true;
 			perm[depth] = c;
-			pathStops[n + depth] = OrderingConflicts.destStop(requests[c].index);
 			int connIdx = n - 1 + depth;
 			connTT[connIdx] = seg.getTravelTime();
 			connDist[connIdx] = seg.getDistance();
@@ -507,7 +476,6 @@ public final class OrderingEnumerator {
 					bestValidDist, used, perm, depth + 1,
 					newPartialDist, newTime,
 					requests[c].destinationLinkId, pickupTimes, evaluator,
-					conflicts, pathStops,
 					connTT, connDist, connUtil, destResult);
 			used[c] = false;
 		}

@@ -13,7 +13,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
-import org.matsim.contrib.demand_extraction.algorithm.extension.OrderingConflicts;
+import org.matsim.contrib.demand_extraction.algorithm.extension.SubSetOrderingFeasibility;
 import org.matsim.contrib.demand_extraction.algorithm.extension.RideExtender;
 import org.matsim.contrib.demand_extraction.algorithm.graph.DegreeGraph;
 import org.matsim.contrib.demand_extraction.algorithm.generation.PairGenerator;
@@ -148,18 +148,20 @@ public final class ExMasEngine {
 		int interDegreeMinPerRequest = exMasConfig.getInterDegreeMinRidesPerRequest();
 		int nextRideIndex = allRides.size();
 		DegreeGraph prevDegreeGraph = null;
-		// Create ordering conflicts store for cross-degree learning
-		// Cap at 10 to avoid overflow when maxDegree is Integer.MAX_VALUE
-		int conflictsMaxLength = maxDegree > 5 ? 10 : Math.min(maxDegree * 2, 10);
-		OrderingConflicts conflicts = new OrderingConflicts(conflictsMaxLength);
+		// Sub-set ordering feasibility: record infeasible origin orderings per sub-set,
+		// use to tighten DAG + prune orderings at higher degrees. Start with triples.
+		SubSetOrderingFeasibility subsetFeasibility = new SubSetOrderingFeasibility(3);
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
-													 requests, exMasConfig, prevDegreeGraph, conflicts);
+													 requests, exMasConfig, prevDegreeGraph,
+													 subsetFeasibility);
 			List<Ride> extended = extender.extendRides(currentDegreeRides, nextRideIndex);
-			if (conflicts != null) {
-				conflicts.commit();
-				log.info("  Ordering conflicts: {} total{}", conflicts.getConflictCount(),
-						conflictsByLengthString(conflicts));
+			if (subsetFeasibility != null) {
+				subsetFeasibility.commit();
+				log.info("  Sub-set feasibility: {} triples, {} total infeasible bits (avg {}/triple)",
+						subsetFeasibility.getTripleCount(),
+						subsetFeasibility.getTotalInfeasibleTripleBits(),
+						String.format("%.2f", subsetFeasibility.getAvgInfeasiblePerTriple()));
 			}
 			long graphBuildStart = System.currentTimeMillis();
 			prevDegreeGraph = extender.buildDegreeGraph(degree + 1);
@@ -481,18 +483,6 @@ public final class ExMasEngine {
 				String.format(java.util.Locale.ROOT, "%.2f", maxSaving));
 
 		return kept;
-	}
-
-	private static String conflictsByLengthString(OrderingConflicts c) {
-		StringBuilder sb = new StringBuilder();
-		for (int L = 3; L <= c.getMaxLength(); L++) {
-			int count = c.getConflictCount(L);
-			if (count > 0) {
-				if (sb.length() > 0) sb.append(", ");
-				sb.append("L").append(L).append("=").append(count);
-			}
-		}
-		return sb.length() > 0 ? " (" + sb + ")" : "";
 	}
 
 	private static double computeRequiredSavingForDegree(int degree, double scale, double maxSaving, int minDegree) {
