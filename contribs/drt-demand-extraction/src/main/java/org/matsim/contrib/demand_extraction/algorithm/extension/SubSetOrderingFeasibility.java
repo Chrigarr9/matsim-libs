@@ -73,6 +73,55 @@ public final class SubSetOrderingFeasibility {
 			this.quintInfeasibilityLo = null;
 			this.quintInfeasibilityHi = null;
 		}
+
+		// Bloom filter bit arrays — sized at commit() based on entry count.
+		// Used as a NEGATIVE pre-check: "definitely not in set" skips the hashmap.
+		// "Maybe in set" falls through to the exact hashmap lookup → zero false positives.
+		this.tripleBloom = EMPTY_BLOOM;
+		this.quadBloom = EMPTY_BLOOM;
+		this.quintBloom = EMPTY_BLOOM;
+	}
+
+	// ---- Bloom filter for negative pre-check ----
+	// Sized to give ~0.1% false positive rate = ~5 bits per entry with 3 hash functions.
+	// Keys are the sorted sub-set hashes (long). Bloom says "definitely not" or "maybe".
+	// Final decision is always made by the exact hashmap, so false positives don't affect correctness.
+
+	private static final long[] EMPTY_BLOOM = new long[1];
+	private long[] tripleBloom;
+	private long[] quadBloom;
+	private long[] quintBloom;
+	private long tripleBloomMask;
+	private long quadBloomMask;
+	private long quintBloomMask;
+
+	/** Build a bloom filter sized to the number of entries. Size is a power of 2 for fast masking. */
+	private static long[] buildBloom(int entryCount) {
+		if (entryCount == 0) return EMPTY_BLOOM;
+		// ~10 bits per entry for very low FP rate
+		long bits = Math.max(64L, Long.highestOneBit((long) entryCount * 10L) << 1);
+		if (bits > (1L << 32)) bits = 1L << 32; // cap at 512 MB
+		int longs = (int)(bits / 64);
+		return new long[longs];
+	}
+
+	/** Insert a hash into the bloom filter using 2 independent bit positions. */
+	private static void bloomAdd(long[] bloom, long mask, long h) {
+		if (bloom.length <= 1) return;
+		long h1 = h * 0x9E3779B97F4A7C15L;
+		long h2 = h * 0xBF58476D1CE4E5B9L;
+		bloom[(int)((h1 >>> 6) & mask)] |= 1L << (h1 & 63);
+		bloom[(int)((h2 >>> 6) & mask)] |= 1L << (h2 & 63);
+	}
+
+	/** Check if hash might be in the bloom filter. Returns false only if definitely not. */
+	private static boolean bloomMaybe(long[] bloom, long mask, long h) {
+		if (bloom.length <= 1) return true; // empty bloom = always fall through
+		long h1 = h * 0x9E3779B97F4A7C15L;
+		long h2 = h * 0xBF58476D1CE4E5B9L;
+		if ((bloom[(int)((h1 >>> 6) & mask)] & (1L << (h1 & 63))) == 0) return false;
+		if ((bloom[(int)((h2 >>> 6) & mask)] & (1L << (h2 & 63))) == 0) return false;
+		return true;
 	}
 
 	// ---- Lehmer code ----
@@ -289,6 +338,22 @@ public final class SubSetOrderingFeasibility {
 					break;
 			}
 		}
+
+		// Rebuild bloom filters from committed maps
+		tripleBloom = buildBloom(tripleInfeasibility.size());
+		tripleBloomMask = tripleBloom.length - 1;
+		for (long h : tripleInfeasibility.keySet()) bloomAdd(tripleBloom, tripleBloomMask, h);
+
+		if (quadInfeasibility != null) {
+			quadBloom = buildBloom(quadInfeasibility.size());
+			quadBloomMask = quadBloom.length - 1;
+			for (long h : quadInfeasibility.keySet()) bloomAdd(quadBloom, quadBloomMask, h);
+		}
+		if (quintInfeasibilityLo != null) {
+			quintBloom = buildBloom(quintInfeasibilityLo.size());
+			quintBloomMask = quintBloom.length - 1;
+			for (long h : quintInfeasibilityLo.keySet()) bloomAdd(quintBloom, quintBloomMask, h);
+		}
 	}
 
 	// ---- Lookup ----
@@ -442,23 +507,21 @@ public final class SubSetOrderingFeasibility {
 	private boolean checkTriples(int[] requestIndices, int[] perm, int depth, int candidate) {
 		if (tripleInfeasibility.isEmpty()) return false;
 
+		long[] bloom = this.tripleBloom;
+		long bmask = this.tripleBloomMask;
 		int reqC = requestIndices[candidate];
 		for (int i = 0; i < depth; i++) {
 			int reqI = requestIndices[perm[i]];
 			for (int j = i + 1; j < depth; j++) {
 				int reqJ = requestIndices[perm[j]];
 
-				// The three elements in positional order: reqI (pos i), reqJ (pos j), reqC (pos depth)
-				// Sort to get sub-set key, compute ranks for Lehmer
 				long hash;
 				int lehmer;
 
-				// Inline sort-3 + rank computation for speed
 				if (reqI < reqJ) {
 					if (reqJ < reqC) {
-						// reqI < reqJ < reqC → positions map to ranks (0,1,2) → perm is identity
 						hash = ((reqI * HASH_PRIME + reqJ) * HASH_PRIME + reqC);
-						lehmer = 0; // (0,1,2)
+						lehmer = 0;
 					} else if (reqI < reqC) {
 						// reqI < reqC < reqJ → ranks (0,2,1)
 						hash = ((reqI * HASH_PRIME + reqC) * HASH_PRIME + reqJ);
@@ -485,10 +548,8 @@ public final class SubSetOrderingFeasibility {
 					}
 				}
 
-				int bits = tripleInfeasibility.get(hash);
-				if ((bits & (1 << lehmer)) != 0) {
-					return true;
-				}
+				if (!bloomMaybe(bloom, bmask, hash)) continue;
+				if ((tripleInfeasibility.get(hash) & (1 << lehmer)) != 0) return true;
 			}
 		}
 		return false;
@@ -505,79 +566,110 @@ public final class SubSetOrderingFeasibility {
 		return c0 * 2 + c1;
 	}
 
+	/**
+	 * Allocation-free quad lookup using local primitive variables.
+	 * Computes ranks via pairwise comparisons, builds hash + Lehmer index inline.
+	 */
 	private boolean checkQuads(int[] requestIndices, int[] perm, int depth, int candidate) {
 		if (quadInfeasibility.isEmpty()) return false;
 
-		int reqC = requestIndices[candidate];
-		int[] four = new int[4]; // request indices in positional order
-		int[] sorted = new int[4];
-		int[] ranks = new int[4];
-
+		long[] bloom = this.quadBloom;
+		long bmask = this.quadBloomMask;
+		int reqD = requestIndices[candidate];
 		for (int i = 0; i < depth; i++) {
+			int reqA = requestIndices[perm[i]];
 			for (int j = i + 1; j < depth; j++) {
+				int reqB = requestIndices[perm[j]];
 				for (int k = j + 1; k < depth; k++) {
-					four[0] = requestIndices[perm[i]];
-					four[1] = requestIndices[perm[j]];
-					four[2] = requestIndices[perm[k]];
-					four[3] = reqC;
+					int reqC = requestIndices[perm[k]];
 
-					// Compute ranks
-					for (int a = 0; a < 4; a++) {
-						int rank = 0;
-						for (int b = 0; b < 4; b++) {
-							if (four[b] < four[a]) rank++;
-						}
-						ranks[a] = rank;
-						sorted[rank] = four[a];
-					}
+					// Compute ranks via pairwise comparisons (6 pairs, sum = 0+1+2+3 = 6)
+					int rA = 0, rB = 0, rC = 0, rD = 0;
+					if (reqB < reqA) rA++; else rB++;
+					if (reqC < reqA) rA++; else rC++;
+					if (reqD < reqA) rA++; else rD++;
+					if (reqC < reqB) rB++; else rC++;
+					if (reqD < reqB) rB++; else rD++;
+					if (reqD < reqC) rC++; else rD++;
 
-					long hash = hashSorted(sorted, 0, 4);
-					int lehmer = lehmerIndex(ranks, 4);
-					int bits = quadInfeasibility.get(hash);
-					if ((bits & (1 << lehmer)) != 0) {
-						return true;
-					}
+					// Build sorted[rank] → value from ranks
+					int s0, s1, s2, s3;
+					if (rA == 0) s0 = reqA; else if (rB == 0) s0 = reqB; else if (rC == 0) s0 = reqC; else s0 = reqD;
+					if (rA == 1) s1 = reqA; else if (rB == 1) s1 = reqB; else if (rC == 1) s1 = reqC; else s1 = reqD;
+					if (rA == 2) s2 = reqA; else if (rB == 2) s2 = reqB; else if (rC == 2) s2 = reqC; else s2 = reqD;
+					if (rA == 3) s3 = reqA; else if (rB == 3) s3 = reqB; else if (rC == 3) s3 = reqC; else s3 = reqD;
+
+					long hash = (((s0 * HASH_PRIME + s1) * HASH_PRIME + s2) * HASH_PRIME + s3);
+
+					// Lehmer index for positional perm (rA, rB, rC, rD), k=4
+					// c0 = elements after pos 0 with smaller rank
+					// index = c0*6 + c1*2 + c2
+					int c0 = (rB < rA ? 1 : 0) + (rC < rA ? 1 : 0) + (rD < rA ? 1 : 0);
+					int c1 = (rC < rB ? 1 : 0) + (rD < rB ? 1 : 0);
+					int c2 = (rD < rC ? 1 : 0);
+					int lehmer = c0 * 6 + c1 * 2 + c2;
+
+					if (!bloomMaybe(bloom, bmask, hash)) continue;
+					if ((quadInfeasibility.get(hash) & (1 << lehmer)) != 0) return true;
 				}
 			}
 		}
 		return false;
 	}
 
+	/**
+	 * Allocation-free quint lookup using local primitive variables.
+	 */
 	private boolean checkQuints(int[] requestIndices, int[] perm, int depth, int candidate) {
 		if (quintInfeasibilityLo.isEmpty() && quintInfeasibilityHi.isEmpty()) return false;
 
-		int reqC = requestIndices[candidate];
-		int[] five = new int[5];
-		int[] sorted = new int[5];
-		int[] ranks = new int[5];
-
+		long[] bloom = this.quintBloom;
+		long bmask = this.quintBloomMask;
+		int reqE = requestIndices[candidate];
 		for (int i = 0; i < depth; i++) {
+			int reqA = requestIndices[perm[i]];
 			for (int j = i + 1; j < depth; j++) {
+				int reqB = requestIndices[perm[j]];
 				for (int k = j + 1; k < depth; k++) {
+					int reqC = requestIndices[perm[k]];
 					for (int l = k + 1; l < depth; l++) {
-						five[0] = requestIndices[perm[i]];
-						five[1] = requestIndices[perm[j]];
-						five[2] = requestIndices[perm[k]];
-						five[3] = requestIndices[perm[l]];
-						five[4] = reqC;
+						int reqD = requestIndices[perm[l]];
 
-						for (int a = 0; a < 5; a++) {
-							int rank = 0;
-							for (int b = 0; b < 5; b++) {
-								if (five[b] < five[a]) rank++;
-							}
-							ranks[a] = rank;
-							sorted[rank] = five[a];
-						}
+						// Compute ranks via pairwise comparisons (10 pairs, sum = 0+1+2+3+4 = 10)
+						int rA = 0, rB = 0, rC = 0, rD = 0, rE = 0;
+						if (reqB < reqA) rA++; else rB++;
+						if (reqC < reqA) rA++; else rC++;
+						if (reqD < reqA) rA++; else rD++;
+						if (reqE < reqA) rA++; else rE++;
+						if (reqC < reqB) rB++; else rC++;
+						if (reqD < reqB) rB++; else rD++;
+						if (reqE < reqB) rB++; else rE++;
+						if (reqD < reqC) rC++; else rD++;
+						if (reqE < reqC) rC++; else rE++;
+						if (reqE < reqD) rD++; else rE++;
 
-						long hash = hashSorted(sorted, 0, 5);
-						int lehmer = lehmerIndex(ranks, 5);
+						// Build sorted values from ranks
+						int s0, s1, s2, s3, s4;
+						if (rA == 0) s0 = reqA; else if (rB == 0) s0 = reqB; else if (rC == 0) s0 = reqC; else if (rD == 0) s0 = reqD; else s0 = reqE;
+						if (rA == 1) s1 = reqA; else if (rB == 1) s1 = reqB; else if (rC == 1) s1 = reqC; else if (rD == 1) s1 = reqD; else s1 = reqE;
+						if (rA == 2) s2 = reqA; else if (rB == 2) s2 = reqB; else if (rC == 2) s2 = reqC; else if (rD == 2) s2 = reqD; else s2 = reqE;
+						if (rA == 3) s3 = reqA; else if (rB == 3) s3 = reqB; else if (rC == 3) s3 = reqC; else if (rD == 3) s3 = reqD; else s3 = reqE;
+						if (rA == 4) s4 = reqA; else if (rB == 4) s4 = reqB; else if (rC == 4) s4 = reqC; else if (rD == 4) s4 = reqD; else s4 = reqE;
+
+						long hash = ((((s0 * HASH_PRIME + s1) * HASH_PRIME + s2) * HASH_PRIME + s3) * HASH_PRIME + s4);
+
+						// Lehmer for k=5: c0*24 + c1*6 + c2*2 + c3
+						int c0 = (rB < rA ? 1 : 0) + (rC < rA ? 1 : 0) + (rD < rA ? 1 : 0) + (rE < rA ? 1 : 0);
+						int c1 = (rC < rB ? 1 : 0) + (rD < rB ? 1 : 0) + (rE < rB ? 1 : 0);
+						int c2 = (rD < rC ? 1 : 0) + (rE < rC ? 1 : 0);
+						int c3 = (rE < rD ? 1 : 0);
+						int lehmer = c0 * 24 + c1 * 6 + c2 * 2 + c3;
+
+						if (!bloomMaybe(bloom, bmask, hash)) continue;
 						if (lehmer < 64) {
-							long bits = quintInfeasibilityLo.get(hash);
-							if ((bits & (1L << lehmer)) != 0) return true;
+							if ((quintInfeasibilityLo.get(hash) & (1L << lehmer)) != 0) return true;
 						} else {
-							long bits = quintInfeasibilityHi.get(hash);
-							if ((bits & (1L << (lehmer - 64))) != 0) return true;
+							if ((quintInfeasibilityHi.get(hash) & (1L << (lehmer - 64))) != 0) return true;
 						}
 					}
 				}
@@ -620,6 +712,25 @@ public final class SubSetOrderingFeasibility {
 		for (int v : tripleInfeasibility.values()) {
 			total += Integer.bitCount(v);
 		}
+		return total;
+	}
+
+	/** Total number of infeasible ordering bits set across all quads. */
+	public long getTotalInfeasibleQuadBits() {
+		if (quadInfeasibility == null) return 0;
+		long total = 0;
+		for (int v : quadInfeasibility.values()) {
+			total += Integer.bitCount(v);
+		}
+		return total;
+	}
+
+	/** Total number of infeasible ordering bits set across all quints. */
+	public long getTotalInfeasibleQuintBits() {
+		if (quintInfeasibilityLo == null) return 0;
+		long total = 0;
+		for (long v : quintInfeasibilityLo.values()) total += Long.bitCount(v);
+		for (long v : quintInfeasibilityHi.values()) total += Long.bitCount(v);
 		return total;
 	}
 

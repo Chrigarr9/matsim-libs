@@ -148,9 +148,9 @@ public final class ExMasEngine {
 		int interDegreeMinPerRequest = exMasConfig.getInterDegreeMinRidesPerRequest();
 		int nextRideIndex = allRides.size();
 		DegreeGraph prevDegreeGraph = null;
-		// Sub-set ordering feasibility: record infeasible origin orderings per sub-set,
-		// use to tighten DAG + prune orderings at higher degrees. Start with triples.
-		SubSetOrderingFeasibility subsetFeasibility = new SubSetOrderingFeasibility(3);
+		// Sub-set ordering feasibility: bloom-filtered, allocation-free lookups.
+		// Supports triples (3), quads (4), quints (5). Records only exact-size orderings.
+		SubSetOrderingFeasibility subsetFeasibility = new SubSetOrderingFeasibility(5);
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
 													 requests, exMasConfig, prevDegreeGraph,
@@ -158,10 +158,13 @@ public final class ExMasEngine {
 			List<Ride> extended = extender.extendRides(currentDegreeRides, nextRideIndex);
 			if (subsetFeasibility != null) {
 				subsetFeasibility.commit();
-				log.info("  Sub-set feasibility: {} triples, {} total infeasible bits (avg {}/triple)",
+				log.info("  Sub-set feasibility: triples={}/{} bits, quads={}/{} bits, quints={}/{} bits",
 						subsetFeasibility.getTripleCount(),
 						subsetFeasibility.getTotalInfeasibleTripleBits(),
-						String.format("%.2f", subsetFeasibility.getAvgInfeasiblePerTriple()));
+						subsetFeasibility.getQuadCount(),
+						subsetFeasibility.getTotalInfeasibleQuadBits(),
+						subsetFeasibility.getQuintCount(),
+						subsetFeasibility.getTotalInfeasibleQuintBits());
 			}
 			long graphBuildStart = System.currentTimeMillis();
 			prevDegreeGraph = extender.buildDegreeGraph(degree + 1);
