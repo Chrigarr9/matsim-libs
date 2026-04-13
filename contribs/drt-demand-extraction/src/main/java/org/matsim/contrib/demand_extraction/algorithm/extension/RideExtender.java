@@ -245,8 +245,17 @@ public final class RideExtender {
 
 		long tEnum0 = System.nanoTime();
 
-		OrderingEnumerator.enumerateAndEvaluate(
+		// Compute seed data from parent ride. Parent indices are global; use the
+		// set's own ordering of global indices (newSet is sorted) to keep them as
+		// global — the enumerator will remap to its own local indexing via
+		// requestIndices[]. seedNewRequest is the element of newSet not in parent.
+		int[] seedParentOrigin = parentRide.getOriginsIndex();
+		int[] seedParentDest = parentRide.getDestinationsIndex();
+		int seedNewRequest = findNewRequest(newSet, parentRide.getRequestIndices());
+
+		OrderingEnumerator.enumerateAndEvaluateSeeded(
 				newSet, graph, network, setRequests, bestValidDist,
+				seedParentOrigin, seedParentDest, seedNewRequest,
 				(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
 						bestValidDist, bestRide, stats));
 

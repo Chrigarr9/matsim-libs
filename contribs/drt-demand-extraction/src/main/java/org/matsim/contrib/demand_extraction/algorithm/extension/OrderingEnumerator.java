@@ -206,6 +206,32 @@ public final class OrderingEnumerator {
 				connTT, connDist, connUtil);
 	}
 
+	/**
+	 * Enumerate orderings with a parent-ordering seed for DFS sort bias.
+	 *
+	 * <p>The DFS visits candidates in a sort order that places parent-consistent
+	 * candidates (the next un-placed request from the parent's order, or the new
+	 * inserted request) first, with cheapest-next-segment as tie-breaker. This
+	 * reaches a valid parent-insertion ordering early, tightening bestValidDist[0]
+	 * so that subsequent branches are B&B-cut aggressively.
+	 *
+	 * @param seedParentOrigin global request indices in parent's origin order (length k-1)
+	 * @param seedParentDest   global request indices in parent's dest order (length k-1)
+	 * @param seedNewRequest   global request index of the new element (not in parent)
+	 */
+	public static void enumerateAndEvaluateSeeded(
+			int[] requestIndices, ShareabilityGraph graph,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			double[] bestValidDist,
+			int[] seedParentOrigin, int[] seedParentDest, int seedNewRequest,
+			Consumer<Ordering> evaluator) {
+
+		// Stub: delegate to the existing entry point. Seed data is accepted but
+		// not yet consumed — the sort-bias and LB cut are added in subsequent
+		// tasks.
+		enumerateAndEvaluate(requestIndices, graph, network, requests, bestValidDist, evaluator);
+	}
+
 	private static void enumerateOriginsPrunedWithEval(
 			Boolean[][] adj, int n, PairInfo[] pairs,
 			MatsimNetworkCache network, DrtRequest[] requests,
