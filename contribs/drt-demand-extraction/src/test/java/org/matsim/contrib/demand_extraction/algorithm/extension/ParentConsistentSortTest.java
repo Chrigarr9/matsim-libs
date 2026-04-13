@@ -73,6 +73,61 @@ class ParentConsistentSortTest {
                         + Arrays.toString(firstOrigin));
     }
 
+    /**
+     * T7: verifies that {@code enumerateAndEvaluateSeeded} visits the
+     * parent-consistent ordering FIRST in the dest DFS.
+     *
+     * <p>The fixture's D→D distances are all uniform (100.0), so the unseeded
+     * dest DFS sorts by cheapest-next-segment and — with equal distances —
+     * falls back to insertion order (ascending index). For origins {@code [0,1,2,3]}
+     * FIFO constraints force exactly one valid dest permutation: {@code [0,1,2,3]}.
+     * The parent claims {@code {2, 1, 0}} which disagrees (reversed relative to
+     * ascending index). The assertion that r2 precedes r1 precedes r0 therefore
+     * fails under the current unseeded dest DFS.
+     *
+     * <p>T8 will add the seeded dest DFS, making this test pass.
+     */
+    @Test
+    void firstVisitedOrderingIsParentConsistentForDest() {
+        TestSetup setup = buildFourRequestSet();
+        int[] requestIndices = {0, 1, 2, 3};
+        // Natural parent origin order — not what we're testing here.
+        // The seeded origin DFS will visit [0,1,2,3] first, which is also
+        // the cheapest-next-segment order, so no surprises on the origin side.
+        int[] parentOrigin = {0, 1, 2};
+        // Reversed parent dest order — should force the seeded dest DFS to prefer
+        // r2 → r1 → r0. Under the unseeded dest DFS all D→D distances are equal
+        // so the DFS iterates by ascending index, producing [0,1,2,3] first.
+        int[] parentDest = {2, 1, 0};
+        int newRequest = 3;
+
+        List<int[]> visitedDestPerms = new ArrayList<>();
+        double[] bestValidDist = {Double.POSITIVE_INFINITY};
+
+        OrderingEnumerator.enumerateAndEvaluateSeeded(
+                requestIndices, setup.graph, setup.network, setup.requests,
+                bestValidDist,
+                parentOrigin, parentDest, newRequest,
+                ordering -> visitedDestPerms.add(ordering.destPerm().clone()));
+
+        assertTrue(visitedDestPerms.size() > 0,
+                "At least one ordering should be visited");
+
+        // The first visited ordering must preserve the parent's relative dest
+        // order: r2 before r1 before r0 (r3 can be inserted anywhere).
+        int[] firstDest = visitedDestPerms.get(0);
+        int posOf2 = indexOf(firstDest, 2);
+        int posOf1 = indexOf(firstDest, 1);
+        int posOf0 = indexOf(firstDest, 0);
+
+        assertTrue(posOf2 < posOf1,
+                "Parent dest order violated: r2 should come before r1. Got "
+                        + Arrays.toString(firstDest));
+        assertTrue(posOf1 < posOf0,
+                "Parent dest order violated: r1 should come before r0. Got "
+                        + Arrays.toString(firstDest));
+    }
+
     // ── Helper ───────────────────────────────────────────────────────────
 
     private static int indexOf(int[] arr, int val) {
