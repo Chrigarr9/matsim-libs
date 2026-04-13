@@ -77,6 +77,22 @@ public final class ForbiddenPrefixIndex {
 		return committed.get(IntArrayList.wrap(prefix));
 	}
 
+	/**
+	 * Look up the forbidden-next set for a sub-range of an existing buffer.
+	 * Avoids the {@code Arrays.copyOf} on the lookup hot path used by the cursor:
+	 * {@link IntArrayList#wrap(int[], int)} aliases the backing array (no copy)
+	 * and only sees indices {@code [0..len)}, so any garbage in {@code scratch[len..]}
+	 * does not affect content-based equality with other {@link IntArrayList} keys
+	 * of the same prefix.
+	 *
+	 * @param scratch a buffer containing the prefix in indices {@code [0..len)}
+	 * @param len     the length of the prefix to look up
+	 * @return the forbidden-next set, or {@code null} if no entry
+	 */
+	public IntOpenHashSet lookup(int[] scratch, int len) {
+		return committed.get(IntArrayList.wrap(scratch, len));
+	}
+
 	/** Maximum prefix length seen across all committed entries. */
 	public int getMaxRecordedKeyLength() {
 		return maxRecordedKeyLength;

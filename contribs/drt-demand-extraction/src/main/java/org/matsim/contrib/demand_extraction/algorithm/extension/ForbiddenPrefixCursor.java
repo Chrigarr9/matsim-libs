@@ -1,7 +1,5 @@
 package org.matsim.contrib.demand_extraction.algorithm.extension;
 
-import java.util.Arrays;
-
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 
 /**
@@ -98,7 +96,7 @@ public final class ForbiddenPrefixCursor {
 	 */
 	private void enumerate(int start, int chosen, int needed, IntOpenHashSet additions, int totalLen) {
 		if (chosen == needed) {
-			IntOpenHashSet forbidden = index.lookup(Arrays.copyOf(scratchKey, totalLen));
+			IntOpenHashSet forbidden = index.lookup(scratchKey, totalLen);
 			if (forbidden != null) {
 				for (int s : forbidden) {
 					if (forbiddenSet.add(s)) {

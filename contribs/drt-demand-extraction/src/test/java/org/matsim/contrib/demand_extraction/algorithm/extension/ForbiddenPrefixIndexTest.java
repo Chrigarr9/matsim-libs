@@ -123,4 +123,22 @@ class ForbiddenPrefixIndexTest {
 		index.commit();
 		assertEquals(4, index.getMaxRecordedKeyLength()); // quintuple has prefix length 4
 	}
+
+	@Test
+	void rangeLookupMatchesArrayLookup() {
+		// The (scratch, len) overload must match the plain (int[]) lookup, AND
+		// any garbage beyond index `len` in the scratch buffer must not affect
+		// the content-based equality used by the underlying IntArrayList key.
+		ForbiddenPrefixIndex index = new ForbiddenPrefixIndex();
+		index.recordPending(new int[]{10, 20, 30, 40});
+		index.commit();
+
+		int[] scratch = {10, 20, 30, 99, 99, 99};
+		IntOpenHashSet f = index.lookup(scratch, 3);
+		assertNotNull(f);
+		assertTrue(f.contains(40));
+
+		// Same identity object as the plain-array lookup.
+		assertSame(index.lookup(new int[]{10, 20, 30}), f);
+	}
 }
