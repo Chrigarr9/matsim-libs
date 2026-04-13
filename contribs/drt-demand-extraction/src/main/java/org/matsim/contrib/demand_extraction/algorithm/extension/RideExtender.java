@@ -135,9 +135,12 @@ public final class RideExtender {
 		ForkJoinPool pool = new ForkJoinPool(parallelism);
 		try {
 			pool.submit(() ->
-				uniqueBaseSets.parallelStream().forEach(baseSetIndices -> {
+				ridesToExtend.parallelStream().forEach(parentRide -> {
 					// Register this thread's stats for collection
 					threadStatsMap.putIfAbsent(Thread.currentThread().getId(), EnumerationStats.get());
+
+					int[] baseSetIndices = parentRide.getRequestIndices().clone();
+					java.util.Arrays.sort(baseSetIndices);
 
 					int[] neighbors;
 					if (prevDegreeGraph != null) {
@@ -158,7 +161,7 @@ public final class RideExtender {
 
 						setsProcessed.incrementAndGet();
 
-						Ride bestRide = processSet(newSet, newSetHash, targetDegree);
+						Ride bestRide = processSet(newSet, newSetHash, targetDegree, parentRide);
 						if (bestRide != null) {
 							resultBySetHash.put(newSetHash, bestRide);
 						}
@@ -213,9 +216,11 @@ public final class RideExtender {
 	 * Process a single candidate set: enumerate orderings, route, validate, return best ride.
 	 * Thread-safe — only reads shared immutable/thread-safe resources.
 	 *
+	 * @param parentRide the walk-assigned parent ride (best ride for the base set at the
+	 *                   previous degree). Not yet consumed — wired in Task 4.
 	 * @return best validated ride for this set, or null if no valid ordering exists
 	 */
-	private Ride processSet(int[] newSet, long setHash, int targetDegree) {
+	private Ride processSet(int[] newSet, long setHash, int targetDegree, Ride parentRide) {
 		long t0 = System.nanoTime();
 		EnumerationStats stats = EnumerationStats.get();
 		stats.setsProcessed++;
@@ -604,6 +609,16 @@ public final class RideExtender {
 		result[existing.length] = newReq;
 		Arrays.sort(result);
 		return result;
+	}
+
+	/** Return the global request index in {@code newSet} not present in {@code parentSet}. */
+	private static int findNewRequest(int[] newSet, int[] parentSet) {
+		int[] sorted = parentSet.clone();
+		java.util.Arrays.sort(sorted);
+		for (int r : newSet) {
+			if (java.util.Arrays.binarySearch(sorted, r) < 0) return r;
+		}
+		throw new IllegalStateException("newSet does not contain a new request");
 	}
 
 	/**
