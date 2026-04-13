@@ -573,7 +573,7 @@ public class MatsimNetworkCache {
 	 *
 	 * <p>Intended for use in JUnit tests only — not for production code.
 	 */
-	public static MatsimNetworkCache forTesting() {
+	static MatsimNetworkCache forTesting() {
 		return new MatsimNetworkCache();
 	}
 
@@ -585,7 +585,7 @@ public class MatsimNetworkCache {
 	 *
 	 * <p>Intended for use in JUnit tests only — not for production code.
 	 */
-	public void putForTesting(Id<Link> origin, Id<Link> dest, TravelSegment seg) {
+	void putForTesting(Id<Link> origin, Id<Link> dest, TravelSegment seg) {
 		cache.put(new CacheKey(origin, dest, 0), seg);
 	}
 

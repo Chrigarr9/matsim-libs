@@ -13,6 +13,7 @@ import org.matsim.api.core.v01.population.Person;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCacheTestFixture;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
 /**
@@ -146,11 +147,12 @@ class ParentConsistentSortTest {
         setup.graph = gb.build();
 
         // ── MatsimNetworkCache ─────────────────────────────────────────────
-        // Use the package-private test constructor (bypasses Guice / router).
-        // Pre-populate every segment that the DFS will query. With timeBinSize
-        // = Integer.MAX_VALUE (set by the test constructor), all departure
-        // times map to bin 0, matching the keys written by putForTesting.
-        MatsimNetworkCache net = MatsimNetworkCache.forTesting();
+        // Bypass Guice / router via the test fixture that exposes the
+        // package-private forTesting hook. Pre-populate every segment that the
+        // DFS will query. With timeBinSize = Integer.MAX_VALUE (set inside
+        // forTesting), all departure times map to bin 0, matching the keys
+        // written by MatsimNetworkCacheTestFixture.put.
+        MatsimNetworkCache net = MatsimNetworkCacheTestFixture.create();
 
         // Travel time = distance / 10 (10 m/s ≈ 36 km/h). Very fast to keep
         // all passengers inside their maxTravelTime (6000 s).
@@ -168,7 +170,7 @@ class ParentConsistentSortTest {
             for (int j = 0; j < n; j++) {
                 if (i != j) {
                     double dist = ooDistTable[i][j];
-                    net.putForTesting(oLink[i], oLink[j], seg(dist));
+                    MatsimNetworkCacheTestFixture.put(net, oLink[i], oLink[j], seg(dist));
                 }
             }
         }
@@ -177,7 +179,7 @@ class ParentConsistentSortTest {
         // All uniform — we don't care about dest ordering for this test.
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) {
-                net.putForTesting(oLink[i], dLink[j], seg(100.0));
+                MatsimNetworkCacheTestFixture.put(net, oLink[i], dLink[j], seg(100.0));
             }
         }
 
@@ -185,7 +187,7 @@ class ParentConsistentSortTest {
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) {
                 if (i != j) {
-                    net.putForTesting(dLink[i], dLink[j], seg(100.0));
+                    MatsimNetworkCacheTestFixture.put(net, dLink[i], dLink[j], seg(100.0));
                 }
             }
         }
