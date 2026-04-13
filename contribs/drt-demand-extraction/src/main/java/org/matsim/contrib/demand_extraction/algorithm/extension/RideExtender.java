@@ -305,9 +305,13 @@ public final class RideExtender {
 
 		double dist = validated.getRideDistance();
 		if (dist < bestValidDist[0]) {
+			boolean firstValidForThisSet = (bestRide[0] == null);
 			bestValidDist[0] = dist;
 			bestRide[0] = validated;
 			stats.newBestRides++;
+			if (firstValidForThisSet) {
+				stats.parentSeedRidesFound++;
+			}
 		} else {
 			stats.validButWorseThanBest++;
 		}

@@ -35,6 +35,7 @@ public final class EnumerationStats {
 	public long segmentLookups;
 	public long setsConstraintFeasible;
 	public long setsBudgetFeasible;
+	public long parentSeedRidesFound;
 
 	// ---- Hard-constraint pruning ----
 	public long prunedByTravelTime;
@@ -74,6 +75,7 @@ public final class EnumerationStats {
 		segmentLookups = 0;
 		setsConstraintFeasible = 0;
 		setsBudgetFeasible = 0;
+		parentSeedRidesFound = 0;
 		prunedByTravelTime = 0;
 		prunedByDropoffCheck = 0;
 		prunedByDelayWindowOrigin = 0;
@@ -103,6 +105,7 @@ public final class EnumerationStats {
 			total.segmentLookups += s.segmentLookups;
 			total.setsConstraintFeasible += s.setsConstraintFeasible;
 			total.setsBudgetFeasible += s.setsBudgetFeasible;
+			total.parentSeedRidesFound += s.parentSeedRidesFound;
 			total.prunedByTravelTime += s.prunedByTravelTime;
 			total.prunedByDropoffCheck += s.prunedByDropoffCheck;
 			total.prunedByDelayWindowOrigin += s.prunedByDelayWindowOrigin;
@@ -165,6 +168,8 @@ public final class EnumerationStats {
 				setsProcessed > 0 ? String.format("%.1f", 100.0 * setsConstraintFeasible / setsProcessed) : "N/A");
 		log.info("  Sets budget-feasible: {} ({}% of processed)", setsBudgetFeasible,
 				setsProcessed > 0 ? String.format("%.1f", 100.0 * setsBudgetFeasible / setsProcessed) : "N/A");
+		log.info("  Parent seed rides found: {} ({}% of processed)", parentSeedRidesFound,
+				setsProcessed > 0 ? String.format("%.1f", 100.0 * parentSeedRidesFound / setsProcessed) : "N/A");
 		// timeEnumeration includes ride construction + budget validation (evaluator runs inside)
 		long timePureEnum = timeEnumeration - timeRideConstruction - timeBudgetValidation;
 		long timeOther = timeTotal - timeEnumeration;
