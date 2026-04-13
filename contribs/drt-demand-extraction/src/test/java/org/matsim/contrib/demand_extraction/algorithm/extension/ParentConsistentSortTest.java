@@ -187,15 +187,21 @@ class ParentConsistentSortTest {
         }
 
         // ── ShareabilityGraph ──────────────────────────────────────────────
-        // Add a bidirectional FIFO edge for every ordered pair (i→j and j→i).
-        // rideIndex is arbitrary (0) — it's only used by the graph to store
+        // Add both FIFO and LIFO edges for every ordered pair (i→j and j→i).
+        // Having both FIFO and LIFO for each direction means the dest DAG has NO
+        // constraints (hasFifo && hasLifo → no constraint), so all n! dest
+        // orderings are valid. This lets the seeded dest DFS demonstrate its
+        // sort bias by choosing the parent-consistent ordering as the first
+        // visited, regardless of distance tiebreak.
+        // rideIndex is arbitrary — it's only used by the graph to store
         // edge metadata and is not checked during ordering enumeration.
-        ShareabilityGraph.Builder gb = ShareabilityGraph.builder(n * (n - 1) * 2);
+        ShareabilityGraph.Builder gb = ShareabilityGraph.builder(n * (n - 1) * 4);
         int rideIdx = 0;
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) {
                 if (i != j) {
                     gb.addEdge(i, j, rideIdx++, ShareabilityGraph.KIND_FIFO);
+                    gb.addEdge(i, j, rideIdx++, ShareabilityGraph.KIND_LIFO);
                 }
             }
         }

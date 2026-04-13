@@ -244,6 +244,7 @@ public final class OrderingEnumerator {
 
 		// Remap global seed parent indices to child-local indices (0..n-1).
 		int[] seedLocalOrigin = remapToLocal(seedParentOrigin, requestIndices);
+		int[] seedLocalDest = remapToLocal(seedParentDest, requestIndices);
 		int seedLocalNewRequest = localIndexOf(seedNewRequest, requestIndices);
 
 		double[] connTT = new double[2 * n - 1];
@@ -253,7 +254,7 @@ public final class OrderingEnumerator {
 				requestIndices, bestValidDist, new boolean[n], new int[n], new double[n], 0,
 				0.0, 0.0,
 				Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY,
-				seedLocalOrigin, seedLocalNewRequest,
+				seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
 				evaluator, connTT, connDist, connUtil);
 	}
 
@@ -298,8 +299,8 @@ public final class OrderingEnumerator {
 	 * or the new request, 1 = other), secondary: cheapest-next-segment distance. This ensures
 	 * the DFS visits a parent-consistent ordering first, tightening bestValidDist[0] early.
 	 *
-	 * <p>At depth == n, falls back to the unseeded {@link #enumerateDestPrunedWithEval}.
-	 * Dest seeding is added in T8.
+	 * <p>At depth == n, calls the seeded {@link #enumerateDestPrunedSeededWithEval} so the
+	 * dest DFS also visits parent-consistent candidates first.
 	 */
 	private static void enumerateOriginsSeededWithEval(
 			Boolean[][] adj, int n, PairInfo[] pairs,
@@ -309,15 +310,16 @@ public final class OrderingEnumerator {
 			boolean[] used, int[] perm, double[] pickupTimes, int depth,
 			double partialDist, double currentTime,
 			double currentL, double currentU,
-			int[] seedLocalOrigin, int seedLocalNewRequest,
+			int[] seedLocalOrigin, int[] seedLocalDest, int seedLocalNewRequest,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
 		if (depth == n) {
-			// All origins placed — enumerate destination orderings (unseeded; dest seeding is T8).
-			enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
+			// All origins placed — enumerate destination orderings with parent-consistent seed.
+			enumerateDestPrunedSeededWithEval(n, perm, pairs, network, requests,
 					requestIndices, bestValidDist, partialDist, currentTime, pickupTimes,
 					currentL, currentU,
+					seedLocalDest, seedLocalNewRequest,
 					evaluator, connTT, connDist, connUtil);
 			return;
 		}
@@ -380,7 +382,7 @@ public final class OrderingEnumerator {
 						requestIndices, bestValidDist, used, perm, pickupTimes, 1,
 						0.0, reqC.getRequestTime(),
 						newL, newU,
-						seedLocalOrigin, seedLocalNewRequest,
+						seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
 						evaluator,
 						connTT, connDist, connUtil);
 				used[c] = false;
@@ -439,7 +441,7 @@ public final class OrderingEnumerator {
 					requestIndices, bestValidDist, used, perm, pickupTimes, depth + 1,
 					newPartialDist, newPickupTime,
 					newL, newU,
-					seedLocalOrigin, seedLocalNewRequest,
+					seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
 					evaluator,
 					connTT, connDist, connUtil);
 			used[c] = false;
@@ -745,6 +747,206 @@ public final class OrderingEnumerator {
 					newPartialDist, newTime,
 					requests[c].destinationLinkId, pickupTimes,
 					newL, newU,
+					evaluator, connTT, connDist, connUtil);
+			used[c] = false;
+		}
+	}
+
+	/**
+	 * Seeded entry point for the destination DFS: mirrors {@link #enumerateDestPrunedWithEval}
+	 * but delegates to {@link #enumerateDestTopoSeededWithEval} so that dest candidates are
+	 * visited in parent-consistent order (next unplaced parent-dest request or the new request
+	 * first, tie-broken by cheapest-next-segment distance).
+	 *
+	 * @param seedLocalDest      child-local indices of parent's dest order (length n-1)
+	 * @param seedLocalNewRequest child-local index of the newly inserted request
+	 */
+	private static void enumerateDestPrunedSeededWithEval(
+			int n, int[] origPerm, PairInfo[] pairs,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			int[] requestIndices,
+			double[] bestValidDist,
+			double partialDist, double currentTime,
+			double[] pickupTimes,
+			double currentL, double currentU,
+			int[] seedLocalDest, int seedLocalNewRequest,
+			Consumer<Ordering> evaluator,
+			double[] connTT, double[] connDist, double[] connUtil) {
+
+		int[] origPos = new int[n];
+		for (int i = 0; i < n; i++) origPos[origPerm[i]] = i;
+
+		Boolean[][] adj = new Boolean[n][n];
+		for (int a = 0; a < n; a++) {
+			for (int b = a + 1; b < n; b++) {
+				PairInfo p = lookup(pairs, n, a, b);
+				boolean aBeforeB = origPos[a] < origPos[b];
+				boolean hasFifo = aBeforeB ? p.forwardFifo() : p.reverseFifo();
+				boolean hasLifo = aBeforeB ? p.forwardLifo() : p.reverseLifo();
+
+				if (hasFifo && hasLifo) {
+					// no constraint
+				} else if (hasFifo) {
+					if (aBeforeB) { adj[a][b] = true; adj[b][a] = false; }
+					else          { adj[b][a] = true; adj[a][b] = false; }
+				} else if (hasLifo) {
+					if (aBeforeB) { adj[b][a] = true; adj[a][b] = false; }
+					else          { adj[a][b] = true; adj[b][a] = false; }
+				} else {
+					// Structural infeasibility — no pair ride in this direction.
+					return;
+				}
+			}
+		}
+
+		Id<Link> prevLink = requests[origPerm[n - 1]].originLinkId;
+
+		enumerateDestTopoSeededWithEval(adj, n, origPerm, origPos, requestIndices, network, requests,
+				bestValidDist, new boolean[n], new int[n], 0,
+				partialDist, currentTime, prevLink, pickupTimes,
+				currentL, currentU,
+				seedLocalDest, seedLocalNewRequest,
+				evaluator, connTT, connDist, connUtil);
+	}
+
+	/**
+	 * Seeded variant of {@link #enumerateDestTopoWithEval}: identical except the candidate sort
+	 * uses a two-level comparator — primary: parent-consistent rank (0 = next unplaced parent-dest
+	 * request or the new request, 1 = other), secondary: cheapest-next-segment distance.
+	 *
+	 * <p>Reuses the {@link #nextUnplacedInSeed} and {@link #parentConsistentRank} helpers from T6.
+	 *
+	 * @param seedLocalDest      child-local indices of parent's dest order (length n-1)
+	 * @param seedLocalNewRequest child-local index of the newly inserted request
+	 */
+	private static void enumerateDestTopoSeededWithEval(
+			Boolean[][] adj, int n, int[] origPerm, int[] origPos, int[] requestIndices,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			double[] bestValidDist,
+			boolean[] used, int[] perm, int depth,
+			double partialDist, double currentTime,
+			Id<Link> prevLinkId,
+			double[] pickupTimes,
+			double currentL, double currentU,
+			int[] seedLocalDest, int seedLocalNewRequest,
+			Consumer<Ordering> evaluator,
+			double[] connTT, double[] connDist, double[] connUtil) {
+
+		if (depth == n) {
+			// Complete ordering — call evaluator inline with pre-routed segment data.
+			evaluator.accept(new Ordering(origPerm.clone(), perm.clone(), partialDist,
+					connTT.clone(), connDist.clone(), connUtil.clone()));
+			return;
+		}
+
+		// Check A: prune entire subtree if any in-vehicle passenger already exceeds maxTravelTime.
+		EnumerationStats stats = EnumerationStats.get();
+		for (int p = 0; p < n; p++) {
+			if (used[p]) continue; // already dropped off
+			double inVehicleTime = currentTime - pickupTimes[p];
+			if (inVehicleTime > requests[p].getMaxTravelTime()) {
+				stats.prunedByTravelTime++;
+				return;
+			}
+		}
+
+		List<Integer> candidates = new ArrayList<>();
+		for (int c = 0; c < n; c++) {
+			if (used[c]) continue;
+			boolean valid = true;
+			for (int other = 0; other < n; other++) {
+				if (other == c || used[other]) continue;
+				if (adj[other][c] != null && adj[other][c]) {
+					valid = false; break;
+				}
+			}
+			if (!valid) continue;
+			candidates.add(c);
+		}
+
+		Map<Integer, TravelSegment> segMap = new HashMap<>();
+		for (int c : candidates) {
+			segMap.put(c, network.getSegment(prevLinkId,
+					requests[c].destinationLinkId, currentTime));
+		}
+
+		// Two-level sort: primary = parent-consistent rank, secondary = cheapest-next-segment.
+		int nextParentLocal = nextUnplacedInSeed(seedLocalDest, used);
+		int newRequestLocal = used[seedLocalNewRequest] ? -1 : seedLocalNewRequest;
+		candidates.sort((a, b) -> {
+			int rankA = parentConsistentRank(a, nextParentLocal, newRequestLocal);
+			int rankB = parentConsistentRank(b, nextParentLocal, newRequestLocal);
+			if (rankA != rankB) return Integer.compare(rankA, rankB);
+			return Double.compare(segMap.get(a).getDistance(), segMap.get(b).getDistance());
+		});
+
+		int candCount = candidates.size();
+		for (int idx = 0; idx < candCount; idx++) {
+			int c = candidates.get(idx);
+			TravelSegment seg = segMap.get(c);
+			double newPartialDist = partialDist + seg.getDistance();
+			if (newPartialDist > bestValidDist[0]) {
+				EnumerationStats sDest = EnumerationStats.get();
+				sDest.bnbDestCuts++;
+				sDest.bnbDestSkippedCandidates += (candCount - idx);
+				break;
+			}
+
+			double newTime = currentTime + seg.getTravelTime();
+
+			// Check at Dropoff: passenger c's ride is now complete.
+			double fullInVehicle = newTime - pickupTimes[c];
+			if (fullInVehicle > requests[c].getMaxTravelTime()) {
+				stats.prunedByDropoffCheck++;
+				continue;
+			}
+
+			// Check B: after routing to this candidate's destination, would any
+			// remaining in-vehicle passenger exceed their maxTravelTime?
+			int bustedVictim = -1;
+			for (int p = 0; p < n; p++) {
+				if (used[p] || p == c) continue;
+				if (newTime - pickupTimes[p] > requests[p].getMaxTravelTime()) {
+					bustedVictim = p;
+					break;
+				}
+			}
+			if (bustedVictim >= 0) {
+				stats.prunedByTravelTime++;
+				continue;
+			}
+
+			// Delay-window dropoff tightening.
+			DrtRequest reqC = requests[c];
+			double detourTimeC = fullInVehicle - reqC.getTravelTime();
+			double posRelC = reqC.getPositiveDelayRelComponent();
+			double negRelC = reqC.getNegativeDelayRelComponent();
+			double posAdjC = posRelC > 0 ? Math.max(0.0, posRelC - detourTimeC) : 0.0;
+			double negAdjC = negRelC > 0 ? Math.max(0.0, negRelC - detourTimeC) : 0.0;
+			double effMaxPosC = reqC.getMaxPositiveDelay() - detourTimeC - posAdjC;
+			double effMaxNegC = reqC.getMaxNegativeDelay() - negAdjC;
+			double delayC = pickupTimes[c] - reqC.getRequestTime();
+			double actualLowC = -delayC - effMaxNegC;
+			double actualHighC = effMaxPosC - delayC;
+			double newL = currentL > actualLowC ? currentL : actualLowC;
+			double newU = currentU < actualHighC ? currentU : actualHighC;
+			if (newL > newU + DELAY_WINDOW_EPSILON) {
+				EnumerationStats.get().prunedByDelayWindowDropoff++;
+				continue;
+			}
+
+			used[c] = true;
+			perm[depth] = c;
+			int connIdx = n - 1 + depth;
+			connTT[connIdx] = seg.getTravelTime();
+			connDist[connIdx] = seg.getDistance();
+			connUtil[connIdx] = seg.getNetworkUtility();
+			enumerateDestTopoSeededWithEval(adj, n, origPerm, origPos, requestIndices, network, requests,
+					bestValidDist, used, perm, depth + 1,
+					newPartialDist, newTime,
+					requests[c].destinationLinkId, pickupTimes,
+					newL, newU,
+					seedLocalDest, seedLocalNewRequest,
 					evaluator, connTT, connDist, connUtil);
 			used[c] = false;
 		}
