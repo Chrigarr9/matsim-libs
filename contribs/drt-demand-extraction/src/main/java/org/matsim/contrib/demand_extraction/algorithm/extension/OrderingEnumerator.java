@@ -210,9 +210,15 @@ public final class OrderingEnumerator {
 		double[] connTT = new double[2 * n - 1];
 		double[] connDist = new double[2 * n - 1];
 		double[] connUtil = new double[2 * n - 1];
+		// Allocate cursor once per set. Capacity 2*n covers origin + dest phases
+		// (Task 12 will thread it through dest enumeration). Cursor is NOT thread-safe;
+		// allocating per-set ensures each enumeration call has its own state.
+		ForbiddenPrefixCursor cursor = (prefixIndex != null)
+				? new ForbiddenPrefixCursor(prefixIndex, 2 * n)
+				: null;
 		enumerateOriginsPrunedWithEval(origAdj, n, pairConstraints, network, requests,
 				requestIndices, bestValidDist, new boolean[n], new int[n], new double[n], 0,
-				0.0, 0.0, evaluator, subsetFeasibility, prefixIndex,
+				0.0, 0.0, evaluator, subsetFeasibility, prefixIndex, cursor,
 				connTT, connDist, connUtil);
 	}
 
@@ -269,6 +275,7 @@ public final class OrderingEnumerator {
 			Consumer<Ordering> evaluator,
 			SubSetOrderingFeasibility subsetFeasibility,
 			ForbiddenPrefixIndex prefixIndex,
+			ForbiddenPrefixCursor cursor,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
 		if (depth == n) {
@@ -355,6 +362,13 @@ public final class OrderingEnumerator {
 					continue;
 				}
 			}
+			// Forbidden-prefix check: prune if cursor's prior placements forbid c as
+			// the next origin. Cheap (O(1) hash lookup), happens before any routing.
+			// Stop encoding for origins: 2 * requestIndices[c].
+			if (cursor != null && cursor.isForbidden(2 * requestIndices[c])) {
+				EnumerationStats.get().prunedByForbidden++;
+				continue;
+			}
 			candidates.add(c);
 		}
 
@@ -363,11 +377,13 @@ public final class OrderingEnumerator {
 				used[c] = true;
 				perm[0] = c;
 				pickupTimes[c] = requests[c].getRequestTime();
+				if (cursor != null) cursor.place(2 * requestIndices[c]);
 				enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
 						requestIndices, bestValidDist, used, perm, pickupTimes, 1,
 						0.0, requests[c].getRequestTime(), evaluator,
-						subsetFeasibility, prefixIndex,
+						subsetFeasibility, prefixIndex, cursor,
 						connTT, connDist, connUtil);
+				if (cursor != null) cursor.unplace();
 				used[c] = false;
 			}
 			return;
@@ -391,11 +407,13 @@ public final class OrderingEnumerator {
 			connTT[depth - 1] = seg.getTravelTime();
 			connDist[depth - 1] = seg.getDistance();
 			connUtil[depth - 1] = seg.getNetworkUtility();
+			if (cursor != null) cursor.place(2 * requestIndices[c]);
 			enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
 					requestIndices, bestValidDist, used, perm, pickupTimes, depth + 1,
 					newPartialDist, currentTime + seg.getTravelTime(), evaluator,
-					subsetFeasibility, prefixIndex,
+					subsetFeasibility, prefixIndex, cursor,
 					connTT, connDist, connUtil);
+			if (cursor != null) cursor.unplace();
 			used[c] = false;
 		}
 	}
