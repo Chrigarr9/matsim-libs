@@ -50,6 +50,8 @@ public final class EnumerationStats {
 	public long bnbOriginLbSkippedCandidates; // candidates skipped by origin LB cuts (future use)
 	public long bnbDestCuts;                // dest-phase break events
 	public long bnbDestSkippedCandidates;   // candidates skipped by dest cuts
+	public long bnbDestLbCuts;             // LB-based outer cut events (dest DFS, all depths)
+	public long bnbDestLbSkippedCandidates; // candidates skipped by dest LB cuts (future use)
 
 	// ---- Evaluator outcome funnel ----
 	public long rideNullFailures;     // buildRideFromOrdering returned null
@@ -88,6 +90,8 @@ public final class EnumerationStats {
 		bnbOriginLbSkippedCandidates = 0;
 		bnbDestCuts = 0;
 		bnbDestSkippedCandidates = 0;
+		bnbDestLbCuts = 0;
+		bnbDestLbSkippedCandidates = 0;
 		rideNullFailures = 0;
 		validButWorseThanBest = 0;
 		newBestRides = 0;
@@ -120,6 +124,8 @@ public final class EnumerationStats {
 			total.bnbOriginLbSkippedCandidates += s.bnbOriginLbSkippedCandidates;
 			total.bnbDestCuts += s.bnbDestCuts;
 			total.bnbDestSkippedCandidates += s.bnbDestSkippedCandidates;
+			total.bnbDestLbCuts += s.bnbDestLbCuts;
+			total.bnbDestLbSkippedCandidates += s.bnbDestLbSkippedCandidates;
 			total.rideNullFailures += s.rideNullFailures;
 			total.validButWorseThanBest += s.validButWorseThanBest;
 			total.newBestRides += s.newBestRides;
@@ -159,6 +165,8 @@ public final class EnumerationStats {
 				bnbOriginCuts > 0 ? String.format("%.2f", (double) bnbOriginSkippedCandidates / bnbOriginCuts) : "N/A");
 		log.info("  LB B&B cuts (origin): {} events, {} candidates skipped",
 				bnbOriginLbCuts, bnbOriginLbSkippedCandidates);
+		log.info("  LB B&B cuts (dest):   {} events, {} candidates skipped",
+				bnbDestLbCuts, bnbDestLbSkippedCandidates);
 		log.info("  Dest B&B cuts:   {} events, {} candidates skipped ({} skipped/cut)",
 				bnbDestCuts, bnbDestSkippedCandidates,
 				bnbDestCuts > 0 ? String.format("%.2f", (double) bnbDestSkippedCandidates / bnbDestCuts) : "N/A");

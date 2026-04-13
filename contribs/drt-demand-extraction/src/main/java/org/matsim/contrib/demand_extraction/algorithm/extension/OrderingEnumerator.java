@@ -894,6 +894,16 @@ public final class OrderingEnumerator {
 			}
 		}
 
+		// LB-based outer B&B cut: partialDist + totalMinInRemaining is an admissible
+		// lower bound on any completion. Unlike the origin DFS, no depth-0 guard is
+		// needed here: at every dest-DFS depth, the remaining stops (unplaced
+		// dropoffs) genuinely have incoming segments in any completion (each dropoff
+		// is entered exactly once during the dest walk).
+		if (partialDist + totalMinInRemaining > bestValidDist[0]) {
+			stats.bnbDestLbCuts++;
+			return;
+		}
+
 		List<Integer> candidates = new ArrayList<>();
 		for (int c = 0; c < n; c++) {
 			if (used[c]) continue;
