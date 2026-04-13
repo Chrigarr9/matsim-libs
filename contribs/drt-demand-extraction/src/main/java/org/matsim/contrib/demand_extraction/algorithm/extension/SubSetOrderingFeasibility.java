@@ -471,6 +471,249 @@ public final class SubSetOrderingFeasibility {
 		return edgesAdded;
 	}
 
+	// ---- DAG tightening (quad + quint generalizations, 2026-04-13) ----
+
+	/**
+	 * PAIR_BEFORE_MASK_QUAD[rA][rB] = 24-bit mask of Lehmer indices in 4! permutations
+	 * where rank rA appears before rank rB. Computed in static initializer from
+	 * {@link #lehmerIndex}.
+	 */
+	private static final int[][] PAIR_BEFORE_MASK_QUAD = computePairBeforeMaskInt(4);
+
+	/**
+	 * PAIR_BEFORE_MASK_QUINT[rA][rB] = 120-bit mask of Lehmer indices in 5! permutations
+	 * where rank rA appears before rank rB. Stored as long[2]: [lo=bits 0-63, hi=bits 64-119].
+	 */
+	private static final long[][][] PAIR_BEFORE_MASK_QUINT = computePairBeforeMaskLong(5);
+
+	/** Compute PAIR_BEFORE_MASK for k-permutations fitting in a single int (k ≤ 4, since 5! = 120 > 32). */
+	private static int[][] computePairBeforeMaskInt(int k) {
+		int[][] mask = new int[k][k];
+		int[] perm = new int[k];
+		for (int i = 0; i < k; i++) perm[i] = i;
+		do {
+			int lehmer = lehmerIndex(perm, k);
+			for (int rA = 0; rA < k; rA++) {
+				int posA = -1;
+				for (int i = 0; i < k; i++) if (perm[i] == rA) { posA = i; break; }
+				for (int rB = 0; rB < k; rB++) {
+					if (rA == rB) continue;
+					int posB = -1;
+					for (int i = 0; i < k; i++) if (perm[i] == rB) { posB = i; break; }
+					if (posA < posB) mask[rA][rB] |= (1 << lehmer);
+				}
+			}
+		} while (nextPermutationInPlace(perm));
+		return mask;
+	}
+
+	/** Compute PAIR_BEFORE_MASK for k-permutations with masks > 32 bits (k ≥ 5). Returns long[k][k][2]. */
+	private static long[][][] computePairBeforeMaskLong(int k) {
+		long[][][] mask = new long[k][k][2];
+		int[] perm = new int[k];
+		for (int i = 0; i < k; i++) perm[i] = i;
+		do {
+			int lehmer = lehmerIndex(perm, k);
+			for (int rA = 0; rA < k; rA++) {
+				int posA = -1;
+				for (int i = 0; i < k; i++) if (perm[i] == rA) { posA = i; break; }
+				for (int rB = 0; rB < k; rB++) {
+					if (rA == rB) continue;
+					int posB = -1;
+					for (int i = 0; i < k; i++) if (perm[i] == rB) { posB = i; break; }
+					if (posA < posB) {
+						if (lehmer < 64) mask[rA][rB][0] |= (1L << lehmer);
+						else             mask[rA][rB][1] |= (1L << (lehmer - 64));
+					}
+				}
+			}
+		} while (nextPermutationInPlace(perm));
+		return mask;
+	}
+
+	/** Standard lexicographic next-permutation. Returns false when already at last. */
+	private static boolean nextPermutationInPlace(int[] arr) {
+		int n = arr.length;
+		int i = n - 2;
+		while (i >= 0 && arr[i] >= arr[i + 1]) i--;
+		if (i < 0) return false;
+		int j = n - 1;
+		while (arr[j] <= arr[i]) j--;
+		int t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+		int lo = i + 1, hi = n - 1;
+		while (lo < hi) {
+			t = arr[lo]; arr[lo] = arr[hi]; arr[hi] = t;
+			lo++; hi--;
+		}
+		return true;
+	}
+
+	/**
+	 * Compute rank of each of k elements within the sorted ordering.
+	 * ranks[i] = position (0-based) of elements[i] in the sorted array.
+	 * Used to index PAIR_BEFORE_MASK tables.
+	 */
+	private static void computeRanksSorted(int[] elements, int[] sortedOut, int[] ranksOut, int k) {
+		for (int i = 0; i < k; i++) sortedOut[i] = elements[i];
+		// Insertion sort — k is small (3..5)
+		for (int i = 1; i < k; i++) {
+			int v = sortedOut[i];
+			int j = i - 1;
+			while (j >= 0 && sortedOut[j] > v) {
+				sortedOut[j + 1] = sortedOut[j];
+				j--;
+			}
+			sortedOut[j + 1] = v;
+		}
+		for (int i = 0; i < k; i++) {
+			for (int r = 0; r < k; r++) {
+				if (sortedOut[r] == elements[i]) { ranksOut[i] = r; break; }
+			}
+		}
+	}
+
+	/**
+	 * Quad-level DAG tightening: for each unconstrained pair (a,b), scan all quads {a,b,k,l}.
+	 * If every scanned quad has all 12 "a before b" Lehmer bits set in its 24-bit infeasibility
+	 * mask, constrain the pair direction by adding edge b → a.
+	 *
+	 * @return number of edges added to adj.
+	 */
+	public int tightenDAG4(Boolean[][] adj, int[] requestIndices, int n) {
+		if (quadInfeasibility == null || quadInfeasibility.isEmpty() || n < 4) return 0;
+
+		int edgesAdded = 0;
+		int[] quadReqs = new int[4];
+		int[] quadSorted = new int[4];
+		int[] quadRanks = new int[4];
+
+		for (int a = 0; a < n; a++) {
+			for (int b = a + 1; b < n; b++) {
+				if (adj[a][b] != null) continue;
+
+				boolean anyAbeforeBfeasible = false;
+				boolean anyBbeforeAfeasible = false;
+
+				outer:
+				for (int k = 0; k < n; k++) {
+					if (k == a || k == b) continue;
+					for (int l = k + 1; l < n; l++) {
+						if (l == a || l == b) continue;
+
+						quadReqs[0] = requestIndices[a];
+						quadReqs[1] = requestIndices[b];
+						quadReqs[2] = requestIndices[k];
+						quadReqs[3] = requestIndices[l];
+						computeRanksSorted(quadReqs, quadSorted, quadRanks, 4);
+						int rankA = quadRanks[0];
+						int rankB = quadRanks[1];
+
+						long hash = hashSorted(quadSorted, 0, 4);
+						int bits = quadInfeasibility.get(hash);
+						if (bits == 0) {
+							// No data on this quad → both directions still possible
+							anyAbeforeBfeasible = true;
+							anyBbeforeAfeasible = true;
+							break outer;
+						}
+
+						int maskAbeforeB = PAIR_BEFORE_MASK_QUAD[rankA][rankB];
+						int maskBbeforeA = PAIR_BEFORE_MASK_QUAD[rankB][rankA];
+
+						if ((bits & maskAbeforeB) != maskAbeforeB) anyAbeforeBfeasible = true;
+						if ((bits & maskBbeforeA) != maskBbeforeA) anyBbeforeAfeasible = true;
+						if (anyAbeforeBfeasible && anyBbeforeAfeasible) break outer;
+					}
+				}
+
+				if (!anyAbeforeBfeasible && anyBbeforeAfeasible) {
+					adj[b][a] = true; adj[a][b] = false;
+					edgesAdded++;
+				} else if (anyAbeforeBfeasible && !anyBbeforeAfeasible) {
+					adj[a][b] = true; adj[b][a] = false;
+					edgesAdded++;
+				}
+			}
+		}
+		return edgesAdded;
+	}
+
+	/**
+	 * Quint-level DAG tightening: for each unconstrained pair (a,b), scan all quints
+	 * {a,b,k,l,m}. Mask is 120-bit across two longs. If every scanned quint has all 60
+	 * "a before b" Lehmer bits set, constrain the pair direction.
+	 *
+	 * @return number of edges added to adj.
+	 */
+	public int tightenDAG5(Boolean[][] adj, int[] requestIndices, int n) {
+		if (quintInfeasibilityLo == null || quintInfeasibilityLo.isEmpty() || n < 5) return 0;
+
+		int edgesAdded = 0;
+		int[] qReqs = new int[5];
+		int[] qSorted = new int[5];
+		int[] qRanks = new int[5];
+
+		for (int a = 0; a < n; a++) {
+			for (int b = a + 1; b < n; b++) {
+				if (adj[a][b] != null) continue;
+
+				boolean anyAbeforeBfeasible = false;
+				boolean anyBbeforeAfeasible = false;
+
+				outer:
+				for (int k = 0; k < n; k++) {
+					if (k == a || k == b) continue;
+					for (int l = k + 1; l < n; l++) {
+						if (l == a || l == b) continue;
+						for (int m = l + 1; m < n; m++) {
+							if (m == a || m == b) continue;
+
+							qReqs[0] = requestIndices[a];
+							qReqs[1] = requestIndices[b];
+							qReqs[2] = requestIndices[k];
+							qReqs[3] = requestIndices[l];
+							qReqs[4] = requestIndices[m];
+							computeRanksSorted(qReqs, qSorted, qRanks, 5);
+							int rankA = qRanks[0];
+							int rankB = qRanks[1];
+
+							long hash = hashSorted(qSorted, 0, 5);
+							long lo = quintInfeasibilityLo.get(hash);
+							long hi = quintInfeasibilityHi.get(hash);
+							if (lo == 0L && hi == 0L) {
+								anyAbeforeBfeasible = true;
+								anyBbeforeAfeasible = true;
+								break outer;
+							}
+
+							long maskAbBLo = PAIR_BEFORE_MASK_QUINT[rankA][rankB][0];
+							long maskAbBHi = PAIR_BEFORE_MASK_QUINT[rankA][rankB][1];
+							long maskBbALo = PAIR_BEFORE_MASK_QUINT[rankB][rankA][0];
+							long maskBbAHi = PAIR_BEFORE_MASK_QUINT[rankB][rankA][1];
+
+							if ((lo & maskAbBLo) != maskAbBLo || (hi & maskAbBHi) != maskAbBHi) {
+								anyAbeforeBfeasible = true;
+							}
+							if ((lo & maskBbALo) != maskBbALo || (hi & maskBbAHi) != maskBbAHi) {
+								anyBbeforeAfeasible = true;
+							}
+							if (anyAbeforeBfeasible && anyBbeforeAfeasible) break outer;
+						}
+					}
+				}
+
+				if (!anyAbeforeBfeasible && anyBbeforeAfeasible) {
+					adj[b][a] = true; adj[a][b] = false;
+					edgesAdded++;
+				} else if (anyAbeforeBfeasible && !anyBbeforeAfeasible) {
+					adj[a][b] = true; adj[b][a] = false;
+					edgesAdded++;
+				}
+			}
+		}
+		return edgesAdded;
+	}
+
 	// ---- Lookup (per-candidate) ----
 
 	/**

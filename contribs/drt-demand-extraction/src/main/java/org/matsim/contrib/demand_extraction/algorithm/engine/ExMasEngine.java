@@ -152,9 +152,10 @@ public final class ExMasEngine {
 		// Sub-set ordering feasibility: bloom-filtered, allocation-free lookups.
 		// Supports triples (3), quads (4), quints (5). Records only exact-size orderings.
 		SubSetOrderingFeasibility subsetFeasibility = new SubSetOrderingFeasibility(5);
-		// Forbidden prefix index: variable-length key lookup for sub-ordering pruning.
-		// Wired through in parallel to subsetFeasibility (Phase 2 — no-op wiring).
-		ForbiddenPrefixIndex prefixIndex = new ForbiddenPrefixIndex();
+		// Forbidden prefix index: DISABLED (2026-04-13 diagnostic run).
+		// Shadow benchmarks showed prunedByForbidden=0 and 3-30x cursor overhead.
+		// Null propagates through RideExtender/OrderingEnumerator; all paths are null-safe.
+		ForbiddenPrefixIndex prefixIndex = null;
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
 													 requests, exMasConfig, prevDegreeGraph,
@@ -170,9 +171,11 @@ public final class ExMasEngine {
 						subsetFeasibility.getQuintCount(),
 						subsetFeasibility.getTotalInfeasibleQuintBits());
 			}
-			prefixIndex.commit();
-			log.info("  ForbiddenPrefixIndex at degree {}: {} keys, max prefix length {}",
-					degree, prefixIndex.size(), prefixIndex.getMaxRecordedKeyLength());
+			if (prefixIndex != null) {
+				prefixIndex.commit();
+				log.info("  ForbiddenPrefixIndex at degree {}: {} keys, max prefix length {}",
+						degree, prefixIndex.size(), prefixIndex.getMaxRecordedKeyLength());
+			}
 			long graphBuildStart = System.currentTimeMillis();
 			prevDegreeGraph = extender.buildDegreeGraph(degree + 1);
 			long graphBuildMs = System.currentTimeMillis() - graphBuildStart;

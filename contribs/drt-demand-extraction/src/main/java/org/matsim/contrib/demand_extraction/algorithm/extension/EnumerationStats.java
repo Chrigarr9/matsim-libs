@@ -25,6 +25,28 @@ public final class EnumerationStats {
 	public long prunedBySubsetLookup;
 	public long prunedByForbidden;
 	public long allDestFailRecorded;
+	// B&B distance-bound diagnostic counters (2026-04-13)
+	public long bnbOriginCuts;              // times origin-phase break fired on partialDist>bound
+	public long bnbOriginSkippedCandidates; // candidates skipped by those breaks (depth-agnostic)
+	public long bnbDestCuts;                // times dest-phase break fired
+	public long bnbDestSkippedCandidates;   // candidates skipped by those breaks
+	// Ordering outcome at evaluator (post-enumeration)
+	public long rideNullFailures;           // buildRideFromOrdering returned null (constraint viol)
+	public long budgetFailures;             // budget validation rejected
+	public long validButWorseThanBest;      // valid ride dist >= current bestValidDist
+	public long newBestRides;               // valid ride that tightened the bound
+	// Delay-window incremental feasibility check (2026-04-13)
+	public long prunedByDelayWindowOrigin;  // origin-phase intersection went empty
+	public long prunedByDelayWindowDropoff; // dropoff-phase intersection went empty
+	// DegreeGraph consensus tightening (tightenConstraints)
+	public long tightenedPairDirections;    // pair-direction eliminations by prev-degree consensus
+	public long setsWithTightenings;        // sets where ≥1 pair was tightened
+	// tightenDAG from SubSetOrderingFeasibility (triple/quad/quint levels)
+	public long tightenDAGEdgesAdded;       // sum over sets of edges added by tightenDAG (all levels)
+	public long tightenDAGSetsAffected;     // sets where tightenDAG (any level) added ≥1 edge
+	public long tightenDAGEdges3;           // edges added by triple-level tightenDAG
+	public long tightenDAGEdges4;           // edges added by quad-level tightenDAG (marginal over triples)
+	public long tightenDAGEdges5;           // edges added by quint-level tightenDAG (marginal over tri+quad)
 	// Per-set feasibility counters (for degree-specific graph analysis)
 	public long setsConstraintFeasible;  // sets where ≥1 ordering passed constraint checks
 	public long setsBudgetFeasible;      // sets where ≥1 ordering also passed budget
@@ -57,6 +79,23 @@ public final class EnumerationStats {
 			total.prunedBySubsetLookup += s.prunedBySubsetLookup;
 			total.prunedByForbidden += s.prunedByForbidden;
 			total.allDestFailRecorded += s.allDestFailRecorded;
+			total.bnbOriginCuts += s.bnbOriginCuts;
+			total.bnbOriginSkippedCandidates += s.bnbOriginSkippedCandidates;
+			total.bnbDestCuts += s.bnbDestCuts;
+			total.bnbDestSkippedCandidates += s.bnbDestSkippedCandidates;
+			total.rideNullFailures += s.rideNullFailures;
+			total.budgetFailures += s.budgetFailures;
+			total.validButWorseThanBest += s.validButWorseThanBest;
+			total.newBestRides += s.newBestRides;
+			total.prunedByDelayWindowOrigin += s.prunedByDelayWindowOrigin;
+			total.prunedByDelayWindowDropoff += s.prunedByDelayWindowDropoff;
+			total.tightenedPairDirections += s.tightenedPairDirections;
+			total.setsWithTightenings += s.setsWithTightenings;
+			total.tightenDAGEdgesAdded += s.tightenDAGEdgesAdded;
+			total.tightenDAGSetsAffected += s.tightenDAGSetsAffected;
+			total.tightenDAGEdges3 += s.tightenDAGEdges3;
+			total.tightenDAGEdges4 += s.tightenDAGEdges4;
+			total.tightenDAGEdges5 += s.tightenDAGEdges5;
 			total.setsConstraintFeasible += s.setsConstraintFeasible;
 			total.setsBudgetFeasible += s.setsBudgetFeasible;
 			for (int i = 0; i < total.subsetFeasibilityHisto.length; i++) {
@@ -92,6 +131,41 @@ public final class EnumerationStats {
 		log.info("  Pruned by forbidden prefix: {} ({} per set)", prunedByForbidden,
 				setsProcessed > 0 ? String.format("%.1f", (double) prunedByForbidden / setsProcessed) : "N/A");
 		log.info("  All-dest-fail recorded: {}", allDestFailRecorded);
+		// Delay-window feasibility (new pre-filter)
+		log.info("  Pruned by delay-window (origin): {} ({} per set)", prunedByDelayWindowOrigin,
+				setsProcessed > 0 ? String.format("%.1f", (double) prunedByDelayWindowOrigin / setsProcessed) : "N/A");
+		log.info("  Pruned by delay-window (dropoff): {} ({} per set)", prunedByDelayWindowDropoff,
+				setsProcessed > 0 ? String.format("%.1f", (double) prunedByDelayWindowDropoff / setsProcessed) : "N/A");
+		// Ordering-conflict tightening via DegreeGraph consensus
+		log.info("  Pair-directions tightened (prev-deg consensus): {} across {} sets ({}% of sets tightened)",
+				tightenedPairDirections, setsWithTightenings,
+				setsProcessed > 0 ? String.format("%.1f", 100.0 * setsWithTightenings / setsProcessed) : "N/A");
+		// tightenDAG via SubSetOrderingFeasibility
+		log.info("  tightenDAG edges added: {} across {} sets ({}% of sets affected)",
+				tightenDAGEdgesAdded, tightenDAGSetsAffected,
+				setsProcessed > 0 ? String.format("%.1f", 100.0 * tightenDAGSetsAffected / setsProcessed) : "N/A");
+		log.info("    Per level: triples={}, quads={}, quints={}",
+				tightenDAGEdges3, tightenDAGEdges4, tightenDAGEdges5);
+		// B&B diagnostic block
+		log.info("  === B&B distance-bound ===");
+		log.info("  Origin B&B cuts: {} events, {} candidates skipped ({} skipped/cut)",
+				bnbOriginCuts, bnbOriginSkippedCandidates,
+				bnbOriginCuts > 0 ? String.format("%.2f", (double) bnbOriginSkippedCandidates / bnbOriginCuts) : "N/A");
+		log.info("  Dest B&B cuts:   {} events, {} candidates skipped ({} skipped/cut)",
+				bnbDestCuts, bnbDestSkippedCandidates,
+				bnbDestCuts > 0 ? String.format("%.2f", (double) bnbDestSkippedCandidates / bnbDestCuts) : "N/A");
+		// Ordering outcome funnel
+		log.info("  === Ordering outcomes at evaluator ===");
+		long totalEvalOutcomes = rideNullFailures + budgetFailures + validButWorseThanBest + newBestRides;
+		log.info("  Evaluated orderings (sanity): {} (should equal {})", totalEvalOutcomes, orderingsEvaluated);
+		log.info("    ride-null (constraint):    {} ({}%)", rideNullFailures,
+				totalEvalOutcomes > 0 ? String.format("%.1f", 100.0 * rideNullFailures / totalEvalOutcomes) : "N/A");
+		log.info("    budget-fail:               {} ({}%)", budgetFailures,
+				totalEvalOutcomes > 0 ? String.format("%.1f", 100.0 * budgetFailures / totalEvalOutcomes) : "N/A");
+		log.info("    valid-but-worse:           {} ({}%)", validButWorseThanBest,
+				totalEvalOutcomes > 0 ? String.format("%.1f", 100.0 * validButWorseThanBest / totalEvalOutcomes) : "N/A");
+		log.info("    new-best (tightened):      {} ({}%)", newBestRides,
+				totalEvalOutcomes > 0 ? String.format("%.1f", 100.0 * newBestRides / totalEvalOutcomes) : "N/A");
 		log.info("  Sets constraint-feasible: {} ({}% of processed)", setsConstraintFeasible,
 				setsProcessed > 0 ? String.format("%.1f", 100.0 * setsConstraintFeasible / setsProcessed) : "N/A");
 		log.info("  Sets budget-feasible: {} ({}% of processed)", setsBudgetFeasible,

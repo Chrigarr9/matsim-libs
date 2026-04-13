@@ -32,6 +32,17 @@ import it.unimi.dsi.fastutil.ints.IntList;
  */
 public final class OrderingEnumerator {
 
+	/** Feasibility tolerance for delay-window intersection check (seconds). */
+	private static final double DELAY_WINDOW_EPSILON = 1e-6;
+
+	// ---- Measurement-mode flags (2026-04-13: tightenDAG effect measurement) ----
+	/** Skip the `partialDist > bestValidDist` B&B cut at origin + dest phase. */
+	public static boolean MEASURE_DISABLE_DISTANCE_BNB = false;
+	/** Skip the `subsetFeasibility.isInfeasible` per-candidate check. */
+	public static boolean MEASURE_DISABLE_SSF_LOOKUP = false;
+	/** Call `subsetFeasibility.tightenDAG` once per set before origin enumeration. */
+	public static boolean MEASURE_USE_TIGHTEN_DAG = false;
+
 	/** Pairwise constraint: which FIFO/LIFO pair ride kinds exist in each direction */
 	public record PairInfo(
 			boolean forwardFifo, boolean forwardLifo,
@@ -216,9 +227,28 @@ public final class OrderingEnumerator {
 		ForbiddenPrefixCursor cursor = (prefixIndex != null)
 				? new ForbiddenPrefixCursor(prefixIndex, 2 * n)
 				: null;
+		// Measurement mode: call tightenDAG at all available levels (triples, quads, quints)
+		// sequentially before recursive enumeration. Each level only fills pairs not already
+		// constrained by the previous level or by the original graph.
+		if (MEASURE_USE_TIGHTEN_DAG && subsetFeasibility != null && n >= 3) {
+			int e3 = subsetFeasibility.tightenDAG(origAdj, requestIndices, n);
+			int e4 = (n >= 4) ? subsetFeasibility.tightenDAG4(origAdj, requestIndices, n) : 0;
+			int e5 = (n >= 5) ? subsetFeasibility.tightenDAG5(origAdj, requestIndices, n) : 0;
+			int totalEdges = e3 + e4 + e5;
+			if (totalEdges > 0) {
+				EnumerationStats ts = EnumerationStats.get();
+				ts.tightenDAGEdgesAdded += totalEdges;
+				ts.tightenDAGSetsAffected++;
+				ts.tightenDAGEdges3 += e3;
+				ts.tightenDAGEdges4 += e4;
+				ts.tightenDAGEdges5 += e5;
+			}
+		}
 		enumerateOriginsPrunedWithEval(origAdj, n, pairConstraints, network, requests,
 				requestIndices, bestValidDist, new boolean[n], new int[n], new double[n], 0,
-				0.0, 0.0, evaluator, subsetFeasibility, prefixIndex, cursor,
+				0.0, 0.0,
+				Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY,
+				evaluator, subsetFeasibility, prefixIndex, cursor,
 				connTT, connDist, connUtil);
 	}
 
@@ -229,6 +259,7 @@ public final class OrderingEnumerator {
 			double[] bestValidDist,
 			boolean[] used, int[] perm, double[] pickupTimes, int depth,
 			double partialDist, double currentTime,
+			double currentL, double currentU,
 			Consumer<Ordering> evaluator,
 			SubSetOrderingFeasibility subsetFeasibility,
 			ForbiddenPrefixIndex prefixIndex,
@@ -244,6 +275,7 @@ public final class OrderingEnumerator {
 			boolean[] destResult = { false, false };
 			enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
 					requestIndices, bestValidDist, partialDist, currentTime, pickupTimes,
+					currentL, currentU,
 					evaluator, prefixIndex, cursor, connTT, connDist, connUtil, destResult);
 			if (!destResult[0] && !destResult[1] && n >= 3) {
 				if (subsetFeasibility != null) {
@@ -315,7 +347,7 @@ public final class OrderingEnumerator {
 			}
 			if (!valid) continue;
 			// Sub-set ordering feasibility: prune if any triple sub-ordering is infeasible
-			if (subsetFeasibility != null && depth >= 2) {
+			if (!MEASURE_DISABLE_SSF_LOOKUP && subsetFeasibility != null && depth >= 2) {
 				if (subsetFeasibility.isInfeasible(requestIndices, perm, depth, c)) {
 					EnumerationStats.get().prunedBySubsetLookup++;
 					continue;
@@ -333,14 +365,30 @@ public final class OrderingEnumerator {
 
 		if (depth == 0) {
 			for (int c : candidates) {
+				DrtRequest reqC = requests[c];
+				// Delay-window contribution at depth 0: delay = 0 (currentTime = reqTime).
+				// Origin-time UB:
+				//   paxLow = -0 - maxNeg = -maxNeg
+				//   paxHigh = (maxPos - max(0, posRelComp)) - 0 = maxPos - max(0, posRelComp)
+				double newLowC = -reqC.getMaxNegativeDelay();
+				double newHighC = reqC.getMaxPositiveDelay()
+						- Math.max(0.0, reqC.getPositiveDelayRelComponent());
+				double newL = currentL > newLowC ? currentL : newLowC;
+				double newU = currentU < newHighC ? currentU : newHighC;
+				if (newL > newU + DELAY_WINDOW_EPSILON) {
+					EnumerationStats.get().prunedByDelayWindowOrigin++;
+					continue;
+				}
+
 				used[c] = true;
 				perm[0] = c;
-				pickupTimes[c] = requests[c].getRequestTime();
+				pickupTimes[c] = reqC.getRequestTime();
 				if (cursor != null) cursor.place(2 * requestIndices[c]);
 				enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
 						requestIndices, bestValidDist, used, perm, pickupTimes, 1,
-						0.0, requests[c].getRequestTime(), evaluator,
-						subsetFeasibility, prefixIndex, cursor,
+						0.0, reqC.getRequestTime(),
+						newL, newU,
+						evaluator, subsetFeasibility, prefixIndex, cursor,
 						connTT, connDist, connUtil);
 				if (cursor != null) cursor.unplace();
 				used[c] = false;
@@ -355,22 +403,46 @@ public final class OrderingEnumerator {
 		}
 		candidates.sort(Comparator.comparingDouble(c -> segMap.get(c).getDistance()));
 
-		for (int c : candidates) {
+		int candCount = candidates.size();
+		for (int idx = 0; idx < candCount; idx++) {
+			int c = candidates.get(idx);
 			TravelSegment seg = segMap.get(c);
 			double newPartialDist = partialDist + seg.getDistance();
-			if (newPartialDist > bestValidDist[0]) break;
+			if (!MEASURE_DISABLE_DISTANCE_BNB && newPartialDist > bestValidDist[0]) {
+				EnumerationStats s = EnumerationStats.get();
+				s.bnbOriginCuts++;
+				s.bnbOriginSkippedCandidates += (candCount - idx);
+				break;
+			}
+
+			// Delay-window feasibility (origin-time over-approximation).
+			// effMaxNeg_UB = maxNegativeDelay (detour → ∞ → negAdj → 0)
+			// effMaxPos_UB = maxPos - max(0, posRelComp) (detour ∈ [0, posRelComp])
+			double newPickupTime = currentTime + seg.getTravelTime();
+			DrtRequest reqC = requests[c];
+			double delayC = newPickupTime - reqC.getRequestTime();
+			double newLowC = -delayC - reqC.getMaxNegativeDelay();
+			double newHighC = (reqC.getMaxPositiveDelay()
+					- Math.max(0.0, reqC.getPositiveDelayRelComponent())) - delayC;
+			double newL = currentL > newLowC ? currentL : newLowC;
+			double newU = currentU < newHighC ? currentU : newHighC;
+			if (newL > newU + DELAY_WINDOW_EPSILON) {
+				EnumerationStats.get().prunedByDelayWindowOrigin++;
+				continue;
+			}
 
 			used[c] = true;
 			perm[depth] = c;
-			pickupTimes[c] = currentTime + seg.getTravelTime();
+			pickupTimes[c] = newPickupTime;
 			connTT[depth - 1] = seg.getTravelTime();
 			connDist[depth - 1] = seg.getDistance();
 			connUtil[depth - 1] = seg.getNetworkUtility();
 			if (cursor != null) cursor.place(2 * requestIndices[c]);
 			enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
 					requestIndices, bestValidDist, used, perm, pickupTimes, depth + 1,
-					newPartialDist, currentTime + seg.getTravelTime(), evaluator,
-					subsetFeasibility, prefixIndex, cursor,
+					newPartialDist, newPickupTime,
+					newL, newU,
+					evaluator, subsetFeasibility, prefixIndex, cursor,
 					connTT, connDist, connUtil);
 			if (cursor != null) cursor.unplace();
 			used[c] = false;
@@ -384,6 +456,7 @@ public final class OrderingEnumerator {
 			double[] bestValidDist,
 			double partialDist, double currentTime,
 			double[] pickupTimes,
+			double currentL, double currentU,
 			Consumer<Ordering> evaluator,
 			ForbiddenPrefixIndex prefixIndex,
 			ForbiddenPrefixCursor cursor,
@@ -422,8 +495,9 @@ public final class OrderingEnumerator {
 
 		enumerateDestTopoWithEval(adj, n, origPerm, origPos, requestIndices, network, requests,
 				bestValidDist, new boolean[n], new int[n], 0,
-				partialDist, currentTime, prevLink, pickupTimes, evaluator,
-				prefixIndex, cursor, connTT, connDist, connUtil, destResult);
+				partialDist, currentTime, prevLink, pickupTimes,
+				currentL, currentU,
+				evaluator, prefixIndex, cursor, connTT, connDist, connUtil, destResult);
 	}
 
 	private static void enumerateDestTopoWithEval(
@@ -434,6 +508,7 @@ public final class OrderingEnumerator {
 			double partialDist, double currentTime,
 			Id<Link> prevLinkId,
 			double[] pickupTimes,
+			double currentL, double currentU,
 			Consumer<Ordering> evaluator,
 			ForbiddenPrefixIndex prefixIndex,
 			ForbiddenPrefixCursor cursor,
@@ -483,11 +558,16 @@ public final class OrderingEnumerator {
 		}
 		candidates.sort(Comparator.comparingDouble(c -> segMap.get(c).getDistance()));
 
-		for (int c : candidates) {
+		int candCount = candidates.size();
+		for (int idx = 0; idx < candCount; idx++) {
+			int c = candidates.get(idx);
 			TravelSegment seg = segMap.get(c);
 			double newPartialDist = partialDist + seg.getDistance();
-			if (newPartialDist > bestValidDist[0]) {
+			if (!MEASURE_DISABLE_DISTANCE_BNB && newPartialDist > bestValidDist[0]) {
 				destResult[1] = true; // distance B&B prevented full exploration
+				EnumerationStats sDest = EnumerationStats.get();
+				sDest.bnbDestCuts++;
+				sDest.bnbDestSkippedCandidates += (candCount - idx);
 				break;
 			}
 
@@ -529,6 +609,28 @@ public final class OrderingEnumerator {
 				continue;
 			}
 
+			// Delay-window dropoff tightening: c's detour is now known.
+			// Replace c's origin-time UB contribution with its exact post-detour value.
+			// Both updates are monotone (paxLow only grows, paxHigh only shrinks),
+			// so newL/newU are O(1) updates from (currentL, currentU).
+			DrtRequest reqC = requests[c];
+			double detourTimeC = fullInVehicle - reqC.getTravelTime();
+			double posRelC = reqC.getPositiveDelayRelComponent();
+			double negRelC = reqC.getNegativeDelayRelComponent();
+			double posAdjC = posRelC > 0 ? Math.max(0.0, posRelC - detourTimeC) : 0.0;
+			double negAdjC = negRelC > 0 ? Math.max(0.0, negRelC - detourTimeC) : 0.0;
+			double effMaxPosC = reqC.getMaxPositiveDelay() - detourTimeC - posAdjC;
+			double effMaxNegC = reqC.getMaxNegativeDelay() - negAdjC;
+			double delayC = pickupTimes[c] - reqC.getRequestTime();
+			double actualLowC = -delayC - effMaxNegC;
+			double actualHighC = effMaxPosC - delayC;
+			double newL = currentL > actualLowC ? currentL : actualLowC;
+			double newU = currentU < actualHighC ? currentU : actualHighC;
+			if (newL > newU + DELAY_WINDOW_EPSILON) {
+				EnumerationStats.get().prunedByDelayWindowDropoff++;
+				continue;
+			}
+
 			used[c] = true;
 			perm[depth] = c;
 			int connIdx = n - 1 + depth;
@@ -539,8 +641,9 @@ public final class OrderingEnumerator {
 			enumerateDestTopoWithEval(adj, n, origPerm, origPos, requestIndices, network, requests,
 					bestValidDist, used, perm, depth + 1,
 					newPartialDist, newTime,
-					requests[c].destinationLinkId, pickupTimes, evaluator,
-					prefixIndex, cursor, connTT, connDist, connUtil, destResult);
+					requests[c].destinationLinkId, pickupTimes,
+					newL, newU,
+					evaluator, prefixIndex, cursor, connTT, connDist, connUtil, destResult);
 			if (cursor != null) cursor.unplace();
 			used[c] = false;
 		}

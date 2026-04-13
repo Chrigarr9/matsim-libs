@@ -348,14 +348,20 @@ public final class RideExtender {
 				ordering.connTT(), ordering.connDist(), ordering.connUtil());
 		stats.timeRideConstruction += System.nanoTime() - tBuild0;
 		stats.ridesBuilt++;
-		if (ride == null) return;
+		if (ride == null) {
+			stats.rideNullFailures++;
+			return;
+		}
 		stats.ridesPassedConstraints++;
 
 		long tBudget0 = System.nanoTime();
 		Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
 		stats.timeBudgetValidation += System.nanoTime() - tBudget0;
 		stats.budgetValidations++;
-		if (validated == null) return;
+		if (validated == null) {
+			stats.budgetFailures++;
+			return;
+		}
 		stats.budgetPassed++;
 
 		// Accumulate pairwise consensus bits (works for any degree)
@@ -366,6 +372,9 @@ public final class RideExtender {
 		if (dist < bestValidDist[0]) {
 			bestValidDist[0] = dist;
 			bestRide[0] = validated;
+			stats.newBestRides++;
+		} else {
+			stats.validButWorseThanBest++;
 		}
 	}
 
@@ -378,6 +387,7 @@ public final class RideExtender {
 			OrderingEnumerator.PairInfo[] original, int[] requestIndices, DegreeGraph degreeGraph) {
 		int n = requestIndices.length;
 		OrderingEnumerator.PairInfo[] result = original.clone();
+		int tightenedHere = 0;
 
 		for (int i = 0; i < n; i++) {
 			for (int j = i + 1; j < n; j++) {
@@ -399,8 +409,14 @@ public final class RideExtender {
 						result[idx] = new OrderingEnumerator.PairInfo(
 							false, false, pi.reverseFifo(), pi.reverseLifo());
 					}
+					tightenedHere++;
 				}
 			}
+		}
+		if (tightenedHere > 0) {
+			EnumerationStats ts = EnumerationStats.get();
+			ts.tightenedPairDirections += tightenedHere;
+			ts.setsWithTightenings++;
 		}
 		return result;
 	}
