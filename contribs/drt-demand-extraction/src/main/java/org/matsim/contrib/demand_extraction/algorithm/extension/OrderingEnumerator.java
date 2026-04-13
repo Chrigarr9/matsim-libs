@@ -216,6 +216,49 @@ public final class OrderingEnumerator {
 				connTT, connDist, connUtil);
 	}
 
+	/**
+	 * Record a dest-phase failing sequence into the prefix index.
+	 *
+	 * <p>The sequence walks from the victim's origin (O_victim) forward through all
+	 * subsequent origins in origPerm, then through the dests already placed in perm[0..depth-1],
+	 * optionally appending one more failing dest (lastDestC).
+	 *
+	 * @param prefixIndex the index to record into (must be non-null)
+	 * @param requestIndices global request indices for the set
+	 * @param origPerm origin permutation (local indices)
+	 * @param origPos position lookup: origPos[localIdx] = position in origPerm
+	 * @param perm dest permutation so far (local indices)
+	 * @param depth number of dests already placed in perm
+	 * @param n set size
+	 * @param victimP local index of the timed-out passenger
+	 * @param lastDestC local index of an additional failing dest to append, or -1 to skip
+	 */
+	private static void recordDestFailure(
+			ForbiddenPrefixIndex prefixIndex,
+			int[] requestIndices, int[] origPerm, int[] origPos,
+			int[] perm, int depth, int n,
+			int victimP, int lastDestC) {
+
+		int origStart = origPos[victimP];
+		int origLen = n - origStart;
+		int extra = (lastDestC >= 0) ? 1 : 0;
+		int len = origLen + depth + extra;
+		if (len < 3) return;
+
+		int[] seq = new int[len];
+		int idx = 0;
+		for (int i = origStart; i < n; i++) {
+			seq[idx++] = 2 * requestIndices[origPerm[i]];
+		}
+		for (int i = 0; i < depth; i++) {
+			seq[idx++] = 2 * requestIndices[perm[i]] + 1;
+		}
+		if (lastDestC >= 0) {
+			seq[idx] = 2 * requestIndices[lastDestC] + 1;
+		}
+		prefixIndex.recordPending(seq);
+	}
+
 	private static void enumerateOriginsPrunedWithEval(
 			Boolean[][] adj, int n, PairInfo[] pairs,
 			MatsimNetworkCache network, DrtRequest[] requests,
@@ -234,8 +277,8 @@ public final class OrderingEnumerator {
 			// fail due to absolute travel time violations.
 			boolean[] destResult = { false, false };
 			enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
-					bestValidDist, partialDist, currentTime, pickupTimes,
-					evaluator, connTT, connDist, connUtil, destResult);
+					requestIndices, bestValidDist, partialDist, currentTime, pickupTimes,
+					evaluator, prefixIndex, connTT, connDist, connUtil, destResult);
 			if (!destResult[0] && !destResult[1] && n >= 3) {
 				if (subsetFeasibility != null) {
 					// Record EXACT ordering at native degree only — do NOT decompose
@@ -360,10 +403,12 @@ public final class OrderingEnumerator {
 	private static void enumerateDestPrunedWithEval(
 			int n, int[] origPerm, PairInfo[] pairs,
 			MatsimNetworkCache network, DrtRequest[] requests,
+			int[] requestIndices,
 			double[] bestValidDist,
 			double partialDist, double currentTime,
 			double[] pickupTimes,
 			Consumer<Ordering> evaluator,
+			ForbiddenPrefixIndex prefixIndex,
 			double[] connTT, double[] connDist, double[] connUtil,
 			boolean[] destResult) {
 
@@ -397,14 +442,14 @@ public final class OrderingEnumerator {
 
 		Id<Link> prevLink = requests[origPerm[n - 1]].originLinkId;
 
-		enumerateDestTopoWithEval(adj, n, origPerm, network, requests,
+		enumerateDestTopoWithEval(adj, n, origPerm, origPos, requestIndices, network, requests,
 				bestValidDist, new boolean[n], new int[n], 0,
 				partialDist, currentTime, prevLink, pickupTimes, evaluator,
-				connTT, connDist, connUtil, destResult);
+				prefixIndex, connTT, connDist, connUtil, destResult);
 	}
 
 	private static void enumerateDestTopoWithEval(
-			Boolean[][] adj, int n, int[] origPerm,
+			Boolean[][] adj, int n, int[] origPerm, int[] origPos, int[] requestIndices,
 			MatsimNetworkCache network, DrtRequest[] requests,
 			double[] bestValidDist,
 			boolean[] used, int[] perm, int depth,
@@ -412,6 +457,7 @@ public final class OrderingEnumerator {
 			Id<Link> prevLinkId,
 			double[] pickupTimes,
 			Consumer<Ordering> evaluator,
+			ForbiddenPrefixIndex prefixIndex,
 			double[] connTT, double[] connDist, double[] connUtil,
 			boolean[] destResult) {
 
@@ -432,6 +478,13 @@ public final class OrderingEnumerator {
 			if (used[p]) continue; // already dropped off
 			double inVehicleTime = currentTime - pickupTimes[p];
 			if (inVehicleTime > requests[p].getMaxTravelTime()) {
+				// Site 1: Dest Check A — record failing sequence from O_p through perm[depth-1]'s dest.
+				// Skip when depth == 0: that case would reduce to origin-only and is already
+				// handled by origin-phase Check A.
+				if (prefixIndex != null && depth >= 1) {
+					recordDestFailure(prefixIndex, requestIndices, origPerm, origPos,
+							perm, depth, n, p, -1);
+				}
 				stats.prunedByTravelTime++;
 				return;
 			}
@@ -474,21 +527,32 @@ public final class OrderingEnumerator {
 			// but failed in buildRideFromOrdering.
 			double fullInVehicle = newTime - pickupTimes[c];
 			if (fullInVehicle > requests[c].getMaxTravelTime()) {
+				// Site 2: Dropoff check — c's own ride busts. Failing sequence ends at D_c.
+				if (prefixIndex != null) {
+					recordDestFailure(prefixIndex, requestIndices, origPerm, origPos,
+							perm, depth, n, c, c);
+				}
 				stats.prunedByDropoffCheck++;
 				continue;
 			}
 
 			// Check B: after routing to this candidate's destination, would any
 			// remaining in-vehicle passenger exceed their maxTravelTime?
-			boolean busted = false;
+			int bustedVictim = -1;
 			for (int p = 0; p < n; p++) {
 				if (used[p] || p == c) continue; // already dropped off, or being dropped off now
 				if (newTime - pickupTimes[p] > requests[p].getMaxTravelTime()) {
-					busted = true;
+					bustedVictim = p;
 					break;
 				}
 			}
-			if (busted) {
+			if (bustedVictim >= 0) {
+				// Site 3: Check B — passenger bustedVictim busts when D_c is added.
+				// Failing sequence: O_bustedVictim through perm[0..depth-1] dests + D_c.
+				if (prefixIndex != null) {
+					recordDestFailure(prefixIndex, requestIndices, origPerm, origPos,
+							perm, depth, n, bustedVictim, c);
+				}
 				stats.prunedByTravelTime++;
 				continue;
 			}
@@ -499,11 +563,11 @@ public final class OrderingEnumerator {
 			connTT[connIdx] = seg.getTravelTime();
 			connDist[connIdx] = seg.getDistance();
 			connUtil[connIdx] = seg.getNetworkUtility();
-			enumerateDestTopoWithEval(adj, n, origPerm, network, requests,
+			enumerateDestTopoWithEval(adj, n, origPerm, origPos, requestIndices, network, requests,
 					bestValidDist, used, perm, depth + 1,
 					newPartialDist, newTime,
 					requests[c].destinationLinkId, pickupTimes, evaluator,
-					connTT, connDist, connUtil, destResult);
+					prefixIndex, connTT, connDist, connUtil, destResult);
 			used[c] = false;
 		}
 	}
