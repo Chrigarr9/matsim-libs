@@ -559,6 +559,52 @@ public class MatsimNetworkCache {
 		return truncated / scale;
 	}
 	
+	// ── Test support ─────────────────────────────────────────────────────────
+
+	/**
+	 * Creates a lightweight {@code MatsimNetworkCache} for unit tests.
+	 *
+	 * <p>Bypasses the Guice-injected constructor. All routing fields are null;
+	 * callers must pre-populate every required segment via {@link #putForTesting}
+	 * so that {@link #getSegment} never falls through to {@code computeSegment}.
+	 * {@code timeBinSize} is set to {@code Integer.MAX_VALUE} so that any
+	 * departure time maps to time bin 0, matching the keys written by
+	 * {@code putForTesting}.
+	 *
+	 * <p>Intended for use in JUnit tests only — not for production code.
+	 */
+	public static MatsimNetworkCache forTesting() {
+		return new MatsimNetworkCache();
+	}
+
+	/**
+	 * Pre-populate a cache entry for unit tests (time bin = 0).
+	 *
+	 * <p>Must only be called on instances created via {@link #forTesting()}.
+	 * Avoids touching the router, so no MATSim infrastructure is required.
+	 *
+	 * <p>Intended for use in JUnit tests only — not for production code.
+	 */
+	public void putForTesting(Id<Link> origin, Id<Link> dest, TravelSegment seg) {
+		cache.put(new CacheKey(origin, dest, 0), seg);
+	}
+
+	private MatsimNetworkCache() {
+		this.network = null;
+		this.routerProvider = null;
+		this.threadLocalRouter = null;
+		this.useSharedDeterministicRouter = false;
+		this.quantizeDeterministicSegments = false;
+		this.sharedRouter = null;
+		this.travelTime = null;
+		this.travelDisutility = null;
+		this.timeBinSize = Integer.MAX_VALUE; // any departure time → bin 0
+		this.dummyPerson = null;
+		this.dummyVehicle = null;
+	}
+
+	// ─────────────────────────────────────────────────────────────────────────
+
 	/**
 	 * Cache key for link-to-link travel at specific time bin.
 	 */
