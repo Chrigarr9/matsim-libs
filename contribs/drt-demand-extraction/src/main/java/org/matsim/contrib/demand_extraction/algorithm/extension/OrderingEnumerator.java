@@ -243,6 +243,15 @@ public final class OrderingEnumerator {
 					// superset infeasibility (fewer stops = less time = might succeed).
 					subsetFeasibility.recordExactOrdering(requestIndices, perm, n);
 				}
+				if (prefixIndex != null) {
+					// Build unified stop sequence: origin of perm[i] → 2 * requestIndices[perm[i]].
+					// recordPending defensively clones, so per-call allocation is safe.
+					int[] seq = new int[n];
+					for (int i = 0; i < n; i++) {
+						seq[i] = 2 * requestIndices[perm[i]];
+					}
+					prefixIndex.recordPending(seq);
+				}
 				EnumerationStats.get().allDestFailRecorded++;
 			}
 			return;
