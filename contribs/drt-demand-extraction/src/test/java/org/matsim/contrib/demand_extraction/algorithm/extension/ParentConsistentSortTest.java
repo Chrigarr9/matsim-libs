@@ -253,6 +253,14 @@ class ParentConsistentSortTest {
             }
         }
 
+        // Dest→Origin segments: needed by computeMinIn (T11) which queries all-pairs
+        // among the 2n stops. Use uniform 150 m so minIn sees these as potential sources.
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                MatsimNetworkCacheTestFixture.put(net, dLink[i], oLink[j], seg(150.0));
+            }
+        }
+
         setup.network = net;
 
         // ── DrtRequest array ───────────────────────────────────────────────

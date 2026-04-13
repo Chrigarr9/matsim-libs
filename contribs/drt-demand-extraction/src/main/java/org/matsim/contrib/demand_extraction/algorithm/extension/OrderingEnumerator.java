@@ -250,11 +250,15 @@ public final class OrderingEnumerator {
 		double[] connTT = new double[2 * n - 1];
 		double[] connDist = new double[2 * n - 1];
 		double[] connUtil = new double[2 * n - 1];
+		double[] minIn = computeMinIn(n, network, requests);
+		double totalMinInInit = 0;
+		for (double v : minIn) totalMinInInit += v;
 		enumerateOriginsSeededWithEval(origAdj, n, constraints, network, requests,
 				requestIndices, bestValidDist, new boolean[n], new int[n], new double[n], 0,
 				0.0, 0.0,
 				Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY,
 				seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
+				minIn, totalMinInInit,
 				evaluator, connTT, connDist, connUtil);
 	}
 
@@ -301,6 +305,13 @@ public final class OrderingEnumerator {
 	 *
 	 * <p>At depth == n, calls the seeded {@link #enumerateDestPrunedSeededWithEval} so the
 	 * dest DFS also visits parent-consistent candidates first.
+	 *
+	 * @param minIn per-stop minimum incoming segment distance table (indices 0..n-1 = pickups,
+	 *        n..2n-1 = dropoffs). Precomputed once per set in {@link #enumerateAndEvaluateSeeded},
+	 *        passed read-only through recursion.
+	 * @param totalMinInRemaining running sum of minIn values for stops not yet placed in the
+	 *        ordering. Maintained by subtract-on-descent; Java primitive semantics auto-restore
+	 *        on backtrack. T12 will add the LB cut predicate that consumes this value.
 	 */
 	private static void enumerateOriginsSeededWithEval(
 			Boolean[][] adj, int n, PairInfo[] pairs,
@@ -311,6 +322,7 @@ public final class OrderingEnumerator {
 			double partialDist, double currentTime,
 			double currentL, double currentU,
 			int[] seedLocalOrigin, int[] seedLocalDest, int seedLocalNewRequest,
+			double[] minIn, double totalMinInRemaining,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
@@ -320,6 +332,7 @@ public final class OrderingEnumerator {
 					requestIndices, bestValidDist, partialDist, currentTime, pickupTimes,
 					currentL, currentU,
 					seedLocalDest, seedLocalNewRequest,
+					minIn, totalMinInRemaining,
 					evaluator, connTT, connDist, connUtil);
 			return;
 		}
@@ -378,11 +391,13 @@ public final class OrderingEnumerator {
 				used[c] = true;
 				perm[0] = c;
 				pickupTimes[c] = reqC.getRequestTime();
+				double newTotalMinInRemaining0 = totalMinInRemaining - minIn[c];
 				enumerateOriginsSeededWithEval(adj, n, pairs, network, requests,
 						requestIndices, bestValidDist, used, perm, pickupTimes, 1,
 						0.0, reqC.getRequestTime(),
 						newL, newU,
 						seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
+						minIn, newTotalMinInRemaining0,
 						evaluator,
 						connTT, connDist, connUtil);
 				used[c] = false;
@@ -437,11 +452,13 @@ public final class OrderingEnumerator {
 			connTT[depth - 1] = seg.getTravelTime();
 			connDist[depth - 1] = seg.getDistance();
 			connUtil[depth - 1] = seg.getNetworkUtility();
+			double newTotalMinInRemaining = totalMinInRemaining - minIn[c];
 			enumerateOriginsSeededWithEval(adj, n, pairs, network, requests,
 					requestIndices, bestValidDist, used, perm, pickupTimes, depth + 1,
 					newPartialDist, newPickupTime,
 					newL, newU,
 					seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
+					minIn, newTotalMinInRemaining,
 					evaluator,
 					connTT, connDist, connUtil);
 			used[c] = false;
@@ -760,6 +777,10 @@ public final class OrderingEnumerator {
 	 *
 	 * @param seedLocalDest      child-local indices of parent's dest order (length n-1)
 	 * @param seedLocalNewRequest child-local index of the newly inserted request
+	 * @param minIn per-stop minimum incoming segment distance table (indices 0..n-1 = pickups,
+	 *        n..2n-1 = dropoffs). Passed read-only through recursion.
+	 * @param totalMinInRemaining running sum of minIn values for stops not yet placed.
+	 *        T13 will add the LB cut predicate that consumes this value.
 	 */
 	private static void enumerateDestPrunedSeededWithEval(
 			int n, int[] origPerm, PairInfo[] pairs,
@@ -770,6 +791,7 @@ public final class OrderingEnumerator {
 			double[] pickupTimes,
 			double currentL, double currentU,
 			int[] seedLocalDest, int seedLocalNewRequest,
+			double[] minIn, double totalMinInRemaining,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
@@ -806,6 +828,7 @@ public final class OrderingEnumerator {
 				partialDist, currentTime, prevLink, pickupTimes,
 				currentL, currentU,
 				seedLocalDest, seedLocalNewRequest,
+				minIn, totalMinInRemaining,
 				evaluator, connTT, connDist, connUtil);
 	}
 
@@ -818,6 +841,12 @@ public final class OrderingEnumerator {
 	 *
 	 * @param seedLocalDest      child-local indices of parent's dest order (length n-1)
 	 * @param seedLocalNewRequest child-local index of the newly inserted request
+	 * @param minIn per-stop minimum incoming segment distance table (indices 0..n-1 = pickups,
+	 *        n..2n-1 = dropoffs). Dest stops use index {@code c + n} when subtracting.
+	 *        Passed read-only through recursion.
+	 * @param totalMinInRemaining running sum of minIn values for stops not yet placed.
+	 *        Maintained by subtract-on-descent; Java primitive semantics auto-restore on backtrack.
+	 *        T13 will add the LB cut predicate that consumes this value.
 	 */
 	private static void enumerateDestTopoSeededWithEval(
 			Boolean[][] adj, int n, int[] origPerm, int[] origPos, int[] requestIndices,
@@ -829,6 +858,7 @@ public final class OrderingEnumerator {
 			double[] pickupTimes,
 			double currentL, double currentU,
 			int[] seedLocalDest, int seedLocalNewRequest,
+			double[] minIn, double totalMinInRemaining,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
@@ -941,12 +971,14 @@ public final class OrderingEnumerator {
 			connTT[connIdx] = seg.getTravelTime();
 			connDist[connIdx] = seg.getDistance();
 			connUtil[connIdx] = seg.getNetworkUtility();
+			double newTotalMinInRemainingDest = totalMinInRemaining - minIn[c + n];
 			enumerateDestTopoSeededWithEval(adj, n, origPerm, origPos, requestIndices, network, requests,
 					bestValidDist, used, perm, depth + 1,
 					newPartialDist, newTime,
 					requests[c].destinationLinkId, pickupTimes,
 					newL, newU,
 					seedLocalDest, seedLocalNewRequest,
+					minIn, newTotalMinInRemainingDest,
 					evaluator, connTT, connDist, connUtil);
 			used[c] = false;
 		}
@@ -1256,5 +1288,38 @@ public final class OrderingEnumerator {
 			enumerateTopoSorts(adj, n, used, perm, depth + 1, result);
 			used[candidate] = false;
 		}
+	}
+
+	/**
+	 * Precompute minimum incoming segment distance for each stop in the k-set.
+	 *
+	 * <p>Indexing: entries 0..k-1 are pickup stops (origin of request i), entries
+	 * k..2k-1 are dropoff stops (destination of request i-k). For each stop, the
+	 * value is the minimum over all other stops s in the set of
+	 * {@code network.getSegment(s, thisStop, 0.0).getDistance()}.
+	 *
+	 * <p>Used as an admissible lower bound on per-stop segment cost in the B&B
+	 * predicate added in T12/T13. Called once per set in
+	 * {@link #enumerateAndEvaluateSeeded}.
+	 */
+	@SuppressWarnings("unchecked")
+	private static double[] computeMinIn(int n, MatsimNetworkCache network, DrtRequest[] requests) {
+		Id<Link>[] stopLinks = (Id<Link>[]) new Id[2 * n];
+		for (int i = 0; i < n; i++) {
+			stopLinks[i] = requests[i].originLinkId;
+			stopLinks[i + n] = requests[i].destinationLinkId;
+		}
+
+		double[] minIn = new double[2 * n];
+		java.util.Arrays.fill(minIn, Double.POSITIVE_INFINITY);
+
+		for (int to = 0; to < 2 * n; to++) {
+			for (int from = 0; from < 2 * n; from++) {
+				if (from == to) continue;
+				double d = network.getSegment(stopLinks[from], stopLinks[to], 0.0).getDistance();
+				if (d < minIn[to]) minIn[to] = d;
+			}
+		}
+		return minIn;
 	}
 }
