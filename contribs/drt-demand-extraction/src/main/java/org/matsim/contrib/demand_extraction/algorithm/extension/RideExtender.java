@@ -50,6 +50,9 @@ public final class RideExtender {
 	private final DegreeGraph prevDegreeGraph;
 	// Sub-set ordering feasibility for cross-degree sub-set lookup (null if disabled)
 	private final SubSetOrderingFeasibility subsetFeasibility;
+	// Forbidden prefix index — wired in parallel to subsetFeasibility (Phase 2 no-op wiring)
+	@SuppressWarnings("unused")
+	private final ForbiddenPrefixIndex prefixIndex;
 	// Stored after extendRides completes: valid rides by set hash, used for graph building
 	private ConcurrentHashMap<Long, Ride> lastResultBySetHash;
 	// Consensus bitmasks accumulated during processSet, keyed by set hash
@@ -57,19 +60,27 @@ public final class RideExtender {
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig) {
-		this(network, graph, budgetValidator, requests, exMasConfig, null, null);
+		this(network, graph, budgetValidator, requests, exMasConfig, null, null, null);
 	}
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig,
 						DegreeGraph prevDegreeGraph) {
-		this(network, graph, budgetValidator, requests, exMasConfig, prevDegreeGraph, null);
+		this(network, graph, budgetValidator, requests, exMasConfig, prevDegreeGraph, null, null);
 	}
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig,
 						DegreeGraph prevDegreeGraph,
 						SubSetOrderingFeasibility subsetFeasibility) {
+		this(network, graph, budgetValidator, requests, exMasConfig, prevDegreeGraph, subsetFeasibility, null);
+	}
+
+	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
+						List<DrtRequest> requests, ExMasConfigGroup exMasConfig,
+						DegreeGraph prevDegreeGraph,
+						SubSetOrderingFeasibility subsetFeasibility,
+						ForbiddenPrefixIndex prefixIndex) {
 		this.network = network;
 		this.graph = graph;
 		this.budgetValidator = budgetValidator;
@@ -78,6 +89,7 @@ public final class RideExtender {
 		this.exMasConfig = exMasConfig;
 		this.prevDegreeGraph = prevDegreeGraph;
 		this.subsetFeasibility = subsetFeasibility;
+		this.prefixIndex = prefixIndex;
 	}
 
 	/** Build a DegreeGraph from the valid rides produced by the last extendRides call. */
@@ -236,10 +248,10 @@ public final class RideExtender {
 	 *
 	 * <p>Two code paths:
 	 * <ul>
-	 *   <li>Degree 3 (prevDegreeGraph == null): use 6-param enumerateAndEvaluate — no
-	 *       extractConstraints or tightenConstraints overhead.</li>
+	 *   <li>Degree 3 (prevDegreeGraph == null): use the constraint-extracting overload of
+	 *       enumerateAndEvaluate — no extractConstraints or tightenConstraints overhead.</li>
 	 *   <li>Degree 4+ (prevDegreeGraph != null): extract + tighten constraints using
-	 *       degree graph, then 7-param enumerateAndEvaluate.</li>
+	 *       degree graph, then call the pre-constraints overload of enumerateAndEvaluate.</li>
 	 * </ul>
 	 *
 	 * <p>No FeasibleSetResult collection, no consensus bits, no array cloning.
@@ -289,14 +301,14 @@ public final class RideExtender {
 					newSet, graph, pairConstraints, network, setRequests, bestValidDist,
 					(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
 							bestValidDist, bestRide, consensusBits, stats),
-					this.subsetFeasibility);
+					this.subsetFeasibility, this.prefixIndex);
 		} else {
 			// Degree 3: use original code path — no graph overhead
 			OrderingEnumerator.enumerateAndEvaluate(
 					newSet, graph, network, setRequests, bestValidDist,
 					(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
 							bestValidDist, bestRide, consensusBits, stats),
-					this.subsetFeasibility);
+					this.subsetFeasibility, this.prefixIndex);
 		}
 
 		stats.timeEnumeration += System.nanoTime() - tEnum0;

@@ -160,11 +160,12 @@ public final class OrderingEnumerator {
 			MatsimNetworkCache network, DrtRequest[] requests,
 			double[] bestValidDist,
 			Consumer<Ordering> evaluator,
-			SubSetOrderingFeasibility subsetFeasibility) {
+			SubSetOrderingFeasibility subsetFeasibility,
+			ForbiddenPrefixIndex prefixIndex) {
 
 		PairInfo[] constraints = extractConstraints(requestIndices, graph);
 		enumerateAndEvaluate(requestIndices, graph, constraints, network, requests,
-				bestValidDist, evaluator, subsetFeasibility);
+				bestValidDist, evaluator, subsetFeasibility, prefixIndex);
 	}
 
 	/**
@@ -188,7 +189,8 @@ public final class OrderingEnumerator {
 			MatsimNetworkCache network, DrtRequest[] requests,
 			double[] bestValidDist,
 			Consumer<Ordering> evaluator,
-			SubSetOrderingFeasibility subsetFeasibility) {
+			SubSetOrderingFeasibility subsetFeasibility,
+			ForbiddenPrefixIndex prefixIndex) {
 
 		if (pairConstraints == null) return;
 		int n = requestIndices.length;
@@ -210,7 +212,7 @@ public final class OrderingEnumerator {
 		double[] connUtil = new double[2 * n - 1];
 		enumerateOriginsPrunedWithEval(origAdj, n, pairConstraints, network, requests,
 				requestIndices, bestValidDist, new boolean[n], new int[n], new double[n], 0,
-				0.0, 0.0, evaluator, subsetFeasibility,
+				0.0, 0.0, evaluator, subsetFeasibility, prefixIndex,
 				connTT, connDist, connUtil);
 	}
 
@@ -223,6 +225,7 @@ public final class OrderingEnumerator {
 			double partialDist, double currentTime,
 			Consumer<Ordering> evaluator,
 			SubSetOrderingFeasibility subsetFeasibility,
+			ForbiddenPrefixIndex prefixIndex,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
 		if (depth == n) {
@@ -296,7 +299,7 @@ public final class OrderingEnumerator {
 				enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
 						requestIndices, bestValidDist, used, perm, pickupTimes, 1,
 						0.0, requests[c].getRequestTime(), evaluator,
-						subsetFeasibility,
+						subsetFeasibility, prefixIndex,
 						connTT, connDist, connUtil);
 				used[c] = false;
 			}
@@ -324,7 +327,7 @@ public final class OrderingEnumerator {
 			enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
 					requestIndices, bestValidDist, used, perm, pickupTimes, depth + 1,
 					newPartialDist, currentTime + seg.getTravelTime(), evaluator,
-					subsetFeasibility,
+					subsetFeasibility, prefixIndex,
 					connTT, connDist, connUtil);
 			used[c] = false;
 		}

@@ -13,6 +13,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
+import org.matsim.contrib.demand_extraction.algorithm.extension.ForbiddenPrefixIndex;
 import org.matsim.contrib.demand_extraction.algorithm.extension.SubSetOrderingFeasibility;
 import org.matsim.contrib.demand_extraction.algorithm.extension.RideExtender;
 import org.matsim.contrib.demand_extraction.algorithm.graph.DegreeGraph;
@@ -151,10 +152,13 @@ public final class ExMasEngine {
 		// Sub-set ordering feasibility: bloom-filtered, allocation-free lookups.
 		// Supports triples (3), quads (4), quints (5). Records only exact-size orderings.
 		SubSetOrderingFeasibility subsetFeasibility = new SubSetOrderingFeasibility(5);
+		// Forbidden prefix index: variable-length key lookup for sub-ordering pruning.
+		// Wired through in parallel to subsetFeasibility (Phase 2 — no-op wiring).
+		ForbiddenPrefixIndex prefixIndex = new ForbiddenPrefixIndex();
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
 													 requests, exMasConfig, prevDegreeGraph,
-													 subsetFeasibility);
+													 subsetFeasibility, prefixIndex);
 			List<Ride> extended = extender.extendRides(currentDegreeRides, nextRideIndex);
 			if (subsetFeasibility != null) {
 				subsetFeasibility.commit();
