@@ -38,4 +38,55 @@ class ForbiddenPrefixIndexTest {
 		assertTrue(forbidden.contains(30));
 		assertTrue(forbidden.contains(40));
 	}
+
+	@Test
+	void distinctPrefixesDoNotBleed() {
+		// Two different prefixes must NOT share a forbidden set.
+		ForbiddenPrefixIndex index = new ForbiddenPrefixIndex();
+		index.recordPending(new int[]{10, 20, 30});
+		index.recordPending(new int[]{40, 50, 60});
+		index.commit();
+
+		IntOpenHashSet f1 = index.lookup(new int[]{10, 20});
+		IntOpenHashSet f2 = index.lookup(new int[]{40, 50});
+		assertNotNull(f1); assertNotNull(f2);
+		assertEquals(1, f1.size());
+		assertEquals(1, f2.size());
+		assertTrue(f1.contains(30));
+		assertTrue(f2.contains(60));
+	}
+
+	@Test
+	void recordedArrayCanBeMutatedAfterEnqueue() {
+		// recordPending must defensively copy the input array.
+		ForbiddenPrefixIndex index = new ForbiddenPrefixIndex();
+		int[] seq = {10, 20, 30};
+		index.recordPending(seq);
+		seq[0] = 999; // mutate after enqueue
+		seq[1] = 999;
+		seq[2] = 999;
+		index.commit();
+
+		IntOpenHashSet f = index.lookup(new int[]{10, 20});
+		assertNotNull(f);
+		assertTrue(f.contains(30));
+	}
+
+	@Test
+	void emptyCommitIsNoOp() {
+		ForbiddenPrefixIndex index = new ForbiddenPrefixIndex();
+		index.commit();
+		assertEquals(0, index.size());
+	}
+
+	@Test
+	void duplicateRecordIsIdempotent() {
+		ForbiddenPrefixIndex index = new ForbiddenPrefixIndex();
+		index.recordPending(new int[]{10, 20, 30});
+		index.recordPending(new int[]{10, 20, 30});
+		index.commit();
+
+		IntOpenHashSet f = index.lookup(new int[]{10, 20});
+		assertEquals(1, f.size());
+	}
 }
