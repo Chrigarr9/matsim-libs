@@ -23,6 +23,7 @@ public final class EnumerationStats {
 	public long prunedByTravelTime;
 	public long prunedByDropoffCheck;
 	public long prunedBySubsetLookup;
+	public long prunedByForbidden;
 	public long allDestFailRecorded;
 	// Per-set feasibility counters (for degree-specific graph analysis)
 	public long setsConstraintFeasible;  // sets where ≥1 ordering passed constraint checks
@@ -54,6 +55,7 @@ public final class EnumerationStats {
 			total.prunedByTravelTime += s.prunedByTravelTime;
 			total.prunedByDropoffCheck += s.prunedByDropoffCheck;
 			total.prunedBySubsetLookup += s.prunedBySubsetLookup;
+			total.prunedByForbidden += s.prunedByForbidden;
 			total.allDestFailRecorded += s.allDestFailRecorded;
 			total.setsConstraintFeasible += s.setsConstraintFeasible;
 			total.setsBudgetFeasible += s.setsBudgetFeasible;
@@ -87,6 +89,8 @@ public final class EnumerationStats {
 				setsProcessed > 0 ? String.format("%.1f", (double) prunedByDropoffCheck / setsProcessed) : "N/A");
 		log.info("  Pruned by sub-set lookup: {} ({} per set)", prunedBySubsetLookup,
 				setsProcessed > 0 ? String.format("%.1f", (double) prunedBySubsetLookup / setsProcessed) : "N/A");
+		log.info("  Pruned by forbidden prefix: {} ({} per set)", prunedByForbidden,
+				setsProcessed > 0 ? String.format("%.1f", (double) prunedByForbidden / setsProcessed) : "N/A");
 		log.info("  All-dest-fail recorded: {}", allDestFailRecorded);
 		log.info("  Sets constraint-feasible: {} ({}% of processed)", setsConstraintFeasible,
 				setsProcessed > 0 ? String.format("%.1f", 100.0 * setsConstraintFeasible / setsProcessed) : "N/A");
