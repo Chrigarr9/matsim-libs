@@ -170,6 +170,9 @@ public final class ExMasEngine {
 						subsetFeasibility.getQuintCount(),
 						subsetFeasibility.getTotalInfeasibleQuintBits());
 			}
+			prefixIndex.commit();
+			log.info("  ForbiddenPrefixIndex at degree {}: {} keys, max prefix length {}",
+					degree, prefixIndex.size(), prefixIndex.getMaxRecordedKeyLength());
 			long graphBuildStart = System.currentTimeMillis();
 			prevDegreeGraph = extender.buildDegreeGraph(degree + 1);
 			long graphBuildMs = System.currentTimeMillis() - graphBuildStart;
