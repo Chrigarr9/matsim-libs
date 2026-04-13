@@ -39,6 +39,9 @@ public final class ForbiddenPrefixCursor {
 		this.maxKeyLength = Math.max(2, index.getMaxRecordedKeyLength());
 		this.placed = new int[capacity];
 		this.deltaStack = new IntOpenHashSet[capacity];
+		for (int i = 0; i < capacity; i++) {
+			this.deltaStack[i] = new IntOpenHashSet();
+		}
 		this.scratchKey = new int[maxKeyLength];
 	}
 
@@ -58,8 +61,12 @@ public final class ForbiddenPrefixCursor {
 	 * 2..{@code maxKeyLength}.
 	 */
 	public void place(int stop) {
+		if (depth >= placed.length) {
+			throw new IllegalStateException("ForbiddenPrefixCursor capacity " + placed.length + " exceeded");
+		}
 		placed[depth] = stop;
-		IntOpenHashSet additions = new IntOpenHashSet();
+		IntOpenHashSet additions = deltaStack[depth];
+		additions.clear();
 
 		int maxL = Math.min(maxKeyLength, depth + 1);
 		for (int L = 2; L <= maxL; L++) {
@@ -67,19 +74,18 @@ public final class ForbiddenPrefixCursor {
 			enumerate(0, 0, L - 1, additions, L);
 		}
 
-		deltaStack[depth] = additions;
 		depth++;
 	}
 
 	/** Roll back the most recent placement. */
 	public void unplace() {
+		if (depth == 0) {
+			throw new IllegalStateException("ForbiddenPrefixCursor.unplace called with depth=0");
+		}
 		depth--;
 		IntOpenHashSet additions = deltaStack[depth];
-		if (additions != null) {
-			for (int s : additions) {
-				forbiddenSet.remove(s);
-			}
-			deltaStack[depth] = null;
+		for (int s : additions) {
+			forbiddenSet.remove(s);
 		}
 	}
 
