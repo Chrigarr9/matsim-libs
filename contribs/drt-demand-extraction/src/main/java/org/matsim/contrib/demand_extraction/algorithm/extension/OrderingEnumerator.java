@@ -273,6 +273,21 @@ public final class OrderingEnumerator {
 							subsetFeasibility.recordExactOrdering(requestIndices, perm, p, depth);
 						}
 					}
+					if (prefixIndex != null) {
+						int len = depth - p;
+						if (len >= 3) {
+							// Build unified stop sequence: origins from victim's pickup
+							// to current depth. Stop encoding: origin of perm[i] →
+							// 2 * requestIndices[perm[i]]. recordPending defensively
+							// clones, so per-call allocation is safe. No upper bound
+							// on length — ForbiddenPrefixIndex accepts arbitrary lengths.
+							int[] seq = new int[len];
+							for (int i = 0; i < len; i++) {
+								seq[i] = 2 * requestIndices[perm[p + i]];
+							}
+							prefixIndex.recordPending(seq);
+						}
+					}
 					stats.prunedByTravelTime++;
 					return;
 				}
