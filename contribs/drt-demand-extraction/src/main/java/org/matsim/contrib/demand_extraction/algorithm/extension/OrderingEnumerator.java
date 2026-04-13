@@ -350,6 +350,20 @@ public final class OrderingEnumerator {
 			}
 		}
 
+		// LB-based outer B&B cut: at depth >= 1, partialDist + totalMinInRemaining is
+		// an admissible lower bound on any completion of this prefix. If already over
+		// bestValidDist, the whole subtree can be pruned. Skipped at depth 0 because
+		// totalMinInRemaining then includes all 2k stops but a real ride has only
+		// 2k-1 segments (the first-placed origin has no incoming segment), making
+		// the LB an overestimate.
+		if (depth > 0 && partialDist + totalMinInRemaining > bestValidDist[0]) {
+			EnumerationStats s = EnumerationStats.get();
+			s.bnbOriginLbCuts++;
+			// We haven't built the candidate list at this level yet, so we can't
+			// report a precise skipped-candidates count — record the cut event only.
+			return;
+		}
+
 		List<Integer> candidates = new ArrayList<>();
 		for (int c = 0; c < n; c++) {
 			if (used[c]) continue;

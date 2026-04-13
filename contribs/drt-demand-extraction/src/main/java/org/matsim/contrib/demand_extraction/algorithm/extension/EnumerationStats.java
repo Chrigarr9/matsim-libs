@@ -46,6 +46,8 @@ public final class EnumerationStats {
 	// ---- B&B distance-bound diagnostics ----
 	public long bnbOriginCuts;              // origin-phase break events
 	public long bnbOriginSkippedCandidates; // candidates skipped by origin cuts
+	public long bnbOriginLbCuts;            // LB-based outer cut events (origin DFS, depth >= 1)
+	public long bnbOriginLbSkippedCandidates; // candidates skipped by origin LB cuts (future use)
 	public long bnbDestCuts;                // dest-phase break events
 	public long bnbDestSkippedCandidates;   // candidates skipped by dest cuts
 
@@ -82,6 +84,8 @@ public final class EnumerationStats {
 		prunedByDelayWindowDropoff = 0;
 		bnbOriginCuts = 0;
 		bnbOriginSkippedCandidates = 0;
+		bnbOriginLbCuts = 0;
+		bnbOriginLbSkippedCandidates = 0;
 		bnbDestCuts = 0;
 		bnbDestSkippedCandidates = 0;
 		rideNullFailures = 0;
@@ -112,6 +116,8 @@ public final class EnumerationStats {
 			total.prunedByDelayWindowDropoff += s.prunedByDelayWindowDropoff;
 			total.bnbOriginCuts += s.bnbOriginCuts;
 			total.bnbOriginSkippedCandidates += s.bnbOriginSkippedCandidates;
+			total.bnbOriginLbCuts += s.bnbOriginLbCuts;
+			total.bnbOriginLbSkippedCandidates += s.bnbOriginLbSkippedCandidates;
 			total.bnbDestCuts += s.bnbDestCuts;
 			total.bnbDestSkippedCandidates += s.bnbDestSkippedCandidates;
 			total.rideNullFailures += s.rideNullFailures;
@@ -151,6 +157,8 @@ public final class EnumerationStats {
 		log.info("  Origin B&B cuts: {} events, {} candidates skipped ({} skipped/cut)",
 				bnbOriginCuts, bnbOriginSkippedCandidates,
 				bnbOriginCuts > 0 ? String.format("%.2f", (double) bnbOriginSkippedCandidates / bnbOriginCuts) : "N/A");
+		log.info("  LB B&B cuts (origin): {} events, {} candidates skipped",
+				bnbOriginLbCuts, bnbOriginLbSkippedCandidates);
 		log.info("  Dest B&B cuts:   {} events, {} candidates skipped ({} skipped/cut)",
 				bnbDestCuts, bnbDestSkippedCandidates,
 				bnbDestCuts > 0 ? String.format("%.2f", (double) bnbDestSkippedCandidates / bnbDestCuts) : "N/A");
