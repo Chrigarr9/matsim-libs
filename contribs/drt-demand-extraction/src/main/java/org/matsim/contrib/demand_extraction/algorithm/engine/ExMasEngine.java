@@ -13,8 +13,6 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
-import org.matsim.contrib.demand_extraction.algorithm.extension.ForbiddenPrefixIndex;
-import org.matsim.contrib.demand_extraction.algorithm.extension.SubSetOrderingFeasibility;
 import org.matsim.contrib.demand_extraction.algorithm.extension.RideExtender;
 import org.matsim.contrib.demand_extraction.algorithm.graph.DegreeGraph;
 import org.matsim.contrib.demand_extraction.algorithm.generation.PairGenerator;
@@ -149,33 +147,10 @@ public final class ExMasEngine {
 		int interDegreeMinPerRequest = exMasConfig.getInterDegreeMinRidesPerRequest();
 		int nextRideIndex = allRides.size();
 		DegreeGraph prevDegreeGraph = null;
-		// Sub-set ordering feasibility: bloom-filtered, allocation-free lookups.
-		// Supports triples (3), quads (4), quints (5). Records only exact-size orderings.
-		SubSetOrderingFeasibility subsetFeasibility = new SubSetOrderingFeasibility(5);
-		// Forbidden prefix index: DISABLED (2026-04-13 diagnostic run).
-		// Shadow benchmarks showed prunedByForbidden=0 and 3-30x cursor overhead.
-		// Null propagates through RideExtender/OrderingEnumerator; all paths are null-safe.
-		ForbiddenPrefixIndex prefixIndex = null;
 		for (int degree = 2; degree < maxDegree; degree++) {
 			RideExtender extender = new RideExtender(network, graph, budgetValidator,
-													 requests, exMasConfig, prevDegreeGraph,
-													 subsetFeasibility, prefixIndex);
+													 requests, exMasConfig, prevDegreeGraph);
 			List<Ride> extended = extender.extendRides(currentDegreeRides, nextRideIndex);
-			if (subsetFeasibility != null) {
-				subsetFeasibility.commit();
-				log.info("  Sub-set feasibility: triples={}/{} bits, quads={}/{} bits, quints={}/{} bits",
-						subsetFeasibility.getTripleCount(),
-						subsetFeasibility.getTotalInfeasibleTripleBits(),
-						subsetFeasibility.getQuadCount(),
-						subsetFeasibility.getTotalInfeasibleQuadBits(),
-						subsetFeasibility.getQuintCount(),
-						subsetFeasibility.getTotalInfeasibleQuintBits());
-			}
-			if (prefixIndex != null) {
-				prefixIndex.commit();
-				log.info("  ForbiddenPrefixIndex at degree {}: {} keys, max prefix length {}",
-						degree, prefixIndex.size(), prefixIndex.getMaxRecordedKeyLength());
-			}
 			long graphBuildStart = System.currentTimeMillis();
 			prevDegreeGraph = extender.buildDegreeGraph(degree + 1);
 			long graphBuildMs = System.currentTimeMillis() - graphBuildStart;

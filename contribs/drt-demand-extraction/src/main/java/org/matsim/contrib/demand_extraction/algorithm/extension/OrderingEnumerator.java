@@ -29,19 +29,26 @@ import it.unimi.dsi.fastutil.ints.IntList;
  *
  * <p>Enumeration uses topological sort of constraint DAGs. Typical counts:
  * degree 3: 2-6 orderings, degree 4: 3-18, degree 5: 4-40.
+ *
+ * <h3>Pruning strategies applied during enumeration</h3>
+ * <ul>
+ *   <li><b>Travel-time Check A/B/Dropoff</b>: prune when any picked-up passenger's
+ *       in-vehicle time would exceed their {@code maxTravelTime}.</li>
+ *   <li><b>Delay-window intersection</b>: maintain the running feasible
+ *       departure-offset interval across all picked-up and dropped-off passengers
+ *       (sound over-approximation at origin placement, exact value at dropoff).
+ *       Prune when the intersection goes empty — no single departure can satisfy
+ *       all passengers' delay windows simultaneously.</li>
+ *   <li><b>Distance branch-and-bound</b>: track the partial routed distance; prune
+ *       when {@code partialDist > bestValidDist[0]} (the shortest valid ride found
+ *       so far for this set). Candidates are sorted by next-segment distance so
+ *       the cut fires on the weakest sibling first.</li>
+ * </ul>
  */
 public final class OrderingEnumerator {
 
 	/** Feasibility tolerance for delay-window intersection check (seconds). */
 	private static final double DELAY_WINDOW_EPSILON = 1e-6;
-
-	// ---- Measurement-mode flags (2026-04-13: tightenDAG effect measurement) ----
-	/** Skip the `partialDist > bestValidDist` B&B cut at origin + dest phase. */
-	public static boolean MEASURE_DISABLE_DISTANCE_BNB = false;
-	/** Skip the `subsetFeasibility.isInfeasible` per-candidate check. */
-	public static boolean MEASURE_DISABLE_SSF_LOOKUP = false;
-	/** Call `subsetFeasibility.tightenDAG` once per set before origin enumeration. */
-	public static boolean MEASURE_USE_TIGHTEN_DAG = false;
 
 	/** Pairwise constraint: which FIFO/LIFO pair ride kinds exist in each direction */
 	public record PairInfo(
@@ -170,46 +177,16 @@ public final class OrderingEnumerator {
 			int[] requestIndices, ShareabilityGraph graph,
 			MatsimNetworkCache network, DrtRequest[] requests,
 			double[] bestValidDist,
-			Consumer<Ordering> evaluator,
-			SubSetOrderingFeasibility subsetFeasibility,
-			ForbiddenPrefixIndex prefixIndex) {
+			Consumer<Ordering> evaluator) {
 
 		PairInfo[] constraints = extractConstraints(requestIndices, graph);
-		enumerateAndEvaluate(requestIndices, graph, constraints, network, requests,
-				bestValidDist, evaluator, subsetFeasibility, prefixIndex);
-	}
-
-	/**
-	 * Enumerate orderings using pre-computed pairwise constraints.
-	 * This allows callers to tighten constraints (e.g., from sub-set orderings)
-	 * before enumeration.
-	 *
-	 * <p>If {@code subsetFeasibility} is non-null, two pruning mechanisms apply:
-	 * <ol>
-	 *   <li><b>DAG tightening:</b> before enumeration, unconstrained pairs are checked
-	 *       against triple data. If all orderings with i&lt;j are infeasible, edge j→i
-	 *       is added — eliminating those orderings at the topological sort level.</li>
-	 *   <li><b>Per-candidate check:</b> during enumeration, each candidate is checked
-	 *       against triple data for the specific partial ordering. Catches ternary
-	 *       constraints that DAG edges (binary) cannot express.</li>
-	 * </ol>
-	 */
-	public static void enumerateAndEvaluate(
-			int[] requestIndices, ShareabilityGraph graph,
-			PairInfo[] pairConstraints,
-			MatsimNetworkCache network, DrtRequest[] requests,
-			double[] bestValidDist,
-			Consumer<Ordering> evaluator,
-			SubSetOrderingFeasibility subsetFeasibility,
-			ForbiddenPrefixIndex prefixIndex) {
-
-		if (pairConstraints == null) return;
+		if (constraints == null) return;
 		int n = requestIndices.length;
 
 		Boolean[][] origAdj = new Boolean[n][n];
 		for (int a = 0; a < n; a++) {
 			for (int b = a + 1; b < n; b++) {
-				PairInfo p = lookup(pairConstraints, n, a, b);
+				PairInfo p = lookup(constraints, n, a, b);
 				if (p.forwardOnly()) {
 					origAdj[a][b] = true; origAdj[b][a] = false;
 				} else if (p.reverseOnly()) {
@@ -221,34 +198,11 @@ public final class OrderingEnumerator {
 		double[] connTT = new double[2 * n - 1];
 		double[] connDist = new double[2 * n - 1];
 		double[] connUtil = new double[2 * n - 1];
-		// Allocate cursor once per set. Capacity 2*n covers origin + dest phases
-		// (Task 12 will thread it through dest enumeration). Cursor is NOT thread-safe;
-		// allocating per-set ensures each enumeration call has its own state.
-		ForbiddenPrefixCursor cursor = (prefixIndex != null)
-				? new ForbiddenPrefixCursor(prefixIndex, 2 * n)
-				: null;
-		// Measurement mode: call tightenDAG at all available levels (triples, quads, quints)
-		// sequentially before recursive enumeration. Each level only fills pairs not already
-		// constrained by the previous level or by the original graph.
-		if (MEASURE_USE_TIGHTEN_DAG && subsetFeasibility != null && n >= 3) {
-			int e3 = subsetFeasibility.tightenDAG(origAdj, requestIndices, n);
-			int e4 = (n >= 4) ? subsetFeasibility.tightenDAG4(origAdj, requestIndices, n) : 0;
-			int e5 = (n >= 5) ? subsetFeasibility.tightenDAG5(origAdj, requestIndices, n) : 0;
-			int totalEdges = e3 + e4 + e5;
-			if (totalEdges > 0) {
-				EnumerationStats ts = EnumerationStats.get();
-				ts.tightenDAGEdgesAdded += totalEdges;
-				ts.tightenDAGSetsAffected++;
-				ts.tightenDAGEdges3 += e3;
-				ts.tightenDAGEdges4 += e4;
-				ts.tightenDAGEdges5 += e5;
-			}
-		}
-		enumerateOriginsPrunedWithEval(origAdj, n, pairConstraints, network, requests,
+		enumerateOriginsPrunedWithEval(origAdj, n, constraints, network, requests,
 				requestIndices, bestValidDist, new boolean[n], new int[n], new double[n], 0,
 				0.0, 0.0,
 				Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY,
-				evaluator, subsetFeasibility, prefixIndex, cursor,
+				evaluator,
 				connTT, connDist, connUtil);
 	}
 
@@ -261,40 +215,14 @@ public final class OrderingEnumerator {
 			double partialDist, double currentTime,
 			double currentL, double currentU,
 			Consumer<Ordering> evaluator,
-			SubSetOrderingFeasibility subsetFeasibility,
-			ForbiddenPrefixIndex prefixIndex,
-			ForbiddenPrefixCursor cursor,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
 		if (depth == n) {
 			// All origins placed — enumerate destination orderings.
-			// Trigger 2: record origin ordering as infeasible if ALL dest orderings
-			// fail due to absolute travel time violations.
-			// The SAME cursor is passed in; its state already reflects all n origins
-			// placed. Dest stops will accumulate ON TOP of that base state.
-			boolean[] destResult = { false, false };
 			enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
 					requestIndices, bestValidDist, partialDist, currentTime, pickupTimes,
 					currentL, currentU,
-					evaluator, prefixIndex, cursor, connTT, connDist, connUtil, destResult);
-			if (!destResult[0] && !destResult[1] && n >= 3) {
-				if (subsetFeasibility != null) {
-					// Record EXACT ordering at native degree only — do NOT decompose
-					// into sub-triples. Subset infeasibility does not follow from
-					// superset infeasibility (fewer stops = less time = might succeed).
-					subsetFeasibility.recordExactOrdering(requestIndices, perm, n);
-				}
-				if (prefixIndex != null) {
-					// Build unified stop sequence: origin of perm[i] → 2 * requestIndices[perm[i]].
-					// recordPending defensively clones, so per-call allocation is safe.
-					int[] seq = new int[n];
-					for (int i = 0; i < n; i++) {
-						seq[i] = 2 * requestIndices[perm[i]];
-					}
-					prefixIndex.recordPending(seq);
-				}
-				EnumerationStats.get().allDestFailRecorded++;
-			}
+					evaluator, connTT, connDist, connUtil);
 			return;
 		}
 
@@ -305,30 +233,6 @@ public final class OrderingEnumerator {
 			for (int p = 0; p < depth; p++) {
 				double inVehicle = currentTime - pickupTimes[perm[p]];
 				if (inVehicle > requests[perm[p]].getMaxTravelTime()) {
-					// Record exact sub-ordering at native size (no sub-decomposition).
-					// Sub-triples from larger ranges are unsafe: fewer stops = less
-					// travel time = sub-triple might be feasible at degree 3.
-					if (subsetFeasibility != null) {
-						int len = depth - p;
-						if (len >= 3 && len <= subsetFeasibility.getMaxSubsetSize()) {
-							subsetFeasibility.recordExactOrdering(requestIndices, perm, p, depth);
-						}
-					}
-					if (prefixIndex != null) {
-						int len = depth - p;
-						if (len >= 3) {
-							// Build unified stop sequence: origins from victim's pickup
-							// to current depth. Stop encoding: origin of perm[i] →
-							// 2 * requestIndices[perm[i]]. recordPending defensively
-							// clones, so per-call allocation is safe. No upper bound
-							// on length — ForbiddenPrefixIndex accepts arbitrary lengths.
-							int[] seq = new int[len];
-							for (int i = 0; i < len; i++) {
-								seq[i] = 2 * requestIndices[perm[p + i]];
-							}
-							prefixIndex.recordPending(seq);
-						}
-					}
 					stats.prunedByTravelTime++;
 					return;
 				}
@@ -346,20 +250,6 @@ public final class OrderingEnumerator {
 				}
 			}
 			if (!valid) continue;
-			// Sub-set ordering feasibility: prune if any triple sub-ordering is infeasible
-			if (!MEASURE_DISABLE_SSF_LOOKUP && subsetFeasibility != null && depth >= 2) {
-				if (subsetFeasibility.isInfeasible(requestIndices, perm, depth, c)) {
-					EnumerationStats.get().prunedBySubsetLookup++;
-					continue;
-				}
-			}
-			// Forbidden-prefix check: prune if cursor's prior placements forbid c as
-			// the next origin. Cheap (O(1) hash lookup), happens before any routing.
-			// Stop encoding for origins: 2 * requestIndices[c].
-			if (cursor != null && cursor.isForbidden(2 * requestIndices[c])) {
-				EnumerationStats.get().prunedByForbidden++;
-				continue;
-			}
 			candidates.add(c);
 		}
 
@@ -369,7 +259,7 @@ public final class OrderingEnumerator {
 				// Delay-window contribution at depth 0: delay = 0 (currentTime = reqTime).
 				// Origin-time UB:
 				//   paxLow = -0 - maxNeg = -maxNeg
-				//   paxHigh = (maxPos - max(0, posRelComp)) - 0 = maxPos - max(0, posRelComp)
+				//   paxHigh = (maxPos - max(0, posRelComp)) - 0
 				double newLowC = -reqC.getMaxNegativeDelay();
 				double newHighC = reqC.getMaxPositiveDelay()
 						- Math.max(0.0, reqC.getPositiveDelayRelComponent());
@@ -383,14 +273,12 @@ public final class OrderingEnumerator {
 				used[c] = true;
 				perm[0] = c;
 				pickupTimes[c] = reqC.getRequestTime();
-				if (cursor != null) cursor.place(2 * requestIndices[c]);
 				enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
 						requestIndices, bestValidDist, used, perm, pickupTimes, 1,
 						0.0, reqC.getRequestTime(),
 						newL, newU,
-						evaluator, subsetFeasibility, prefixIndex, cursor,
+						evaluator,
 						connTT, connDist, connUtil);
-				if (cursor != null) cursor.unplace();
 				used[c] = false;
 			}
 			return;
@@ -408,7 +296,7 @@ public final class OrderingEnumerator {
 			int c = candidates.get(idx);
 			TravelSegment seg = segMap.get(c);
 			double newPartialDist = partialDist + seg.getDistance();
-			if (!MEASURE_DISABLE_DISTANCE_BNB && newPartialDist > bestValidDist[0]) {
+			if (newPartialDist > bestValidDist[0]) {
 				EnumerationStats s = EnumerationStats.get();
 				s.bnbOriginCuts++;
 				s.bnbOriginSkippedCandidates += (candCount - idx);
@@ -437,14 +325,12 @@ public final class OrderingEnumerator {
 			connTT[depth - 1] = seg.getTravelTime();
 			connDist[depth - 1] = seg.getDistance();
 			connUtil[depth - 1] = seg.getNetworkUtility();
-			if (cursor != null) cursor.place(2 * requestIndices[c]);
 			enumerateOriginsPrunedWithEval(adj, n, pairs, network, requests,
 					requestIndices, bestValidDist, used, perm, pickupTimes, depth + 1,
 					newPartialDist, newPickupTime,
 					newL, newU,
-					evaluator, subsetFeasibility, prefixIndex, cursor,
+					evaluator,
 					connTT, connDist, connUtil);
-			if (cursor != null) cursor.unplace();
 			used[c] = false;
 		}
 	}
@@ -458,10 +344,7 @@ public final class OrderingEnumerator {
 			double[] pickupTimes,
 			double currentL, double currentU,
 			Consumer<Ordering> evaluator,
-			ForbiddenPrefixIndex prefixIndex,
-			ForbiddenPrefixCursor cursor,
-			double[] connTT, double[] connDist, double[] connUtil,
-			boolean[] destResult) {
+			double[] connTT, double[] connDist, double[] connUtil) {
 
 		int[] origPos = new int[n];
 		for (int i = 0; i < n; i++) origPos[origPerm[i]] = i;
@@ -483,9 +366,7 @@ public final class OrderingEnumerator {
 					if (aBeforeB) { adj[b][a] = true; adj[a][b] = false; }
 					else          { adj[a][b] = true; adj[b][a] = false; }
 				} else {
-					// Structural infeasibility (no pair ride in this direction).
-					// Not a travel time violation — don't record as conflict.
-					destResult[1] = true;
+					// Structural infeasibility — no pair ride in this direction.
 					return;
 				}
 			}
@@ -497,7 +378,7 @@ public final class OrderingEnumerator {
 				bestValidDist, new boolean[n], new int[n], 0,
 				partialDist, currentTime, prevLink, pickupTimes,
 				currentL, currentU,
-				evaluator, prefixIndex, cursor, connTT, connDist, connUtil, destResult);
+				evaluator, connTT, connDist, connUtil);
 	}
 
 	private static void enumerateDestTopoWithEval(
@@ -510,16 +391,12 @@ public final class OrderingEnumerator {
 			double[] pickupTimes,
 			double currentL, double currentU,
 			Consumer<Ordering> evaluator,
-			ForbiddenPrefixIndex prefixIndex,
-			ForbiddenPrefixCursor cursor,
-			double[] connTT, double[] connDist, double[] connUtil,
-			boolean[] destResult) {
+			double[] connTT, double[] connDist, double[] connUtil) {
 
 		if (depth == n) {
 			// Complete ordering — call evaluator inline with pre-routed segment data.
 			// The evaluator may update bestValidDist[0] if this ordering is valid,
 			// which tightens the bound for all subsequent branches.
-			destResult[0] = true; // at least one ordering reached evaluator
 			evaluator.accept(new Ordering(origPerm.clone(), perm.clone(), partialDist,
 					connTT.clone(), connDist.clone(), connUtil.clone()));
 			return;
@@ -563,8 +440,7 @@ public final class OrderingEnumerator {
 			int c = candidates.get(idx);
 			TravelSegment seg = segMap.get(c);
 			double newPartialDist = partialDist + seg.getDistance();
-			if (!MEASURE_DISABLE_DISTANCE_BNB && newPartialDist > bestValidDist[0]) {
-				destResult[1] = true; // distance B&B prevented full exploration
+			if (newPartialDist > bestValidDist[0]) {
 				EnumerationStats sDest = EnumerationStats.get();
 				sDest.bnbDestCuts++;
 				sDest.bnbDestSkippedCandidates += (candCount - idx);
@@ -575,8 +451,6 @@ public final class OrderingEnumerator {
 
 			// Check at Dropoff: passenger c's ride is now complete.
 			// Their full in-vehicle time (pickup to this dropoff) must not exceed maxTravelTime.
-			// This catches the 93.5% of orderings that previously survived Check A/B
-			// but failed in buildRideFromOrdering.
 			double fullInVehicle = newTime - pickupTimes[c];
 			if (fullInVehicle > requests[c].getMaxTravelTime()) {
 				stats.prunedByDropoffCheck++;
@@ -595,17 +469,6 @@ public final class OrderingEnumerator {
 			}
 			if (bustedVictim >= 0) {
 				stats.prunedByTravelTime++;
-				continue;
-			}
-
-			// Forbidden-prefix check: prune if cursor's prior placements (origins +
-			// any earlier dests in this branch) forbid c as the next dest. Cheap
-			// O(1) hash lookup; happens after the cheap arithmetic checks but
-			// before the recursive descent.
-			// Stop encoding for dests: 2 * requestIndices[c] + 1.
-			int destStop = 2 * requestIndices[c] + 1;
-			if (cursor != null && cursor.isForbidden(destStop)) {
-				EnumerationStats.get().prunedByForbidden++;
 				continue;
 			}
 
@@ -637,14 +500,12 @@ public final class OrderingEnumerator {
 			connTT[connIdx] = seg.getTravelTime();
 			connDist[connIdx] = seg.getDistance();
 			connUtil[connIdx] = seg.getNetworkUtility();
-			if (cursor != null) cursor.place(destStop);
 			enumerateDestTopoWithEval(adj, n, origPerm, origPos, requestIndices, network, requests,
 					bestValidDist, used, perm, depth + 1,
 					newPartialDist, newTime,
 					requests[c].destinationLinkId, pickupTimes,
 					newL, newU,
-					evaluator, prefixIndex, cursor, connTT, connDist, connUtil, destResult);
-			if (cursor != null) cursor.unplace();
+					evaluator, connTT, connDist, connUtil);
 			used[c] = false;
 		}
 	}

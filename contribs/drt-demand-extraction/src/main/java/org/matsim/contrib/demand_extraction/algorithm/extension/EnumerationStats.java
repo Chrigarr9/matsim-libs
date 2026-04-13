@@ -5,14 +5,27 @@ import java.util.Collection;
 import org.apache.logging.log4j.Logger;
 
 /**
- * Lightweight per-thread profiling counters for ordering enumeration.
- * Accumulated via ThreadLocal, summed after parallel processing completes.
+ * Per-thread profiling counters for the ordering enumeration hot loop. Updated
+ * lock-free via a {@link ThreadLocal}, then summed across threads between
+ * degrees for logging.
+ *
+ * <p>Counters fall into four groups:
+ * <ul>
+ *   <li>Enumeration flow: sets processed, orderings reaching the evaluator,
+ *       rides built, budget outcomes, set-level feasibility totals.</li>
+ *   <li>Hard-constraint pruning sites: travel-time, dropoff check,
+ *       delay-window (origin + dropoff phases).</li>
+ *   <li>Distance branch-and-bound diagnostics: cut events and candidates
+ *       skipped at origin + dest phases — used to tune the B&amp;B tightness.</li>
+ *   <li>Evaluator outcome funnel: how each completed ordering ends up
+ *       (ride-null, valid-but-worse, new-best).</li>
+ * </ul>
  */
 public final class EnumerationStats {
 	private static final ThreadLocal<EnumerationStats> THREAD_LOCAL =
 			ThreadLocal.withInitial(EnumerationStats::new);
 
-	// Counters
+	// ---- Enumeration flow ----
 	public long setsProcessed;
 	public long orderingsEvaluated;
 	public long ridesBuilt;
@@ -20,41 +33,27 @@ public final class EnumerationStats {
 	public long budgetValidations;
 	public long budgetPassed;
 	public long segmentLookups;
+	public long setsConstraintFeasible;
+	public long setsBudgetFeasible;
+
+	// ---- Hard-constraint pruning ----
 	public long prunedByTravelTime;
 	public long prunedByDropoffCheck;
-	public long prunedBySubsetLookup;
-	public long prunedByForbidden;
-	public long allDestFailRecorded;
-	// B&B distance-bound diagnostic counters (2026-04-13)
-	public long bnbOriginCuts;              // times origin-phase break fired on partialDist>bound
-	public long bnbOriginSkippedCandidates; // candidates skipped by those breaks (depth-agnostic)
-	public long bnbDestCuts;                // times dest-phase break fired
-	public long bnbDestSkippedCandidates;   // candidates skipped by those breaks
-	// Ordering outcome at evaluator (post-enumeration)
-	public long rideNullFailures;           // buildRideFromOrdering returned null (constraint viol)
-	public long budgetFailures;             // budget validation rejected
-	public long validButWorseThanBest;      // valid ride dist >= current bestValidDist
-	public long newBestRides;               // valid ride that tightened the bound
-	// Delay-window incremental feasibility check (2026-04-13)
-	public long prunedByDelayWindowOrigin;  // origin-phase intersection went empty
-	public long prunedByDelayWindowDropoff; // dropoff-phase intersection went empty
-	// DegreeGraph consensus tightening (tightenConstraints)
-	public long tightenedPairDirections;    // pair-direction eliminations by prev-degree consensus
-	public long setsWithTightenings;        // sets where ≥1 pair was tightened
-	// tightenDAG from SubSetOrderingFeasibility (triple/quad/quint levels)
-	public long tightenDAGEdgesAdded;       // sum over sets of edges added by tightenDAG (all levels)
-	public long tightenDAGSetsAffected;     // sets where tightenDAG (any level) added ≥1 edge
-	public long tightenDAGEdges3;           // edges added by triple-level tightenDAG
-	public long tightenDAGEdges4;           // edges added by quad-level tightenDAG (marginal over triples)
-	public long tightenDAGEdges5;           // edges added by quint-level tightenDAG (marginal over tri+quad)
-	// Per-set feasibility counters (for degree-specific graph analysis)
-	public long setsConstraintFeasible;  // sets where ≥1 ordering passed constraint checks
-	public long setsBudgetFeasible;      // sets where ≥1 ordering also passed budget
-	// Sub-set feasibility histogram: index = number of feasible sub-sets, value = candidate count
-	// E.g. subsetFeasibilityHisto[3] = N means N candidates had exactly 3 feasible sub-sets
-	public long[] subsetFeasibilityHisto = new long[32]; // up to degree 31
+	public long prunedByDelayWindowOrigin;
+	public long prunedByDelayWindowDropoff;
 
-	// Timing (nanos)
+	// ---- B&B distance-bound diagnostics ----
+	public long bnbOriginCuts;              // origin-phase break events
+	public long bnbOriginSkippedCandidates; // candidates skipped by origin cuts
+	public long bnbDestCuts;                // dest-phase break events
+	public long bnbDestSkippedCandidates;   // candidates skipped by dest cuts
+
+	// ---- Evaluator outcome funnel ----
+	public long rideNullFailures;     // buildRideFromOrdering returned null
+	public long validButWorseThanBest; // valid ride, distance ≥ bestValidDist
+	public long newBestRides;         // valid ride that tightened the bound
+
+	// ---- Timing (nanos) ----
 	public long timeTotal;
 	public long timeEnumeration;
 	public long timeRideConstruction;
@@ -63,6 +62,34 @@ public final class EnumerationStats {
 	public static EnumerationStats get() { return THREAD_LOCAL.get(); }
 
 	public static void reset() { THREAD_LOCAL.set(new EnumerationStats()); }
+
+	/** Zero all counters on this instance in place. Safe to call from any thread. */
+	public void clear() {
+		setsProcessed = 0;
+		orderingsEvaluated = 0;
+		ridesBuilt = 0;
+		ridesPassedConstraints = 0;
+		budgetValidations = 0;
+		budgetPassed = 0;
+		segmentLookups = 0;
+		setsConstraintFeasible = 0;
+		setsBudgetFeasible = 0;
+		prunedByTravelTime = 0;
+		prunedByDropoffCheck = 0;
+		prunedByDelayWindowOrigin = 0;
+		prunedByDelayWindowDropoff = 0;
+		bnbOriginCuts = 0;
+		bnbOriginSkippedCandidates = 0;
+		bnbDestCuts = 0;
+		bnbDestSkippedCandidates = 0;
+		rideNullFailures = 0;
+		validButWorseThanBest = 0;
+		newBestRides = 0;
+		timeTotal = 0;
+		timeEnumeration = 0;
+		timeRideConstruction = 0;
+		timeBudgetValidation = 0;
+	}
 
 	public static EnumerationStats sum(Collection<EnumerationStats> perThread) {
 		EnumerationStats total = new EnumerationStats();
@@ -74,33 +101,19 @@ public final class EnumerationStats {
 			total.budgetValidations += s.budgetValidations;
 			total.budgetPassed += s.budgetPassed;
 			total.segmentLookups += s.segmentLookups;
+			total.setsConstraintFeasible += s.setsConstraintFeasible;
+			total.setsBudgetFeasible += s.setsBudgetFeasible;
 			total.prunedByTravelTime += s.prunedByTravelTime;
 			total.prunedByDropoffCheck += s.prunedByDropoffCheck;
-			total.prunedBySubsetLookup += s.prunedBySubsetLookup;
-			total.prunedByForbidden += s.prunedByForbidden;
-			total.allDestFailRecorded += s.allDestFailRecorded;
+			total.prunedByDelayWindowOrigin += s.prunedByDelayWindowOrigin;
+			total.prunedByDelayWindowDropoff += s.prunedByDelayWindowDropoff;
 			total.bnbOriginCuts += s.bnbOriginCuts;
 			total.bnbOriginSkippedCandidates += s.bnbOriginSkippedCandidates;
 			total.bnbDestCuts += s.bnbDestCuts;
 			total.bnbDestSkippedCandidates += s.bnbDestSkippedCandidates;
 			total.rideNullFailures += s.rideNullFailures;
-			total.budgetFailures += s.budgetFailures;
 			total.validButWorseThanBest += s.validButWorseThanBest;
 			total.newBestRides += s.newBestRides;
-			total.prunedByDelayWindowOrigin += s.prunedByDelayWindowOrigin;
-			total.prunedByDelayWindowDropoff += s.prunedByDelayWindowDropoff;
-			total.tightenedPairDirections += s.tightenedPairDirections;
-			total.setsWithTightenings += s.setsWithTightenings;
-			total.tightenDAGEdgesAdded += s.tightenDAGEdgesAdded;
-			total.tightenDAGSetsAffected += s.tightenDAGSetsAffected;
-			total.tightenDAGEdges3 += s.tightenDAGEdges3;
-			total.tightenDAGEdges4 += s.tightenDAGEdges4;
-			total.tightenDAGEdges5 += s.tightenDAGEdges5;
-			total.setsConstraintFeasible += s.setsConstraintFeasible;
-			total.setsBudgetFeasible += s.setsBudgetFeasible;
-			for (int i = 0; i < total.subsetFeasibilityHisto.length; i++) {
-				total.subsetFeasibilityHisto[i] += s.subsetFeasibilityHisto[i];
-			}
 			total.timeTotal += s.timeTotal;
 			total.timeEnumeration += s.timeEnumeration;
 			total.timeRideConstruction += s.timeRideConstruction;
@@ -126,26 +139,10 @@ public final class EnumerationStats {
 				setsProcessed > 0 ? String.format("%.1f", (double) prunedByTravelTime / setsProcessed) : "N/A");
 		log.info("  Pruned by dropoff check: {} ({} per set)", prunedByDropoffCheck,
 				setsProcessed > 0 ? String.format("%.1f", (double) prunedByDropoffCheck / setsProcessed) : "N/A");
-		log.info("  Pruned by sub-set lookup: {} ({} per set)", prunedBySubsetLookup,
-				setsProcessed > 0 ? String.format("%.1f", (double) prunedBySubsetLookup / setsProcessed) : "N/A");
-		log.info("  Pruned by forbidden prefix: {} ({} per set)", prunedByForbidden,
-				setsProcessed > 0 ? String.format("%.1f", (double) prunedByForbidden / setsProcessed) : "N/A");
-		log.info("  All-dest-fail recorded: {}", allDestFailRecorded);
-		// Delay-window feasibility (new pre-filter)
 		log.info("  Pruned by delay-window (origin): {} ({} per set)", prunedByDelayWindowOrigin,
 				setsProcessed > 0 ? String.format("%.1f", (double) prunedByDelayWindowOrigin / setsProcessed) : "N/A");
 		log.info("  Pruned by delay-window (dropoff): {} ({} per set)", prunedByDelayWindowDropoff,
 				setsProcessed > 0 ? String.format("%.1f", (double) prunedByDelayWindowDropoff / setsProcessed) : "N/A");
-		// Ordering-conflict tightening via DegreeGraph consensus
-		log.info("  Pair-directions tightened (prev-deg consensus): {} across {} sets ({}% of sets tightened)",
-				tightenedPairDirections, setsWithTightenings,
-				setsProcessed > 0 ? String.format("%.1f", 100.0 * setsWithTightenings / setsProcessed) : "N/A");
-		// tightenDAG via SubSetOrderingFeasibility
-		log.info("  tightenDAG edges added: {} across {} sets ({}% of sets affected)",
-				tightenDAGEdgesAdded, tightenDAGSetsAffected,
-				setsProcessed > 0 ? String.format("%.1f", 100.0 * tightenDAGSetsAffected / setsProcessed) : "N/A");
-		log.info("    Per level: triples={}, quads={}, quints={}",
-				tightenDAGEdges3, tightenDAGEdges4, tightenDAGEdges5);
 		// B&B diagnostic block
 		log.info("  === B&B distance-bound ===");
 		log.info("  Origin B&B cuts: {} events, {} candidates skipped ({} skipped/cut)",
@@ -154,14 +151,12 @@ public final class EnumerationStats {
 		log.info("  Dest B&B cuts:   {} events, {} candidates skipped ({} skipped/cut)",
 				bnbDestCuts, bnbDestSkippedCandidates,
 				bnbDestCuts > 0 ? String.format("%.2f", (double) bnbDestSkippedCandidates / bnbDestCuts) : "N/A");
-		// Ordering outcome funnel
+		// Evaluator outcome funnel
 		log.info("  === Ordering outcomes at evaluator ===");
-		long totalEvalOutcomes = rideNullFailures + budgetFailures + validButWorseThanBest + newBestRides;
+		long totalEvalOutcomes = rideNullFailures + validButWorseThanBest + newBestRides;
 		log.info("  Evaluated orderings (sanity): {} (should equal {})", totalEvalOutcomes, orderingsEvaluated);
 		log.info("    ride-null (constraint):    {} ({}%)", rideNullFailures,
 				totalEvalOutcomes > 0 ? String.format("%.1f", 100.0 * rideNullFailures / totalEvalOutcomes) : "N/A");
-		log.info("    budget-fail:               {} ({}%)", budgetFailures,
-				totalEvalOutcomes > 0 ? String.format("%.1f", 100.0 * budgetFailures / totalEvalOutcomes) : "N/A");
 		log.info("    valid-but-worse:           {} ({}%)", validButWorseThanBest,
 				totalEvalOutcomes > 0 ? String.format("%.1f", 100.0 * validButWorseThanBest / totalEvalOutcomes) : "N/A");
 		log.info("    new-best (tightened):      {} ({}%)", newBestRides,
@@ -170,26 +165,6 @@ public final class EnumerationStats {
 				setsProcessed > 0 ? String.format("%.1f", 100.0 * setsConstraintFeasible / setsProcessed) : "N/A");
 		log.info("  Sets budget-feasible: {} ({}% of processed)", setsBudgetFeasible,
 				setsProcessed > 0 ? String.format("%.1f", 100.0 * setsBudgetFeasible / setsProcessed) : "N/A");
-		// Sub-set feasibility histogram
-		StringBuilder histo = new StringBuilder();
-		for (int i = 0; i < subsetFeasibilityHisto.length; i++) {
-			if (subsetFeasibilityHisto[i] > 0) {
-				if (histo.length() > 0) histo.append(", ");
-				histo.append(i).append("=").append(subsetFeasibilityHisto[i]);
-			}
-		}
-		if (histo.length() > 0) {
-			log.info("  Sub-set feasibility histogram (feasible_sub_count=candidates): {}", histo);
-			// Compute graph candidate count: candidates with ALL sub-sets feasible
-			long allFeasible = subsetFeasibilityHisto[degree];  // degree = target degree, need all (degree-1 choose degree-2) = degree-1 sub-sets... actually index = degree
-			long totalCandidates = 0;
-			for (long v : subsetFeasibilityHisto) totalCandidates += v;
-			if (totalCandidates > 0) {
-				log.info("  Graph would keep: {} / {} candidates ({}% reduction)",
-						allFeasible, totalCandidates,
-						String.format("%.1f", 100.0 * (1.0 - (double) allFeasible / totalCandidates)));
-			}
-		}
 		// timeEnumeration includes ride construction + budget validation (evaluator runs inside)
 		long timePureEnum = timeEnumeration - timeRideConstruction - timeBudgetValidation;
 		long timeOther = timeTotal - timeEnumeration;

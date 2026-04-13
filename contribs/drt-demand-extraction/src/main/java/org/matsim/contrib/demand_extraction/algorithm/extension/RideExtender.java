@@ -48,39 +48,17 @@ public final class RideExtender {
 
 	// DegreeGraph from previous degree for candidate generation (null at degree 3)
 	private final DegreeGraph prevDegreeGraph;
-	// Sub-set ordering feasibility for cross-degree sub-set lookup (null if disabled)
-	private final SubSetOrderingFeasibility subsetFeasibility;
-	// Forbidden prefix index — wired in parallel to subsetFeasibility (Phase 2 no-op wiring)
-	@SuppressWarnings("unused")
-	private final ForbiddenPrefixIndex prefixIndex;
 	// Stored after extendRides completes: valid rides by set hash, used for graph building
 	private ConcurrentHashMap<Long, Ride> lastResultBySetHash;
-	// Consensus bitmasks accumulated during processSet, keyed by set hash
-	private ConcurrentHashMap<Long, long[]> lastConsensusBySetHash;
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig) {
-		this(network, graph, budgetValidator, requests, exMasConfig, null, null, null);
+		this(network, graph, budgetValidator, requests, exMasConfig, null);
 	}
 
 	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig,
 						DegreeGraph prevDegreeGraph) {
-		this(network, graph, budgetValidator, requests, exMasConfig, prevDegreeGraph, null, null);
-	}
-
-	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
-						List<DrtRequest> requests, ExMasConfigGroup exMasConfig,
-						DegreeGraph prevDegreeGraph,
-						SubSetOrderingFeasibility subsetFeasibility) {
-		this(network, graph, budgetValidator, requests, exMasConfig, prevDegreeGraph, subsetFeasibility, null);
-	}
-
-	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
-						List<DrtRequest> requests, ExMasConfigGroup exMasConfig,
-						DegreeGraph prevDegreeGraph,
-						SubSetOrderingFeasibility subsetFeasibility,
-						ForbiddenPrefixIndex prefixIndex) {
 		this.network = network;
 		this.graph = graph;
 		this.budgetValidator = budgetValidator;
@@ -88,14 +66,12 @@ public final class RideExtender {
 		for (DrtRequest r : requests) requestMap.put(r.index, r);
 		this.exMasConfig = exMasConfig;
 		this.prevDegreeGraph = prevDegreeGraph;
-		this.subsetFeasibility = subsetFeasibility;
-		this.prefixIndex = prefixIndex;
 	}
 
 	/** Build a DegreeGraph from the valid rides produced by the last extendRides call. */
 	public DegreeGraph buildDegreeGraph(int degree) {
 		if (lastResultBySetHash == null || lastResultBySetHash.isEmpty()) return null;
-		return DegreeGraph.buildFromRides(lastResultBySetHash.values(), lastConsensusBySetHash, degree);
+		return DegreeGraph.buildFromRides(lastResultBySetHash.values(), degree);
 	}
 
 	/** Returns the number of feasible sets from the last extendRides call. */
@@ -145,7 +121,6 @@ public final class RideExtender {
 		// - resultBySetHash: successful rides
 		ConcurrentHashMap.KeySetView<Long, Boolean> claimedSets = ConcurrentHashMap.newKeySet();
 		ConcurrentHashMap<Long, Ride> resultBySetHash = new ConcurrentHashMap<>();
-		ConcurrentHashMap<Long, long[]> consensusBySetHash = new ConcurrentHashMap<>();
 
 		// Progress counters (thread-safe)
 		AtomicInteger baseSetsCompleted = new AtomicInteger();
@@ -183,7 +158,7 @@ public final class RideExtender {
 
 						setsProcessed.incrementAndGet();
 
-						Ride bestRide = processSet(newSet, newSetHash, targetDegree, consensusBySetHash);
+						Ride bestRide = processSet(newSet, newSetHash, targetDegree);
 						if (bestRide != null) {
 							resultBySetHash.put(newSetHash, bestRide);
 						}
@@ -214,19 +189,11 @@ public final class RideExtender {
 			EnumerationStats total = EnumerationStats.sum(threadStatsMap.values());
 			total.log(log, targetDegree, parallelism);
 			// Reset thread-local stats for next degree
-			threadStatsMap.values().forEach(s -> {
-				s.setsProcessed = 0; s.orderingsEvaluated = 0; s.ridesBuilt = 0;
-				s.ridesPassedConstraints = 0; s.budgetValidations = 0; s.budgetPassed = 0;
-				s.segmentLookups = 0; s.prunedByTravelTime = 0; s.prunedByDropoffCheck = 0; s.prunedBySubsetLookup = 0; s.allDestFailRecorded = 0;
-				s.setsConstraintFeasible = 0; s.setsBudgetFeasible = 0;
-				s.timeTotal = 0; s.timeEnumeration = 0;
-				s.timeRideConstruction = 0; s.timeBudgetValidation = 0;
-			});
+			threadStatsMap.values().forEach(EnumerationStats::clear);
 		}
 
 		// Store results for graph building (accessed by buildDegreeGraph)
 		this.lastResultBySetHash = resultBySetHash;
-		this.lastConsensusBySetHash = consensusBySetHash;
 
 		// Assign sequential indices (sequential, fast)
 		List<Ride> results = new ArrayList<>(resultBySetHash.values());
@@ -246,21 +213,9 @@ public final class RideExtender {
 	 * Process a single candidate set: enumerate orderings, route, validate, return best ride.
 	 * Thread-safe — only reads shared immutable/thread-safe resources.
 	 *
-	 * <p>Two code paths:
-	 * <ul>
-	 *   <li>Degree 3 (prevDegreeGraph == null): use the constraint-extracting overload of
-	 *       enumerateAndEvaluate — no extractConstraints or tightenConstraints overhead.</li>
-	 *   <li>Degree 4+ (prevDegreeGraph != null): extract + tighten constraints using
-	 *       degree graph, then call the pre-constraints overload of enumerateAndEvaluate.</li>
-	 * </ul>
-	 *
-	 * <p>No FeasibleSetResult collection, no consensus bits, no array cloning.
-	 * The DegreeGraph is built post-hoc from valid rides in resultBySetHash.
-	 *
 	 * @return best validated ride for this set, or null if no valid ordering exists
 	 */
-	private Ride processSet(int[] newSet, long setHash, int targetDegree,
-						ConcurrentHashMap<Long, long[]> consensusBySetHash) {
+	private Ride processSet(int[] newSet, long setHash, int targetDegree) {
 		long t0 = System.nanoTime();
 		EnumerationStats stats = EnumerationStats.get();
 		stats.setsProcessed++;
@@ -282,34 +237,13 @@ public final class RideExtender {
 		double maxAllowedRideDistance = computeMaxAllowedRideDistance(setRequests);
 		double[] bestValidDist = { maxAllowedRideDistance };
 		Ride[] bestRide = { null };
-		long[] consensusBits = new long[DegreeGraph.consensusLongCount(targetDegree)];
 
 		long tEnum0 = System.nanoTime();
 
-		if (prevDegreeGraph != null) {
-			// Degree 4+: extract and tighten constraints using degree graph
-			OrderingEnumerator.PairInfo[] pairConstraints =
-				OrderingEnumerator.extractConstraints(newSet, graph);
-			if (pairConstraints == null) {
-				stats.timeTotal += System.nanoTime() - t0;
-				return null;
-			}
-			if (exMasConfig.isEnableConsensusTightening()) {
-				pairConstraints = tightenConstraints(pairConstraints, newSet, prevDegreeGraph);
-			}
-			OrderingEnumerator.enumerateAndEvaluate(
-					newSet, graph, pairConstraints, network, setRequests, bestValidDist,
-					(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
-							bestValidDist, bestRide, consensusBits, stats),
-					this.subsetFeasibility, this.prefixIndex);
-		} else {
-			// Degree 3: use original code path — no graph overhead
-			OrderingEnumerator.enumerateAndEvaluate(
-					newSet, graph, network, setRequests, bestValidDist,
-					(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
-							bestValidDist, bestRide, consensusBits, stats),
-					this.subsetFeasibility, this.prefixIndex);
-		}
+		OrderingEnumerator.enumerateAndEvaluate(
+				newSet, graph, network, setRequests, bestValidDist,
+				(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
+						bestValidDist, bestRide, stats));
 
 		stats.timeEnumeration += System.nanoTime() - tEnum0;
 		stats.timeTotal += System.nanoTime() - t0;
@@ -319,21 +253,13 @@ public final class RideExtender {
 			stats.setsBudgetFeasible++;
 		}
 
-		// Store consensus bits (lightweight long[] per set)
-		boolean hasConsensus = false;
-		for (long b : consensusBits) if (b != 0L) { hasConsensus = true; break; }
-		if (hasConsensus) {
-			consensusBySetHash.put(setHash, consensusBits);
-		}
-
 		return bestRide[0];
 	}
 
-	/** Shared evaluator logic for both degree-3 and degree-4+ code paths. */
+	/** Build a Ride from a completed ordering, validate budget, and track best-so-far. */
 	private void evaluateOrdering(OrderingEnumerator.Ordering ordering, int[] newSet,
 								   DrtRequest[] setRequests, double[] bestValidDist,
-								   Ride[] bestRide, long[] consensusBits,
-								   EnumerationStats stats) {
+								   Ride[] bestRide, EnumerationStats stats) {
 		stats.orderingsEvaluated++;
 		int n = newSet.length;
 		DrtRequest[] originsOrdered = new DrtRequest[n];
@@ -359,14 +285,9 @@ public final class RideExtender {
 		stats.timeBudgetValidation += System.nanoTime() - tBudget0;
 		stats.budgetValidations++;
 		if (validated == null) {
-			stats.budgetFailures++;
 			return;
 		}
 		stats.budgetPassed++;
-
-		// Accumulate pairwise consensus bits (works for any degree)
-		DegreeGraph.accumulateOrderingBits(
-			consensusBits, ordering.originPerm(), ordering.destPerm(), n);
 
 		double dist = validated.getRideDistance();
 		if (dist < bestValidDist[0]) {
@@ -376,49 +297,6 @@ public final class RideExtender {
 		} else {
 			stats.validButWorseThanBest++;
 		}
-	}
-
-	/**
-	 * Tighten pairwise ordering constraints using sub-set orderings from the degree graph.
-	 * For each pair that currently allows both origin directions,
-	 * check if all sub-set orderings agree on one direction.
-	 */
-	private OrderingEnumerator.PairInfo[] tightenConstraints(
-			OrderingEnumerator.PairInfo[] original, int[] requestIndices, DegreeGraph degreeGraph) {
-		int n = requestIndices.length;
-		OrderingEnumerator.PairInfo[] result = original.clone();
-		int tightenedHere = 0;
-
-		for (int i = 0; i < n; i++) {
-			for (int j = i + 1; j < n; j++) {
-				int idx = i * (2 * n - i - 1) / 2 + (j - i - 1);
-				OrderingEnumerator.PairInfo pi = result[idx];
-
-				// Only tighten pairs that currently allow both directions
-				if (pi.forwardOnly() || pi.reverseOnly()) continue;
-
-				Boolean originDir = degreeGraph.getOriginConsensus(requestIndices, i, j);
-
-				if (originDir != null) {
-					if (originDir) {
-						// a always before b → remove reverse directions
-						result[idx] = new OrderingEnumerator.PairInfo(
-							pi.forwardFifo(), pi.forwardLifo(), false, false);
-					} else {
-						// b always before a → remove forward directions
-						result[idx] = new OrderingEnumerator.PairInfo(
-							false, false, pi.reverseFifo(), pi.reverseLifo());
-					}
-					tightenedHere++;
-				}
-			}
-		}
-		if (tightenedHere > 0) {
-			EnumerationStats ts = EnumerationStats.get();
-			ts.tightenedPairDirections += tightenedHere;
-			ts.setsWithTightenings++;
-		}
-		return result;
 	}
 
 	// --- Ride construction from explicit orderings ---
