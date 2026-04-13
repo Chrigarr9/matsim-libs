@@ -282,10 +282,12 @@ public final class OrderingEnumerator {
 			// All origins placed — enumerate destination orderings.
 			// Trigger 2: record origin ordering as infeasible if ALL dest orderings
 			// fail due to absolute travel time violations.
+			// The SAME cursor is passed in; its state already reflects all n origins
+			// placed. Dest stops will accumulate ON TOP of that base state.
 			boolean[] destResult = { false, false };
 			enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
 					requestIndices, bestValidDist, partialDist, currentTime, pickupTimes,
-					evaluator, prefixIndex, connTT, connDist, connUtil, destResult);
+					evaluator, prefixIndex, cursor, connTT, connDist, connUtil, destResult);
 			if (!destResult[0] && !destResult[1] && n >= 3) {
 				if (subsetFeasibility != null) {
 					// Record EXACT ordering at native degree only — do NOT decompose
@@ -427,6 +429,7 @@ public final class OrderingEnumerator {
 			double[] pickupTimes,
 			Consumer<Ordering> evaluator,
 			ForbiddenPrefixIndex prefixIndex,
+			ForbiddenPrefixCursor cursor,
 			double[] connTT, double[] connDist, double[] connUtil,
 			boolean[] destResult) {
 
@@ -463,7 +466,7 @@ public final class OrderingEnumerator {
 		enumerateDestTopoWithEval(adj, n, origPerm, origPos, requestIndices, network, requests,
 				bestValidDist, new boolean[n], new int[n], 0,
 				partialDist, currentTime, prevLink, pickupTimes, evaluator,
-				prefixIndex, connTT, connDist, connUtil, destResult);
+				prefixIndex, cursor, connTT, connDist, connUtil, destResult);
 	}
 
 	private static void enumerateDestTopoWithEval(
@@ -476,6 +479,7 @@ public final class OrderingEnumerator {
 			double[] pickupTimes,
 			Consumer<Ordering> evaluator,
 			ForbiddenPrefixIndex prefixIndex,
+			ForbiddenPrefixCursor cursor,
 			double[] connTT, double[] connDist, double[] connUtil,
 			boolean[] destResult) {
 
@@ -575,17 +579,30 @@ public final class OrderingEnumerator {
 				continue;
 			}
 
+			// Forbidden-prefix check: prune if cursor's prior placements (origins +
+			// any earlier dests in this branch) forbid c as the next dest. Cheap
+			// O(1) hash lookup; happens after the cheap arithmetic checks but
+			// before the recursive descent.
+			// Stop encoding for dests: 2 * requestIndices[c] + 1.
+			int destStop = 2 * requestIndices[c] + 1;
+			if (cursor != null && cursor.isForbidden(destStop)) {
+				EnumerationStats.get().prunedByForbidden++;
+				continue;
+			}
+
 			used[c] = true;
 			perm[depth] = c;
 			int connIdx = n - 1 + depth;
 			connTT[connIdx] = seg.getTravelTime();
 			connDist[connIdx] = seg.getDistance();
 			connUtil[connIdx] = seg.getNetworkUtility();
+			if (cursor != null) cursor.place(destStop);
 			enumerateDestTopoWithEval(adj, n, origPerm, origPos, requestIndices, network, requests,
 					bestValidDist, used, perm, depth + 1,
 					newPartialDist, newTime,
 					requests[c].destinationLinkId, pickupTimes, evaluator,
-					prefixIndex, connTT, connDist, connUtil, destResult);
+					prefixIndex, cursor, connTT, connDist, connUtil, destResult);
+			if (cursor != null) cursor.unplace();
 			used[c] = false;
 		}
 	}
