@@ -89,4 +89,38 @@ class ForbiddenPrefixIndexTest {
 		IntOpenHashSet f = index.lookup(new int[]{10, 20});
 		assertEquals(1, f.size());
 	}
+
+	@Test
+	void recordQuadAndLookup() {
+		ForbiddenPrefixIndex index = new ForbiddenPrefixIndex();
+		// Record sequence (10, 20, 30, 40) — quad. Insert: index[(10,20,30)] += 40
+		index.recordPending(new int[]{10, 20, 30, 40});
+		index.commit();
+
+		IntOpenHashSet f = index.lookup(new int[]{10, 20, 30});
+		assertNotNull(f);
+		assertTrue(f.contains(40));
+
+		// The triple-prefix (10, 20) should NOT be in the index — recording quads
+		// does not create entries for shorter prefixes.
+		assertNull(index.lookup(new int[]{10, 20}));
+	}
+
+	@Test
+	void recordsTooShortAreIgnored() {
+		ForbiddenPrefixIndex index = new ForbiddenPrefixIndex();
+		index.recordPending(new int[]{10, 20}); // length 2 — too short, prefix would be length 1
+		index.commit();
+		assertEquals(0, index.size());
+	}
+
+	@Test
+	void maxRecordedKeyLengthTracksLongest() {
+		ForbiddenPrefixIndex index = new ForbiddenPrefixIndex();
+		index.recordPending(new int[]{10, 20, 30});
+		index.recordPending(new int[]{10, 20, 30, 40, 50});
+		index.recordPending(new int[]{10, 20, 30, 40});
+		index.commit();
+		assertEquals(4, index.getMaxRecordedKeyLength()); // quintuple has prefix length 4
+	}
 }
