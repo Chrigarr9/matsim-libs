@@ -96,6 +96,7 @@ public class RunBavaria30kmDemandExtraction {
 		int maxDegree = 16;
 		double interDegreeKeep = 0.10;
 		int interDegreeMinPerReq = 0;
+		Integer networkTimeBinSize = null; // diagnostic override for MatsimNetworkCache binning
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -127,6 +128,7 @@ public class RunBavaria30kmDemandExtraction {
 				case "--max-degree" -> maxDegree = Integer.parseInt(args[++i]);
 				case "--inter-degree-keep" -> interDegreeKeep = Double.parseDouble(args[++i]);
 				case "--inter-degree-min-per-request" -> interDegreeMinPerReq = Integer.parseInt(args[++i]);
+				case "--network-time-bin-size" -> networkTimeBinSize = Integer.parseInt(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -202,6 +204,14 @@ public class RunBavaria30kmDemandExtraction {
 			exMasConfig.setTripFilterCenterY(filterCenterY);
 			log.info("Trip-level spatial filter: {}km around ({}, {})",
 					tripFilterRadiusKm, filterCenterX, filterCenterY);
+		}
+
+		// Diagnostic override for MatsimNetworkCache time-bin size.
+		// Set to Integer.MAX_VALUE to collapse all routing queries into a single (time-independent) bin.
+		if (networkTimeBinSize != null) {
+			ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
+			exMasConfig.setNetworkTimeBinSize(networkTimeBinSize);
+			log.info("Network time-bin size overridden: {} seconds", networkTimeBinSize);
 		}
 
 		DemandExtractionConfigValidator.prepareConfigForDemandExtraction(config);
