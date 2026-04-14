@@ -1,5 +1,8 @@
 package org.matsim.contrib.demand_extraction.algorithm.validation;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.TransportMode;
@@ -74,6 +77,53 @@ public class BudgetValidator {
 		return ride.toBuilder()
 				.remainingBudgets(remainingBudgets)
 				.build();
+	}
+
+	/**
+	 * Populate {@code remainingBudgets} on every ride that does not already have them set, and
+	 * drop any ride whose computed budget is negative for at least one passenger. Used when
+	 * {@code deferExtensionBudgetValidation} is enabled: the extension DFS leaves budgets unset and
+	 * this method runs once after extension completes.
+	 *
+	 * <p>On scenarios where budget validation never rejects (e.g. Bavaria) {@code dropped} is
+	 * expected to be zero; any non-zero value is a behavior-change warning because the deferred
+	 * path cannot fall back to a longer-but-budget-feasible ordering the way the per-ordering
+	 * path could. The warning makes that visible.
+	 */
+	public List<Ride> populateBudgetsBatch(List<Ride> rides) {
+		List<Ride> result = new ArrayList<>(rides.size());
+		int populated = 0;
+		int skipped = 0;
+		int dropped = 0;
+		for (Ride ride : rides) {
+			if (ride.getRemainingBudgets() != null) {
+				result.add(ride);
+				skipped++;
+				continue;
+			}
+			double[] budgets = calculateRemainingBudgets(ride);
+			boolean anyNegative = false;
+			for (double b : budgets) {
+				if (b < 0) {
+					anyNegative = true;
+					break;
+				}
+			}
+			if (anyNegative) {
+				dropped++;
+				continue;
+			}
+			result.add(ride.toBuilder().remainingBudgets(budgets).build());
+			populated++;
+		}
+		log.info("populateBudgetsBatch: populated={}, skipped={} (already set), dropped={} (negative budget)",
+				populated, skipped, dropped);
+		if (dropped > 0) {
+			log.warn("populateBudgetsBatch dropped {} rides with negative budgets after deferred validation — " +
+					"the deferred path cannot fall back to a longer budget-feasible ordering. " +
+					"If this is non-zero on your scenario, disable deferExtensionBudgetValidation.", dropped);
+		}
+		return result;
 	}
 
 	/**

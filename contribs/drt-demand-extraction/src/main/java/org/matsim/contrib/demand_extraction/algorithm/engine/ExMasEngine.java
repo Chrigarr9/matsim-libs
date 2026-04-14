@@ -176,6 +176,17 @@ public final class ExMasEngine {
 			currentDegreeRides = extended;
 		}
 
+		// If extension skipped per-ordering budget validation, populate remainingBudgets now.
+		// Safe on scenarios where budget never rejects (e.g. Bavaria); see BudgetValidator docs.
+		if (exMasConfig.isDeferExtensionBudgetValidation()) {
+			log.info("");
+			log.info("Populating deferred budgets for {} rides...", allRides.size());
+			long budgetStart = System.currentTimeMillis();
+			allRides = budgetValidator.populateBudgetsBatch(allRides);
+			log.info("  Deferred budget population took {}s",
+					String.format("%.1f", (System.currentTimeMillis() - budgetStart) / 1000.0));
+		}
+
 		long totalElapsed = System.currentTimeMillis() - algorithmStartTime;
 		double totalSeconds = totalElapsed / 1000.0;
 		log.info("");

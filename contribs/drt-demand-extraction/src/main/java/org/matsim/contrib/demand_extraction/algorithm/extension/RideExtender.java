@@ -294,14 +294,21 @@ public final class RideExtender {
 		}
 		stats.ridesPassedConstraints++;
 
-		long tBudget0 = System.nanoTime();
-		Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
-		stats.timeBudgetValidation += System.nanoTime() - tBudget0;
-		stats.budgetValidations++;
-		if (validated == null) {
-			return;
+		Ride validated;
+		if (exMasConfig.isDeferExtensionBudgetValidation()) {
+			// Defer budget validation to a single batch step after extension completes.
+			// ride.remainingBudgets stays null; BudgetValidator.populateBudgetsBatch fills it later.
+			validated = ride;
+		} else {
+			long tBudget0 = System.nanoTime();
+			validated = budgetValidator.validateAndPopulateBudgets(ride);
+			stats.timeBudgetValidation += System.nanoTime() - tBudget0;
+			stats.budgetValidations++;
+			if (validated == null) {
+				return;
+			}
+			stats.budgetPassed++;
 		}
-		stats.budgetPassed++;
 
 		double dist = validated.getRideDistance();
 		if (dist < bestValidDist[0]) {

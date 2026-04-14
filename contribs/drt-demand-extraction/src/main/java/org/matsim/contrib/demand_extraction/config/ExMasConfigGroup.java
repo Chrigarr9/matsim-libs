@@ -130,7 +130,14 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private String negativeFlexibilityRelativeMap = null; // Map "value:factor,value:factor"
 
 	private int networkTimeBinSize = 60 * 60; // Network cache time bin size in seconds (1 hour)
-	
+
+	// If true, RideExtender skips per-ordering budget validation and BudgetValidator.populateBudgetsBatch
+	// is called once after the extension loop. Safe ONLY when budget validation never rejects on the
+	// scenario (e.g. Bavaria, where budget is subsumed by max-travel-time). On scenarios where budget
+	// actually rejects, this can drop sets whose shortest ordering fails budget but a longer feasible
+	// ordering exists. Default: false (preserve per-ordering behavior).
+	private boolean deferExtensionBudgetValidation = false;
+
 	// ExMAS algorithm parameters
 	private double searchHorizon = 600.0; // Time horizon for pairing requests (seconds, 10 minutes)
 	private int maxPoolingDegree = Integer.MAX_VALUE; // Maximum number of passengers per ride
@@ -582,7 +589,17 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	public void setNetworkTimeBinSize(int networkTimeBinSize) {
 		this.networkTimeBinSize = networkTimeBinSize;
 	}
-	
+
+	@StringGetter("deferExtensionBudgetValidation")
+	public boolean isDeferExtensionBudgetValidation() {
+		return deferExtensionBudgetValidation;
+	}
+
+	@StringSetter("deferExtensionBudgetValidation")
+	public void setDeferExtensionBudgetValidation(boolean deferExtensionBudgetValidation) {
+		this.deferExtensionBudgetValidation = deferExtensionBudgetValidation;
+	}
+
 	// Max detour factor getter/setter
 	@StringGetter("maxDetourFactor")
 	public double getMaxDetourFactor() {
@@ -1196,6 +1213,11 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("negativeFlexibilityRelativeMap", "Map for negative relative flexibility (value:factor,value:factor). Single value sets default. Default: default:0.5");
 		map.put("networkTimeBinSize",
 				"Time bin size for network travel time caching (seconds). Queries within same bin reuse cached values. Default: 900 (15 min)");
+		map.put("deferExtensionBudgetValidation",
+				"If true, RideExtender skips per-ordering budget validation and BudgetValidator " +
+				"populates remainingBudgets once after the extension loop. Safe ONLY when budget " +
+				"validation never rejects (e.g. Bavaria). May drop feasible sets on scenarios " +
+				"where budget actively rejects orderings. Default: false");
 		map.put("searchHorizon",
 				"Time horizon for pairing requests in ExMAS algorithm (seconds). Requests within this window can be paired. Default: 600 (10 min)");
 		map.put("maxPoolingDegree",
