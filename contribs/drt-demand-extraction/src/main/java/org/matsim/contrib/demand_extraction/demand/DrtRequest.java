@@ -48,6 +48,21 @@ public class DrtRequest {
     public final double originY;
     public final double destinationX; // Derived from destinationLinkId centroid - for visualization/export
     public final double destinationY;
+
+    // Link-endpoint coordinates used for admissible B&B lower bounds in
+    // OrderingEnumerator.computeMinIn. The link-based LeastCostPathCalculator
+    // routes from fromLink.toNode to toLink.fromNode, so a Euclidean beeline
+    // between midpoints can exceed the routed distance (zero for adjacent
+    // links). Using the actual routing endpoints keeps the beeline <= any
+    // routed path between the same two nodes.
+    public final double originLinkCoordFromX; // originLinkId.fromNode coord (routing "arrives" here)
+    public final double originLinkCoordFromY;
+    public final double originLinkCoordToX;   // originLinkId.toNode coord (routing "leaves" from here)
+    public final double originLinkCoordToY;
+    public final double destinationLinkCoordFromX; // destinationLinkId.fromNode coord (routing "arrives" here)
+    public final double destinationLinkCoordFromY;
+    public final double destinationLinkCoordToX;   // destinationLinkId.toNode coord (routing "leaves" from here)
+    public final double destinationLinkCoordToY;
     
     // Temporal constraints
     public final double requestTime; // Desired departure time (seconds)
@@ -127,6 +142,14 @@ public class DrtRequest {
         this.originY = builder.originY;
         this.destinationX = builder.destinationX;
         this.destinationY = builder.destinationY;
+        this.originLinkCoordFromX = builder.originLinkCoordFromX;
+        this.originLinkCoordFromY = builder.originLinkCoordFromY;
+        this.originLinkCoordToX = builder.originLinkCoordToX;
+        this.originLinkCoordToY = builder.originLinkCoordToY;
+        this.destinationLinkCoordFromX = builder.destinationLinkCoordFromX;
+        this.destinationLinkCoordFromY = builder.destinationLinkCoordFromY;
+        this.destinationLinkCoordToX = builder.destinationLinkCoordToX;
+        this.destinationLinkCoordToY = builder.destinationLinkCoordToY;
         this.requestTime = builder.requestTime;
         this.earliestDeparture = builder.earliestDeparture;
         this.latestArrival = builder.latestArrival;
@@ -162,6 +185,14 @@ public class DrtRequest {
             .originY(this.originY)
             .destinationX(this.destinationX)
             .destinationY(this.destinationY)
+            .originLinkCoordFromX(this.originLinkCoordFromX)
+            .originLinkCoordFromY(this.originLinkCoordFromY)
+            .originLinkCoordToX(this.originLinkCoordToX)
+            .originLinkCoordToY(this.originLinkCoordToY)
+            .destinationLinkCoordFromX(this.destinationLinkCoordFromX)
+            .destinationLinkCoordFromY(this.destinationLinkCoordFromY)
+            .destinationLinkCoordToX(this.destinationLinkCoordToX)
+            .destinationLinkCoordToY(this.destinationLinkCoordToY)
             .requestTime(this.requestTime)
             .earliestDeparture(this.earliestDeparture)
             .latestArrival(this.latestArrival)
@@ -252,6 +283,14 @@ public class DrtRequest {
         private double originY;
         private double destinationX;
         private double destinationY;
+        private double originLinkCoordFromX;
+        private double originLinkCoordFromY;
+        private double originLinkCoordToX;
+        private double originLinkCoordToY;
+        private double destinationLinkCoordFromX;
+        private double destinationLinkCoordFromY;
+        private double destinationLinkCoordToX;
+        private double destinationLinkCoordToY;
         private double requestTime;
         private double earliestDeparture;
         private double latestArrival;
@@ -280,6 +319,14 @@ public class DrtRequest {
         public Builder originY(double originY) { this.originY = originY; return this; }
         public Builder destinationX(double destinationX) { this.destinationX = destinationX; return this; }
         public Builder destinationY(double destinationY) { this.destinationY = destinationY; return this; }
+        public Builder originLinkCoordFromX(double v) { this.originLinkCoordFromX = v; return this; }
+        public Builder originLinkCoordFromY(double v) { this.originLinkCoordFromY = v; return this; }
+        public Builder originLinkCoordToX(double v) { this.originLinkCoordToX = v; return this; }
+        public Builder originLinkCoordToY(double v) { this.originLinkCoordToY = v; return this; }
+        public Builder destinationLinkCoordFromX(double v) { this.destinationLinkCoordFromX = v; return this; }
+        public Builder destinationLinkCoordFromY(double v) { this.destinationLinkCoordFromY = v; return this; }
+        public Builder destinationLinkCoordToX(double v) { this.destinationLinkCoordToX = v; return this; }
+        public Builder destinationLinkCoordToY(double v) { this.destinationLinkCoordToY = v; return this; }
         public Builder requestTime(double requestTime) { this.requestTime = requestTime; return this; }
         public Builder earliestDeparture(double earliestDeparture) { this.earliestDeparture = earliestDeparture; return this; }
         public Builder latestArrival(double latestArrival) { this.latestArrival = latestArrival; return this; }

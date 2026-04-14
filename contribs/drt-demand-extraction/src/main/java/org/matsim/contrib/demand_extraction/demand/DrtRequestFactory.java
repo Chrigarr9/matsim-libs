@@ -263,8 +263,19 @@ public class DrtRequestFactory {
 		// IMPORTANT: Derive coordinates from link centroids, not from activities
 		// This ensures coordinates are always consistent with the links used for routing
 		// Activity coordinates may differ from their assigned link (e.g., facility location vs link centroid)
-		Coord originCoord = network.getLinks().get(originLinkId).getCoord();
-		Coord destCoord = network.getLinks().get(destinationLinkId).getCoord();
+		org.matsim.api.core.v01.network.Link originLink = network.getLinks().get(originLinkId);
+		org.matsim.api.core.v01.network.Link destLink = network.getLinks().get(destinationLinkId);
+		Coord originCoord = originLink.getCoord();
+		Coord destCoord = destLink.getCoord();
+		// Node coordinates used by the link-based router: routing goes from
+		// fromLink.toNode to toLink.fromNode (see LeastCostPathCalculator
+		// default method). Storing these alongside the centroids lets
+		// OrderingEnumerator.computeMinIn compute an admissible beeline LB
+		// between the actual routing endpoints rather than between midpoints.
+		Coord originLinkFrom = originLink.getFromNode().getCoord();
+		Coord originLinkTo = originLink.getToNode().getCoord();
+		Coord destLinkFrom = destLink.getFromNode().getCoord();
+		Coord destLinkTo = destLink.getToNode().getCoord();
 
 		// Calculate beeline distance between link centroids for validation
 		double beelineDistance = org.matsim.core.utils.geometry.CoordUtils.calcEuclideanDistance(originCoord, destCoord);
@@ -322,6 +333,14 @@ public class DrtRequestFactory {
 				.originY(originCoord.getY())
 				.destinationX(destCoord.getX())
 				.destinationY(destCoord.getY())
+				.originLinkCoordFromX(originLinkFrom.getX())
+				.originLinkCoordFromY(originLinkFrom.getY())
+				.originLinkCoordToX(originLinkTo.getX())
+				.originLinkCoordToY(originLinkTo.getY())
+				.destinationLinkCoordFromX(destLinkFrom.getX())
+				.destinationLinkCoordFromY(destLinkFrom.getY())
+				.destinationLinkCoordToX(destLinkTo.getX())
+				.destinationLinkCoordToY(destLinkTo.getY())
 				.requestTime(requestTime)
 				.directTravelTime(drtAttrs.travelTime())
 				.directDistance(drtAttrs.distance())
@@ -415,6 +434,14 @@ public class DrtRequestFactory {
 				.originY(originCoord.getY())
 				.destinationX(destCoord.getX())
 				.destinationY(destCoord.getY())
+				.originLinkCoordFromX(originLinkFrom.getX())
+				.originLinkCoordFromY(originLinkFrom.getY())
+				.originLinkCoordToX(originLinkTo.getX())
+				.originLinkCoordToY(originLinkTo.getY())
+				.destinationLinkCoordFromX(destLinkFrom.getX())
+				.destinationLinkCoordFromY(destLinkFrom.getY())
+				.destinationLinkCoordToX(destLinkTo.getX())
+				.destinationLinkCoordToY(destLinkTo.getY())
 				.originActivityType(originActivity.getType())
 				.destinationActivityType(destActivity.getType())
 				.requestTime(requestTime)

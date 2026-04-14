@@ -142,6 +142,10 @@ class MinInLowerBoundTest {
 
     private static DrtRequest beelineRequest(int i, Id<Link> oLink, Id<Link> dLink,
                                              double ox, double oy, double dx, double dy) {
+        // Tests model each stop as a point — both link.fromNode and link.toNode
+        // coincide with the stop coordinate. This makes computeMinIn's
+        // (outX/Y, inX/Y) asymmetry collapse back to simple point-to-point
+        // beeline, matching the test's assertions.
         return DrtRequest.builder()
                 .index(i)
                 .personId(Id.create("p" + i, Person.class))
@@ -149,6 +153,10 @@ class MinInLowerBoundTest {
                 .budget(10.0).bestModeScore(-5.0).bestMode("car")
                 .originLinkId(oLink).destinationLinkId(dLink)
                 .originX(ox).originY(oy).destinationX(dx).destinationY(dy)
+                .originLinkCoordFromX(ox).originLinkCoordFromY(oy)
+                .originLinkCoordToX(ox).originLinkCoordToY(oy)
+                .destinationLinkCoordFromX(dx).destinationLinkCoordFromY(dy)
+                .destinationLinkCoordToX(dx).destinationLinkCoordToY(dy)
                 .requestTime(0).earliestDeparture(0).latestArrival(3600)
                 .directTravelTime(600).directDistance(0).maxDetourFactor(100)
                 .maxWalkDistance(0)
@@ -325,6 +333,10 @@ class MinInLowerBoundTest {
 
         setup.requests = new DrtRequest[n];
         for (int i = 0; i < n; i++) {
+            double ox = i * 1000.0;
+            double oy = 0.0;
+            double dxCoord = i * 1000.0;
+            double dyCoord = 5000.0;
             setup.requests[i] = DrtRequest.builder()
                     .index(i)
                     .personId(Id.create("p" + i, Person.class))
@@ -337,10 +349,17 @@ class MinInLowerBoundTest {
                     .bestMode("car")
                     .originLinkId(oLink[i])
                     .destinationLinkId(dLink[i])
-                    .originX(i * 1000.0)
-                    .originY(0.0)
-                    .destinationX(i * 1000.0)
-                    .destinationY(5000.0)
+                    .originX(ox)
+                    .originY(oy)
+                    .destinationX(dxCoord)
+                    .destinationY(dyCoord)
+                    // Collapse link endpoints to the stop point for this
+                    // synthetic test — makes computeMinIn's LB equivalent to
+                    // straight-line distance between stop coordinates.
+                    .originLinkCoordFromX(ox).originLinkCoordFromY(oy)
+                    .originLinkCoordToX(ox).originLinkCoordToY(oy)
+                    .destinationLinkCoordFromX(dxCoord).destinationLinkCoordFromY(dyCoord)
+                    .destinationLinkCoordToX(dxCoord).destinationLinkCoordToY(dyCoord)
                     .requestTime(requestTime)
                     .earliestDeparture(earliestDep)
                     .latestArrival(latestArr)

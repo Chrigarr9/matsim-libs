@@ -1327,34 +1327,51 @@ public final class OrderingEnumerator {
 	 * predicate added in T12/T13. Called once per set in
 	 * {@link #enumerateAndEvaluateSeeded}.
 	 *
-	 * <p>Uses the Euclidean (beeline) distance between stop coordinates. Beeline
-	 * is provably &le; any routed path distance between the same two stops, at
-	 * any departure time, under any travel-time scenario. Earlier versions
-	 * attempted to sample the network cache (time-0 or min-across-cached-bins)
-	 * but neither is a valid lower bound under time-dependent routing: the
-	 * router can return different paths at different times, and a fresh query
-	 * at a not-yet-cached bin can return a distance smaller than any sample
-	 * taken earlier, making the cut predicate unsound. Beeline is the only
-	 * quantity we can compute cheaply without routing every bin upfront.
+	 * <p>Uses the Euclidean (beeline) distance between the stop links'
+	 * <em>routing endpoints</em>. The link-based
+	 * {@link org.matsim.core.router.util.LeastCostPathCalculator} routes from
+	 * {@code fromLink.toNode} to {@code toLink.fromNode}, so the beeline must
+	 * be measured between those same two nodes to remain
+	 * {@code <=} the routed path. Using link midpoints instead overestimates
+	 * the distance whenever two links share a node (routed = 0, midpoint
+	 * beeline > 0), producing an unsound B&amp;B cut.
+	 *
+	 * <p>Precomputed node coordinates are stored on {@link DrtRequest} as
+	 * {@code originLinkCoordFrom/To*} and {@code destinationLinkCoordFrom/To*}
+	 * so this method does no network lookups.
 	 */
 	static double[] computeMinIn(int n, MatsimNetworkCache network, DrtRequest[] requests) {
-		double[] stopX = new double[2 * n];
-		double[] stopY = new double[2 * n];
+		// "out" = where the vehicle LEAVES the stop (link.toNode).
+		// "in"  = where the vehicle ARRIVES at the stop (link.fromNode).
+		// Stop i (0..n-1) = pickup of request i; stop i+n = dropoff of request i.
+		double[] outX = new double[2 * n];
+		double[] outY = new double[2 * n];
+		double[] inX = new double[2 * n];
+		double[] inY = new double[2 * n];
 		for (int i = 0; i < n; i++) {
-			stopX[i] = requests[i].originX;
-			stopY[i] = requests[i].originY;
-			stopX[i + n] = requests[i].destinationX;
-			stopY[i + n] = requests[i].destinationY;
+			DrtRequest r = requests[i];
+			outX[i] = r.originLinkCoordToX;
+			outY[i] = r.originLinkCoordToY;
+			inX[i] = r.originLinkCoordFromX;
+			inY[i] = r.originLinkCoordFromY;
+			outX[i + n] = r.destinationLinkCoordToX;
+			outY[i + n] = r.destinationLinkCoordToY;
+			inX[i + n] = r.destinationLinkCoordFromX;
+			inY[i + n] = r.destinationLinkCoordFromY;
 		}
 
 		double[] minIn = new double[2 * n];
 		java.util.Arrays.fill(minIn, Double.POSITIVE_INFINITY);
 
+		// minIn[to] = min over F != to of beeline(F.out, to.in).
+		// Routed segment F -> to goes from F.out to to.in; straight-line
+		// between those same two points is always <= any network path between
+		// them, so the sum of minIn is an admissible LB on remaining distance.
 		for (int to = 0; to < 2 * n; to++) {
 			for (int from = 0; from < 2 * n; from++) {
 				if (from == to) continue;
-				double dx = stopX[to] - stopX[from];
-				double dy = stopY[to] - stopY[from];
+				double dx = inX[to] - outX[from];
+				double dy = inY[to] - outY[from];
 				double d = Math.sqrt(dx * dx + dy * dy);
 				if (d < minIn[to]) minIn[to] = d;
 			}
