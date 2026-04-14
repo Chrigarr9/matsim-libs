@@ -1319,28 +1319,59 @@ public final class OrderingEnumerator {
 	 *
 	 * <p>Indexing: entries 0..k-1 are pickup stops (origin of request i), entries
 	 * k..2k-1 are dropoff stops (destination of request i-k). For each stop, the
-	 * value is the minimum over all other stops s in the set of
-	 * {@code network.getSegment(s, thisStop, 0.0).getDistance()}.
+	 * value is the minimum over all other stops s in the set of the network
+	 * distance from {@code s} to {@code thisStop}, taken across every time bin
+	 * currently in the network cache.
 	 *
 	 * <p>Used as an admissible lower bound on per-stop segment cost in the B&B
 	 * predicate added in T12/T13. Called once per set in
 	 * {@link #enumerateAndEvaluateSeeded}.
+	 *
+	 * <p>Implementation note: earlier versions sampled {@code getSegment(s, t, 0.0)}
+	 * which is only the time-bin-0 value. Under time-dependent routing (Bavaria
+	 * uses {@code travel_times.tsv}), the router can select different paths for
+	 * different departure times and the chosen path distance varies with bin.
+	 * Time-0 is therefore NOT an admissible lower bound — it can overestimate
+	 * the true minimum and make the B&amp;B cut unsound. We now scan every cached
+	 * bin via {@link MatsimNetworkCache#minDistanceAcrossBins}. If a pair has
+	 * no cache entry at all (should not happen once the pair graph is built,
+	 * but defensively possible for disconnected stops), we fall back to the
+	 * beeline (Euclidean) distance between the request coordinates, which is
+	 * an unconditional lower bound on any network distance.
 	 */
 	@SuppressWarnings("unchecked")
-	private static double[] computeMinIn(int n, MatsimNetworkCache network, DrtRequest[] requests) {
+	static double[] computeMinIn(int n, MatsimNetworkCache network, DrtRequest[] requests) {
 		Id<Link>[] stopLinks = (Id<Link>[]) new Id[2 * n];
+		double[] stopX = new double[2 * n];
+		double[] stopY = new double[2 * n];
 		for (int i = 0; i < n; i++) {
 			stopLinks[i] = requests[i].originLinkId;
 			stopLinks[i + n] = requests[i].destinationLinkId;
+			stopX[i] = requests[i].originX;
+			stopY[i] = requests[i].originY;
+			stopX[i + n] = requests[i].destinationX;
+			stopY[i + n] = requests[i].destinationY;
 		}
 
 		double[] minIn = new double[2 * n];
 		java.util.Arrays.fill(minIn, Double.POSITIVE_INFINITY);
 
+		EnumerationStats stats = EnumerationStats.get();
 		for (int to = 0; to < 2 * n; to++) {
 			for (int from = 0; from < 2 * n; from++) {
 				if (from == to) continue;
-				double d = network.getSegment(stopLinks[from], stopLinks[to], 0.0).getDistance();
+				double d = network.minDistanceAcrossBins(stopLinks[from], stopLinks[to]);
+				if (Double.isInfinite(d)) {
+					// No cached entry for this pair in any bin. Fall back to
+					// the Euclidean distance between the two stop coordinates,
+					// which is an unconditional admissible lower bound.
+					double dx = stopX[to] - stopX[from];
+					double dy = stopY[to] - stopY[from];
+					d = Math.sqrt(dx * dx + dy * dy);
+					stats.minInBeelineFallbacks++;
+				} else {
+					stats.minInCacheHits++;
+				}
 				if (d < minIn[to]) minIn[to] = d;
 			}
 		}
