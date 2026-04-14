@@ -43,10 +43,6 @@ public final class EnumerationStats {
 	public long prunedByDelayWindowOrigin;
 	public long prunedByDelayWindowDropoff;
 
-	// ---- minIn lower-bound sourcing ----
-	public long minInCacheHits;        // (from, to) pairs served by the cache index
-	public long minInBeelineFallbacks; // (from, to) pairs that fell back to Euclidean
-
 	// ---- B&B distance-bound diagnostics ----
 	public long bnbOriginCuts;              // origin-phase break events
 	public long bnbOriginSkippedCandidates; // candidates skipped by origin cuts
@@ -88,8 +84,6 @@ public final class EnumerationStats {
 		prunedByDropoffCheck = 0;
 		prunedByDelayWindowOrigin = 0;
 		prunedByDelayWindowDropoff = 0;
-		minInCacheHits = 0;
-		minInBeelineFallbacks = 0;
 		bnbOriginCuts = 0;
 		bnbOriginSkippedCandidates = 0;
 		bnbOriginLbCuts = 0;
@@ -124,8 +118,6 @@ public final class EnumerationStats {
 			total.prunedByDropoffCheck += s.prunedByDropoffCheck;
 			total.prunedByDelayWindowOrigin += s.prunedByDelayWindowOrigin;
 			total.prunedByDelayWindowDropoff += s.prunedByDelayWindowDropoff;
-			total.minInCacheHits += s.minInCacheHits;
-			total.minInBeelineFallbacks += s.minInBeelineFallbacks;
 			total.bnbOriginCuts += s.bnbOriginCuts;
 			total.bnbOriginSkippedCandidates += s.bnbOriginSkippedCandidates;
 			total.bnbOriginLbCuts += s.bnbOriginLbCuts;
@@ -166,13 +158,6 @@ public final class EnumerationStats {
 				setsProcessed > 0 ? String.format("%.1f", (double) prunedByDelayWindowOrigin / setsProcessed) : "N/A");
 		log.info("  Pruned by delay-window (dropoff): {} ({} per set)", prunedByDelayWindowDropoff,
 				setsProcessed > 0 ? String.format("%.1f", (double) prunedByDelayWindowDropoff / setsProcessed) : "N/A");
-		// minIn lower-bound sourcing — how often the beeline fallback fired.
-		long minInTotal = minInCacheHits + minInBeelineFallbacks;
-		log.info("  minIn lookups: {} total, {} cache hits ({}%), {} beeline fallbacks ({}%)",
-				minInTotal, minInCacheHits,
-				minInTotal > 0 ? String.format("%.1f", 100.0 * minInCacheHits / minInTotal) : "N/A",
-				minInBeelineFallbacks,
-				minInTotal > 0 ? String.format("%.1f", 100.0 * minInBeelineFallbacks / minInTotal) : "N/A");
 		// B&B diagnostic block
 		log.info("  === B&B distance-bound ===");
 		log.info("  Origin B&B cuts: {} events, {} candidates skipped ({} skipped/cut)",

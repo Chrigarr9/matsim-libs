@@ -93,110 +93,18 @@ class MinInLowerBoundTest {
     }
 
     /**
-     * Regression test for the cross-time-bin admissibility fix.
+     * Admissibility test for pure-Euclidean minIn.
      *
-     * <p>Under time-dependent routing, the same (origin, destination) pair
-     * may have different network distances across time bins because the
-     * router selects different paths to minimise travel time at different
-     * times of day. The LB B&amp;B cut requires {@code minIn[stop]} to be a
-     * lower bound on the real segment distance of ANY ordering — so it
-     * must be the minimum across every cached time bin, not a single
-     * sample at time 0.
-     *
-     * <p>This test pre-populates one pair at two distinct bins with
-     * different distances and asserts that {@link OrderingEnumerator#computeMinIn}
-     * picks up the smaller value. Under the previous implementation
-     * ({@code getSegment(from, to, 0.0)}) this test fails because it only
-     * sees the larger bin-0 value.
+     * <p>{@link OrderingEnumerator#computeMinIn} computes the straight-line
+     * (Euclidean) distance between stop coordinates. Beeline is unconditionally
+     * {@code <=} any routed path at any departure time under any travel-time
+     * scenario, so it's the only lower bound we can compute without routing
+     * every time bin upfront. This test asserts that every {@code minIn[to]}
+     * equals the minimum Euclidean incoming distance, regardless of cache
+     * contents.
      */
     @Test
-    void computeMinInPicksSmallestDistanceAcrossTimeBins() {
-        MatsimNetworkCache cache = MatsimNetworkCacheTestFixture.create();
-
-        Id<Link> o0 = Id.createLinkId("O0");
-        Id<Link> o1 = Id.createLinkId("O1");
-        Id<Link> d0 = Id.createLinkId("D0");
-        Id<Link> d1 = Id.createLinkId("D1");
-
-        // Bin 0: full pair table, every pair reachable.
-        // minIn[1] (O1's incoming) sees O0->O1=500, D0->O1=200, D1->O1=300 → min=200.
-        putBin0(cache, o0, o1, 500.0);
-        putBin0(cache, o1, o0, 400.0);
-        putBin0(cache, d0, o0, 450.0);
-        putBin0(cache, d0, o1, 200.0);
-        putBin0(cache, d1, o0, 480.0);
-        putBin0(cache, d1, o1, 300.0);
-        putBin0(cache, o0, d0, 600.0);
-        putBin0(cache, o0, d1, 900.0);
-        putBin0(cache, o1, d0, 700.0);
-        putBin0(cache, o1, d1, 350.0);
-        putBin0(cache, d0, d1, 150.0);
-        putBin0(cache, d1, d0, 800.0);
-
-        // Bin 5: a SMALLER O0->O1 distance — simulates a time-of-day where
-        // the router selects a shorter (albeit slower) path. A correct
-        // computeMinIn must pick this up as the new min for stop 1.
-        MatsimNetworkCacheTestFixture.putAtBin(cache, o0, o1, 5,
-                new TravelSegment(60.0, 100.0, 0.0));
-
-        // Minimal DrtRequest array — computeMinIn only reads link ids (and
-        // origin/destination coordinates for the beeline fallback, which is
-        // not hit here since every pair is cached).
-        DrtRequest r0 = DrtRequest.builder()
-                .index(0).personId(Id.create("p0", Person.class))
-                .groupId("g0").tripIndex(0).isCommute(false).isEducation(false)
-                .budget(10.0).bestModeScore(-5.0).bestMode("car")
-                .originLinkId(o0).destinationLinkId(d0)
-                .originX(0).originY(0).destinationX(0).destinationY(0)
-                .requestTime(0).earliestDeparture(0).latestArrival(3600)
-                .directTravelTime(600).directDistance(0).maxDetourFactor(100)
-                .maxWalkDistance(0)
-                .originActivityType("home").destinationActivityType("work")
-                .carTravelTime(600).ptTravelTime(1200).ptAccessibility(2.0)
-                .build();
-        DrtRequest r1 = DrtRequest.builder()
-                .index(1).personId(Id.create("p1", Person.class))
-                .groupId("g1").tripIndex(0).isCommute(false).isEducation(false)
-                .budget(10.0).bestModeScore(-5.0).bestMode("car")
-                .originLinkId(o1).destinationLinkId(d1)
-                .originX(0).originY(0).destinationX(0).destinationY(0)
-                .requestTime(0).earliestDeparture(0).latestArrival(3600)
-                .directTravelTime(600).directDistance(0).maxDetourFactor(100)
-                .maxWalkDistance(0)
-                .originActivityType("home").destinationActivityType("work")
-                .carTravelTime(600).ptTravelTime(1200).ptAccessibility(2.0)
-                .build();
-
-        DrtRequest[] reqs = new DrtRequest[] { r0, r1 };
-        double[] minIn = OrderingEnumerator.computeMinIn(2, cache, reqs);
-
-        // Stop 1 is O1. Previous implementation returned 200 (D0->O1 at bin 0).
-        // New implementation must return 100 (O0->O1 at bin 5 — smaller and
-        // admissible, because that segment truly exists in the cache and
-        // could be used by a real ride).
-        org.junit.jupiter.api.Assertions.assertEquals(
-                100.0, minIn[1], 1e-9,
-                "minIn[O1] must be the smallest cached incoming distance across all bins");
-    }
-
-    private static void putBin0(MatsimNetworkCache cache, Id<Link> from, Id<Link> to, double dist) {
-        MatsimNetworkCacheTestFixture.put(cache, from, to,
-                new TravelSegment(dist / 10.0, dist, 0.0));
-    }
-
-    /**
-     * Admissibility test for the beeline fallback path.
-     *
-     * <p>In production, the pair generator routes O→O, O→D, and D→D pairs
-     * but typically not D→O, so the first time computeMinIn is called for
-     * a new set, many of the (from, to) pair queries have no cache entry
-     * at any time bin — forcing the Euclidean fallback. This test
-     * populates nothing in the cache and asserts that every minIn entry
-     * equals the straight-line distance between the stop coordinates,
-     * which is an unconditional lower bound on any network distance.
-     */
-    @Test
-    void computeMinInFallsBackToBeelineWhenCacheIsEmpty() {
+    void computeMinInReturnsMinEuclideanIncoming() {
         MatsimNetworkCache cache = MatsimNetworkCacheTestFixture.create();
 
         Id<Link> o0 = Id.createLinkId("O0");
@@ -230,48 +138,6 @@ class MinInLowerBoundTest {
                 "minIn[D0] should fall back to min beeline = 1000 (D1->D0)");
         org.junit.jupiter.api.Assertions.assertEquals(1000.0, minIn[3], 1e-9,
                 "minIn[D1] should fall back to min beeline = 1000 (D0->D1)");
-    }
-
-    /**
-     * Admissibility test for the MIXED case: some pairs cached, some not.
-     * Cached pairs must use the cached distance (tighter lower bound);
-     * uncached pairs must use the beeline (looser but still admissible).
-     */
-    @Test
-    void computeMinInMixesCachedAndBeeline() {
-        MatsimNetworkCache cache = MatsimNetworkCacheTestFixture.create();
-
-        Id<Link> o0 = Id.createLinkId("O0");
-        Id<Link> o1 = Id.createLinkId("O1");
-        Id<Link> d0 = Id.createLinkId("D0");
-        Id<Link> d1 = Id.createLinkId("D1");
-
-        // Same coordinates as the empty-cache test: all beelines = 1000 for
-        // nearest-neighbor pairs, ~5000 or ~5099 for cross-longitude pairs.
-        DrtRequest r0 = beelineRequest(0, o0, d0, 0, 0, 0, 5000);
-        DrtRequest r1 = beelineRequest(1, o1, d1, 1000, 0, 1000, 5000);
-
-        // Cache only D1→D0 at 2000 (LARGER than beeline). The fallback
-        // should prefer the cached 2000 for the D1→D0 pair specifically
-        // (it's what a real ride would actually use — the routed distance
-        // is the truth, beeline is only a looser substitute when the
-        // router hasn't been asked). For D0→D1 there is no cache entry,
-        // so beeline 1000 is used. minIn[D0] = min(cached_D1->D0=2000,
-        // beeline_O0->D0=5000, beeline_O1->D0=5099) = 2000. minIn[D1] =
-        // min(beeline_D0->D1=1000, ...) = 1000.
-        MatsimNetworkCacheTestFixture.put(cache, d1, d0, new TravelSegment(200.0, 2000.0, 0.0));
-
-        double[] minIn = OrderingEnumerator.computeMinIn(2, cache, new DrtRequest[] { r0, r1 });
-
-        // D0's minIn uses the cached D1->D0 = 2000 (smaller than beeline
-        // O0->D0 = 5000 and O1->D0 ≈ 5099).
-        org.junit.jupiter.api.Assertions.assertEquals(2000.0, minIn[2], 1e-9,
-                "minIn[D0] should use the cached D1->D0 = 2000");
-
-        // D1's minIn uses beeline D0->D1 = 1000 (nothing cached for any
-        // incoming to D1; D0->D1 ≈ 1000, O0->D1 ≈ 5099, O1->D1 = 5000).
-        org.junit.jupiter.api.Assertions.assertEquals(1000.0, minIn[3], 1e-9,
-                "minIn[D1] should fall back to beeline D0->D1 = 1000");
     }
 
     private static DrtRequest beelineRequest(int i, Id<Link> oLink, Id<Link> dLink,

@@ -24,10 +24,4 @@ public final class MatsimNetworkCacheTestFixture {
     public static void put(MatsimNetworkCache cache, Id<Link> origin, Id<Link> dest, TravelSegment seg) {
         cache.putForTesting(origin, dest, seg);
     }
-
-    /** Pre-populate a single origin→destination segment at an explicit time-bin. */
-    public static void putAtBin(MatsimNetworkCache cache, Id<Link> origin, Id<Link> dest,
-                                int timeBin, TravelSegment seg) {
-        cache.putForTesting(origin, dest, timeBin, seg);
-    }
 }

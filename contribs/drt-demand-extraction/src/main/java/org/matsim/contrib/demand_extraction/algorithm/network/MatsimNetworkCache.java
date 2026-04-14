@@ -85,13 +85,7 @@ public class MatsimNetworkCache {
 	// Cache: (originLinkId, destLinkId, timeBin) -> TravelSegment
 	private final ConcurrentHashMap<CacheKey, TravelSegment> cache = new ConcurrentHashMap<>();
 
-	// Secondary index: (originLinkId, destLinkId) -> minimum reachable distance
-	// across every time bin currently in the main cache. Updated whenever the
-	// main cache is written, to give O(1) lookups for the B&B lower bound (used
-	// in OrderingEnumerator.computeMinIn). Scanning the main cache each call
-	// would be O(cache-size) — prohibitive on Bavaria-scale workloads.
-	private final ConcurrentHashMap<PairKey, Double> minDistByPair = new ConcurrentHashMap<>();
-	
+
 	// Track routing failures for summary logging (thread-safe)
 	private final AtomicInteger routingFailures = new AtomicInteger(0);
 	private final AtomicInteger totalRoutingAttempts = new AtomicInteger(0);
@@ -199,54 +193,15 @@ public class MatsimNetworkCache {
 		// Use computeIfAbsent for atomic cache operations
 		// This ensures only ONE thread computes the segment for a given key,
 		// preventing race conditions in the SpeedyALT router
-		return cache.computeIfAbsent(key, k -> {
-			TravelSegment seg = computeSegment(originLinkId, destLinkId, canonicalDepartureTime);
-			recordPairDistance(originLinkId, destLinkId, seg);
-			return seg;
-		});
+		return cache.computeIfAbsent(key, k ->
+				computeSegment(originLinkId, destLinkId, canonicalDepartureTime));
 	}
 
-	/**
-	 * Update the pair-wise min-distance index with a newly cached segment.
-	 * Unreachable segments are ignored so the index only reflects real,
-	 * routable distances. Thread-safe via {@link ConcurrentHashMap#merge}.
-	 */
-	private void recordPairDistance(Id<Link> origin, Id<Link> dest, TravelSegment seg) {
-		if (seg == null || !seg.isReachable()) {
-			return;
-		}
-		minDistByPair.merge(new PairKey(origin, dest), seg.getDistance(), Math::min);
-	}
-	
 	/**
 	 * Check if connection exists between links.
 	 */
 	public boolean hasConnection(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
 		return getSegment(originLinkId, destLinkId, departureTime).isReachable();
-	}
-
-	/**
-	 * Minimum cached network distance from {@code originLinkId} to
-	 * {@code destLinkId} across every time bin currently in the cache.
-	 *
-	 * <p>Used as an admissible lower bound in the extension B&amp;B cut:
-	 * under time-dependent routing the path distance for a given (origin,
-	 * destination) pair can vary across time bins (the router may pick
-	 * different paths to minimise travel time), so sampling a single bin —
-	 * historically time 0 — can overestimate the true minimum and make the
-	 * cut predicate unsound. Scanning all cached bins guarantees the
-	 * returned value is {@code <=} the distance of any real segment that
-	 * was routed through this cache.
-	 *
-	 * <p>Returns {@link Double#POSITIVE_INFINITY} if no entry for the pair
-	 * exists in the cache. Callers should fall back to a geometric lower
-	 * bound (e.g. beeline distance) in that case.
-	 *
-	 * <p>Only reachable segments contribute; unreachable ones are skipped.
-	 */
-	public double minDistanceAcrossBins(Id<Link> originLinkId, Id<Link> destLinkId) {
-		Double min = minDistByPair.get(new PairKey(originLinkId, destLinkId));
-		return min != null ? min : Double.POSITIVE_INFINITY;
 	}
 
 	/**
@@ -381,7 +336,6 @@ public class MatsimNetworkCache {
 						CacheKey key = new CacheKey(origin, dest, timeBin);
 						TravelSegment seg = new TravelSegment(tt, dist, util);
 						cache.put(key, seg);
-						recordPairDistance(origin, dest, seg);
 					}
 				} catch (Exception e) {
 					// Skip invalid entries
@@ -395,7 +349,6 @@ public class MatsimNetworkCache {
 	 */
 	public void clearCache() {
 		cache.clear();
-		minDistByPair.clear();
 	}
 	
 	/**
@@ -636,21 +589,6 @@ public class MatsimNetworkCache {
 	 */
 	void putForTesting(Id<Link> origin, Id<Link> dest, TravelSegment seg) {
 		cache.put(new CacheKey(origin, dest, 0), seg);
-		recordPairDistance(origin, dest, seg);
-	}
-
-	/**
-	 * Pre-populate a cache entry for unit tests at an explicit time bin.
-	 *
-	 * <p>Used by tests that need to simulate time-dependent routing, where
-	 * the same (origin, destination) pair has different cached segments at
-	 * different time bins.
-	 *
-	 * <p>Intended for use in JUnit tests only — not for production code.
-	 */
-	void putForTesting(Id<Link> origin, Id<Link> dest, int timeBin, TravelSegment seg) {
-		cache.put(new CacheKey(origin, dest, timeBin), seg);
-		recordPairDistance(origin, dest, seg);
 	}
 
 	private MatsimNetworkCache() {
@@ -668,33 +606,6 @@ public class MatsimNetworkCache {
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────
-
-	/**
-	 * Key for the pair-wise min-distance index — identifies an (origin,
-	 * destination) link pair without regard to time bin.
-	 */
-	private static final class PairKey {
-		private final Id<Link> origin;
-		private final Id<Link> destination;
-
-		PairKey(Id<Link> origin, Id<Link> destination) {
-			this.origin = origin;
-			this.destination = destination;
-		}
-
-		@Override
-		public boolean equals(Object obj) {
-			if (this == obj) return true;
-			if (!(obj instanceof PairKey)) return false;
-			PairKey other = (PairKey) obj;
-			return origin.equals(other.origin) && destination.equals(other.destination);
-		}
-
-		@Override
-		public int hashCode() {
-			return 31 * origin.hashCode() + destination.hashCode();
-		}
-	}
 
 	/**
 	 * Cache key for link-to-link travel at specific time bin.
