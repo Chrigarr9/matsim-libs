@@ -97,13 +97,19 @@ public final class RideExtender {
 				ridesToExtend.size(), targetDegree - 1, targetDegree);
 		long phaseStartTime = System.currentTimeMillis();
 
-		// Collect unique base sets for neighbor enumeration
+		// Sort parent rides deterministically so subsequent enumeration is
+		// independent of the upstream collection's iteration order (e.g.,
+		// ConcurrentHashMap.values() from the previous degree).
+		List<Ride> parents = new ArrayList<>(ridesToExtend);
+		parents.sort((a, b) -> compareSortedIntArrays(sortedRequestIndices(a), sortedRequestIndices(b)));
+
+		// Collect unique base sets for neighbor enumeration (iteration order is
+		// now deterministic since `parents` is sorted).
 		List<int[]> uniqueBaseSets = new ArrayList<>();
 		{
 			var seen = new java.util.HashSet<String>();
-			for (Ride ride : ridesToExtend) {
-				int[] idx = ride.getRequestIndices().clone();
-				Arrays.sort(idx);
+			for (Ride ride : parents) {
+				int[] idx = sortedRequestIndices(ride);
 				if (seen.add(Arrays.toString(idx))) {
 					uniqueBaseSets.add(idx);
 				}
@@ -114,70 +120,70 @@ public final class RideExtender {
 		int parallelism = exMasConfig.getAlgorithmProcessCount();
 		if (parallelism <= 0) parallelism = Runtime.getRuntime().availableProcessors();
 		log.info("  {} base rides in {} unique request sets, {} threads",
-				ridesToExtend.size(), uniqueBaseSets.size(), parallelism);
+				parents.size(), uniqueBaseSets.size(), parallelism);
 
-		// Shared concurrent state:
-		// - claimedSets: atomic dedup (first thread to add a hash processes it)
-		// - resultBySetHash: successful rides
-		ConcurrentHashMap.KeySetView<Long, Boolean> claimedSets = ConcurrentHashMap.newKeySet();
+		// Phase 1 (sequential): enumerate every (parentRide, newReq) extension and
+		// pick a canonical parent per unique child set. Canonical rule: the parent
+		// with lex-smallest sorted request indices wins. This is a total order, so
+		// the canonical map is deterministic regardless of iteration sequence.
+		// Sequential cost: one int[] clone + sort + hash + merge per (parent, newReq)
+		// tuple; dominated by phase 2 in practice.
+		Map<Long, CanonicalExtension> canonicalExtensions = new HashMap<>();
+		int totalEnumerated = 0;
+		for (Ride parentRide : parents) {
+			int[] baseSetIndices = sortedRequestIndices(parentRide);
+			int[] neighbors;
+			if (prevDegreeGraph != null) {
+				neighbors = prevDegreeGraph.findExtensions(baseSetIndices);
+			} else {
+				neighbors = graph.findCommonNeighborsSorted(baseSetIndices);
+			}
+			for (int newReq : neighbors) {
+				int[] newSet = buildSortedRequestSet(baseSetIndices, newReq);
+				long newSetHash = hashRequestSet(newSet);
+				totalEnumerated++;
+				CanonicalExtension incoming =
+						new CanonicalExtension(parentRide, baseSetIndices, newSet, newSetHash);
+				canonicalExtensions.merge(newSetHash, incoming, (existing, candidate) ->
+						compareSortedIntArrays(existing.parentSortedIndices,
+								candidate.parentSortedIndices) <= 0
+						? existing : candidate);
+			}
+		}
+		int canonicalCount = canonicalExtensions.size();
+		int dedupSkipped = totalEnumerated - canonicalCount;
+
+		// Phase 2 (parallel): process each canonical extension exactly once. Since
+		// each newSetHash has a unique canonical (parent, newReq) pair, no races on
+		// resultBySetHash.put — the output is a pure function of the deterministic
+		// canonical map.
 		ConcurrentHashMap<Long, Ride> resultBySetHash = new ConcurrentHashMap<>();
-
-		// Progress counters (thread-safe)
-		AtomicInteger baseSetsCompleted = new AtomicInteger();
 		AtomicInteger setsProcessed = new AtomicInteger();
-		AtomicInteger setsSkippedDedup = new AtomicInteger();
-		int totalBaseSets = uniqueBaseSets.size();
-
-		// Per-thread profiling stats (keyed by thread ID for reliable collection)
+		AtomicInteger resultsFound = new AtomicInteger();
 		ConcurrentHashMap<Long, EnumerationStats> threadStatsMap = new ConcurrentHashMap<>();
 
-		// Parallel processing over base sets
 		ForkJoinPool pool = new ForkJoinPool(parallelism);
 		try {
 			pool.submit(() ->
-				ridesToExtend.parallelStream().forEach(parentRide -> {
-					// Register this thread's stats for collection
+				canonicalExtensions.values().parallelStream().forEach(ext -> {
 					threadStatsMap.putIfAbsent(Thread.currentThread().getId(), EnumerationStats.get());
 
-					int[] baseSetIndices = parentRide.getRequestIndices().clone();
-					java.util.Arrays.sort(baseSetIndices);
-
-					int[] neighbors;
-					if (prevDegreeGraph != null) {
-						neighbors = prevDegreeGraph.findExtensions(baseSetIndices);
-					} else {
-						neighbors = graph.findCommonNeighborsSorted(baseSetIndices);
+					int done = setsProcessed.incrementAndGet();
+					Ride bestRide = processSet(ext.newSet, ext.newSetHash, targetDegree, ext.parentRide);
+					if (bestRide != null) {
+						resultBySetHash.put(ext.newSetHash, bestRide);
+						resultsFound.incrementAndGet();
 					}
 
-					for (int newReq : neighbors) {
-						int[] newSet = buildSortedRequestSet(baseSetIndices, newReq);
-						long newSetHash = hashRequestSet(newSet);
-
-						// Atomic dedup: only first thread to add this hash processes it
-						if (!claimedSets.add(newSetHash)) {
-							setsSkippedDedup.incrementAndGet();
-							continue;
-						}
-
-						setsProcessed.incrementAndGet();
-
-						Ride bestRide = processSet(newSet, newSetHash, targetDegree, parentRide);
-						if (bestRide != null) {
-							resultBySetHash.put(newSetHash, bestRide);
-						}
-					}
-
-					// Progress logging per base set (coarser, less contention)
-					int done = baseSetsCompleted.incrementAndGet();
-					if (Integer.bitCount(done) == 1 && done >= 64) {
+					// Progress log at power-of-two milestones
+					if (Integer.bitCount(done) == 1 && done >= 256) {
 						double elapsed = (System.currentTimeMillis() - phaseStartTime) / 1000.0;
-						double baseSetsPerSec = done / Math.max(0.001, elapsed);
-						int remaining = totalBaseSets - done;
-						double etaSeconds = remaining / Math.max(1, baseSetsPerSec);
-						log.info("  Progress: {}/{} base sets ({} candidate sets, {} results, {} dedup), {} base/s, ETA {}",
-								done, totalBaseSets, setsProcessed.get(), resultBySetHash.size(),
-								setsSkippedDedup.get(), String.format("%.0f", baseSetsPerSec),
-								formatEta(etaSeconds));
+						double rate = done / Math.max(0.001, elapsed);
+						int remaining = canonicalCount - done;
+						double etaSeconds = remaining / Math.max(1, rate);
+						log.info("  Progress: {}/{} canonical sets ({} results), {} sets/s, ETA {}",
+								done, canonicalCount, resultsFound.get(),
+								String.format("%.0f", rate), formatEta(etaSeconds));
 					}
 				})
 			).get();
@@ -198,8 +204,14 @@ public final class RideExtender {
 		// Store results for graph building (accessed by buildDegreeGraph)
 		this.lastResultBySetHash = resultBySetHash;
 
-		// Assign sequential indices (sequential, fast)
+		// Deterministic output order: sort by sorted-request-indices lex.
+		// Required because resultBySetHash.values() iteration is not deterministic
+		// on ConcurrentHashMap — without this sort, parallel runs produce
+		// byte-different CSVs even though the ride set is identical.
 		List<Ride> results = new ArrayList<>(resultBySetHash.values());
+		results.sort((a, b) -> compareSortedIntArrays(sortedRequestIndices(a), sortedRequestIndices(b)));
+
+		// Assign sequential indices after sort so ride indices are deterministic.
 		for (int i = 0; i < results.size(); i++) {
 			results.set(i, rebuildWithIndex(results.get(i), nextRideIndex + i));
 		}
@@ -207,9 +219,45 @@ public final class RideExtender {
 		long elapsed = System.currentTimeMillis() - phaseStartTime;
 		log.info("Extension complete: {} rides at degree {} in {}s ({} candidate sets, {} threads, {} skipped dedup, {} base sets)",
 				results.size(), targetDegree, String.format("%.1f", elapsed / 1000.0),
-				setsProcessed.get(), parallelism, setsSkippedDedup.get(), uniqueBaseSets.size());
+				canonicalCount, parallelism, dedupSkipped, uniqueBaseSets.size());
 
 		return results;
+	}
+
+	/** Return a freshly allocated sorted copy of a ride's request indices. */
+	private static int[] sortedRequestIndices(Ride ride) {
+		int[] idx = ride.getRequestIndices().clone();
+		Arrays.sort(idx);
+		return idx;
+	}
+
+	/** Lexicographic total order on sorted int arrays. */
+	private static int compareSortedIntArrays(int[] a, int[] b) {
+		int len = Math.min(a.length, b.length);
+		for (int i = 0; i < len; i++) {
+			int cmp = Integer.compare(a[i], b[i]);
+			if (cmp != 0) return cmp;
+		}
+		return Integer.compare(a.length, b.length);
+	}
+
+	/**
+	 * Canonical assignment of one (parent, newSet) extension to process. Emitted
+	 * by phase 1 of {@link #extendRides} and consumed in phase 2.
+	 */
+	private static final class CanonicalExtension {
+		final Ride parentRide;
+		final int[] parentSortedIndices;
+		final int[] newSet;
+		final long newSetHash;
+
+		CanonicalExtension(Ride parentRide, int[] parentSortedIndices,
+						   int[] newSet, long newSetHash) {
+			this.parentRide = parentRide;
+			this.parentSortedIndices = parentSortedIndices;
+			this.newSet = newSet;
+			this.newSetHash = newSetHash;
+		}
 	}
 
 	/**
