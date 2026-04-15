@@ -186,8 +186,21 @@ public final class RideExtender {
 		// Producer: single thread walks parents in sort order, claims hashes,
 		// enqueues tasks. Sequential by construction so claim order is
 		// deterministic.
+		//
+		// Interrupt safety: if the producer throws (e.g. queue.put interrupted)
+		// before the poison pills are sent, the worker threads stay blocked on
+		// queue.take() forever. The try/finally calls workers.shutdownNow() on
+		// any exceptional exit so blocked workers unblock via InterruptedException
+		// and return cleanly. On the happy path the poison pills drain the queue
+		// normally and shutdownNow() is skipped.
+		boolean producerCompleted = false;
 		try {
-			HashSet<Long> claimedHashes = new HashSet<>(Math.max(1024, parents.size() * 4));
+			// expectedClaimed is the expected element count (~= parents.size() * 4
+			// at deg-4/25 %, ~64 M at scale). HashSet(int) takes the underlying
+			// table *capacity*, not element count — so we pre-divide by the load
+			// factor (0.75) and add 1 to avoid rehashing mid-run.
+			int expectedClaimed = Math.max(1024, parents.size() * 4);
+			HashSet<Long> claimedHashes = new HashSet<>((int) (expectedClaimed / 0.75f) + 1, 0.75f);
 			int totalEnumerated = 0;
 			for (Ride parentRide : parents) {
 				int[] baseSetIndices = sortedRequestIndices(parentRide);
@@ -204,12 +217,7 @@ public final class RideExtender {
 					if (!claimedHashes.add(newSetHash)) {
 						continue; // duplicate child set — a lex-smaller parent already claimed it
 					}
-					try {
-						queue.put(new ExtensionTask(parentRide, newSet, newSetHash));
-					} catch (InterruptedException e) {
-						Thread.currentThread().interrupt();
-						throw new RuntimeException("Producer interrupted", e);
-					}
+					queue.put(new ExtensionTask(parentRide, newSet, newSetHash));
 				}
 			}
 			enumerationCounters[0] = totalEnumerated;
@@ -219,12 +227,21 @@ public final class RideExtender {
 			for (int t = 0; t < parallelism; t++) {
 				queue.put(POISON);
 			}
+			producerCompleted = true;
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new RuntimeException("Producer interrupted sending poison pills", e);
+			throw new RuntimeException("Producer interrupted", e);
+		} finally {
+			if (!producerCompleted) {
+				// Release blocked workers so they exit queue.take() via
+				// InterruptedException and return without processing more tasks.
+				workers.shutdownNow();
+			}
 		}
 
-		// Wait for workers to drain
+		// Wait for workers to drain (normal path) or exit (abnormal path).
+		// shutdown() is a no-op after shutdownNow(); awaitTermination just
+		// confirms the workers have actually finished.
 		workers.shutdown();
 		try {
 			if (!workers.awaitTermination(24, TimeUnit.HOURS)) {
