@@ -81,7 +81,21 @@ public class RunBavariaEqasimDemandExtraction {
 	private static final int TRAVEL_TIME_BIN_SIZE = 900;
 	private static final int TRAVEL_TIME_END = 36 * 3600;
 
-	public static void main(String[] args) throws Exception {
+	public static final class ParsedArgs {
+		public final int sample;
+		public final String ascYaml;
+		public final String travelTimesPath;
+		public final String outputDir;
+
+		ParsedArgs(int sample, String ascYaml, String travelTimesPath, String outputDir) {
+			this.sample = sample;
+			this.ascYaml = ascYaml;
+			this.travelTimesPath = travelTimesPath;
+			this.outputDir = outputDir;
+		}
+	}
+
+	static ParsedArgs parseArgs(String[] args) {
 		int sample = -1;
 		String ascYaml = null;
 		String travelTimesPath = null;
@@ -96,27 +110,33 @@ public class RunBavariaEqasimDemandExtraction {
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
+		return new ParsedArgs(sample, ascYaml, travelTimesPath, outputDir);
+	}
 
-		if (sample < 0 || ascYaml == null || travelTimesPath == null) {
+	public static void main(String[] args) throws Exception {
+		ParsedArgs p = parseArgs(args);
+
+		if (p.sample < 0 || p.ascYaml == null || p.travelTimesPath == null) {
 			System.err.println("Usage: --sample <N> --asc-yaml <path> --travel-times <path> "
 					+ "[--output-dir <path>]");
 			System.exit(1);
 		}
 
 		String populationPath = POPULATION_DIR
-				+ "/population_" + sample + "pct_kelheim30km.xml.gz";
+				+ "/population_" + p.sample + "pct_kelheim30km.xml.gz";
+		String outputDir = p.outputDir;
 		if (outputDir == null) {
-			outputDir = "../../../outputs/eqasim-demand-extraction-" + sample + "pct";
+			outputDir = "../../../outputs/eqasim-demand-extraction-" + p.sample + "pct";
 		}
 
 		log.info("=== Bavaria eqasim DRT demand extraction ===");
-		log.info("  Sample:        {}%", sample);
+		log.info("  Sample:        {}%", p.sample);
 		log.info("  Population:    {}", populationPath);
-		log.info("  ASC YAML:      {}", ascYaml);
-		log.info("  Travel times:  {}", travelTimesPath);
+		log.info("  ASC YAML:      {}", p.ascYaml);
+		log.info("  Travel times:  {}", p.travelTimesPath);
 		log.info("  Output:        {}", outputDir);
 
-		run(sample, populationPath, ascYaml, travelTimesPath, outputDir);
+		run(p.sample, populationPath, p.ascYaml, p.travelTimesPath, outputDir);
 	}
 
 	private static void run(int sample, String populationPath, String ascYaml,
