@@ -156,19 +156,18 @@ public class RunBavariaEqasimDemandExtraction {
 		log.info("  Travel times:  {}", p.travelTimesPath);
 		log.info("  Output:        {}", outputDir);
 
-		run(p.sample, populationPath, p.ascYaml, p.travelTimesPath, outputDir);
+		run(p, populationPath, outputDir);
 	}
 
-	private static void run(int sample, String populationPath, String ascYaml,
-			String travelTimesPath, String outputDir) throws Exception {
+	private static void run(ParsedArgs p, String populationPath, String outputDir) throws Exception {
 
-		Map<String, Double> ascs = loadCalibratedAsc(ascYaml);
+		Map<String, Double> ascs = loadCalibratedAsc(p.ascYaml);
 
 		Path outDir = Path.of(outputDir);
 		Files.createDirectories(outDir);
 
-		Config config = buildConfig(sample, populationPath);
-		configureForDemandExtraction(config, outDir, sample);
+		Config config = buildConfig(p.sample, populationPath);
+		configureForDemandExtraction(config, outDir, p);
 		configureEqasim(config);
 
 		DemandExtractionConfigValidator.prepareConfigForDemandExtraction(config);
@@ -202,15 +201,15 @@ public class RunBavariaEqasimDemandExtraction {
 			public void install() {
 				bind(org.eqasim.core.simulation.mode_choice.parameters.ModeParameters.class)
 						.toProvider(() -> {
-							BavariaModeParameters p = BavariaModeParameters.buildDefault();
-							applyAscOverrides(p, ascs);
-							return p;
+							BavariaModeParameters bmp = BavariaModeParameters.buildDefault();
+							applyAscOverrides(bmp, ascs);
+							return bmp;
 						});
 			}
 		});
 
 		// Load offline travel times, bind as car TravelTime
-		TravelTime offlineTravelTime = loadOfflineTravelTimes(travelTimesPath);
+		TravelTime offlineTravelTime = loadOfflineTravelTimes(p.travelTimesPath);
 		controler.addOverridingModule(new org.matsim.core.controler.AbstractModule() {
 			@Override
 			public void install() {
@@ -433,14 +432,14 @@ public class RunBavariaEqasimDemandExtraction {
 	// Demand extraction configuration (mirrors RunBavaria30kmDemandExtraction)
 	// -------------------------------------------------------------------------
 
-	private static void configureForDemandExtraction(Config config, Path outputDir, int sample) {
+	private static void configureForDemandExtraction(Config config, Path outputDir, ParsedArgs p) {
 		config.vspExperimental().setVspDefaultsCheckingLevel(
 				VspExperimentalConfigGroup.VspDefaultsCheckingLevel.info);
 
 		config.controller().setOutputDirectory(outputDir.toString());
 		config.controller().setOverwriteFileSetting(
 				OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
-		config.controller().setRunId("bavaria-30km-" + sample + "pct-eqasim-exmas");
+		config.controller().setRunId("bavaria-30km-" + p.sample + "pct-eqasim-exmas");
 		config.controller().setLastIteration(0);
 		config.controller().setWriteEventsInterval(0);
 		config.controller().setWritePlansInterval(0);
@@ -469,6 +468,24 @@ public class RunBavariaEqasimDemandExtraction {
 		exMasConfig.setPtOptimizeDepartureTime(false);
 		exMasConfig.setHeuristicPruningEnabled(true);
 		exMasConfig.setPruningKeepTopFractionPerRequestSet(0.3);
+
+		// Sweep-flag overrides. Applied after defaults so CLI always wins.
+		if (!Double.isNaN(p.searchHorizon)) {
+			log.info("  Override: searchHorizon = {}", p.searchHorizon);
+			exMasConfig.setSearchHorizon(p.searchHorizon);
+		}
+		if (!Double.isNaN(p.maxDetourFactor)) {
+			log.info("  Override: maxDetourFactor = {}", p.maxDetourFactor);
+			exMasConfig.setMaxDetourFactor(p.maxDetourFactor);
+		}
+		if (!Double.isNaN(p.minDrtCostPerKm)) {
+			log.info("  Override: minDrtCostPerKm = {}", p.minDrtCostPerKm);
+			exMasConfig.setMinDrtCostPerKm(p.minDrtCostPerKm);
+		}
+		if (!Double.isNaN(p.interDegreeKeepFraction)) {
+			log.info("  Override: interDegreeKeepFraction = {}", p.interDegreeKeepFraction);
+			exMasConfig.setInterDegreeKeepFraction(p.interDegreeKeepFraction);
+		}
 
 		Set<String> privateVehicles = new HashSet<>(Set.of("car", "bike"));
 		exMasConfig.setPrivateVehicleModes(privateVehicles);
