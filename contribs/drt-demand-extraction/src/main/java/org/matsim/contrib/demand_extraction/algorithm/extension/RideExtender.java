@@ -104,11 +104,14 @@ public final class RideExtender {
 				ridesToExtend.size(), targetDegree - 1, targetDegree);
 		long phaseStartTime = System.currentTimeMillis();
 
-		// Sort parent rides deterministically so subsequent enumeration is
-		// independent of the upstream collection's iteration order (e.g.,
-		// ConcurrentHashMap.values() from the previous degree).
+		// Sort parents by (routedDistance ASC, sortedRequestIndices lex) so the
+		// streaming producer claims each child set with the tightest-seeding
+		// parent first. Ties on distance fall through to lex for determinism.
+		// See compareParentCanonicalKey for the full order definition.
 		List<Ride> parents = new ArrayList<>(ridesToExtend);
-		parents.sort((a, b) -> compareSortedIntArrays(sortedRequestIndices(a), sortedRequestIndices(b)));
+		parents.sort((a, b) -> compareParentCanonicalKey(
+				a.getRideDistance(), sortedRequestIndices(a),
+				b.getRideDistance(), sortedRequestIndices(b)));
 
 		// Collect unique base sets for neighbor enumeration (iteration order is
 		// now deterministic since `parents` is sorted).
