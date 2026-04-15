@@ -198,12 +198,17 @@ public class RunBavariaEqasimDemandExtraction {
 				throw new IOException("Empty YAML file: " + yamlPath);
 			}
 			Map<String, Double> result = new LinkedHashMap<>();
+			// Required: the 4 base ASCs. Optional: carPassenger.alpha_u (5-param variant).
 			for (String key : List.of("car.alpha_u", "bike.alpha_u", "walk.alpha_u", "pt.alpha_u")) {
 				Object v = raw.get(key);
 				if (v == null) {
 					throw new IOException("Missing key '" + key + "' in " + yamlPath);
 				}
 				result.put(key, ((Number) v).doubleValue());
+			}
+			Object cp = raw.get("carPassenger.alpha_u");
+			if (cp != null) {
+				result.put("carPassenger.alpha_u", ((Number) cp).doubleValue());
 			}
 			log.info("Loaded calibrated ASCs from {}: {}", yamlPath, result);
 			return result;
@@ -292,8 +297,31 @@ public class RunBavariaEqasimDemandExtraction {
 		config.routing().setNetworkModes(java.util.List.of("car"));
 
 		registerEqasimActivities(config);
+		registerMinimalModeParams(config);
 
 		return config;
+	}
+
+	/**
+	 * Register minimal mode params for MATSim's scoring function, which fires during
+	 * QSim event processing even though the DemandExtractionListener uses
+	 * EqasimScoringAdapter for its own budget computation. Without these, QSim crashes
+	 * with "just encountered mode for which no scoring parameters are defined" when a
+	 * leg of the unset mode is emitted.
+	 */
+	private static void registerMinimalModeParams(Config config) {
+		ScoringConfigGroup scoring = config.scoring();
+		String[] modes = {"car", "pt", "walk", "bike", "bicycle", "car_passenger", "ride", "drt"};
+		for (String mode : modes) {
+			ScoringConfigGroup.ModeParams mp = scoring.getModes().get(mode);
+			if (mp == null) {
+				mp = scoring.getOrCreateModeParams(mode);
+			}
+			mp.setConstant(0.0);
+			mp.setMarginalUtilityOfTraveling(0.0);
+			mp.setMarginalUtilityOfDistance(0.0);
+			mp.setMonetaryDistanceRate(0.0);
+		}
 	}
 
 	private static void registerEqasimActivities(Config config) {
