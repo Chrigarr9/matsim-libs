@@ -32,4 +32,36 @@ class RunBavariaEqasimDemandExtractionArgsTest {
         ParsedArgs p = RunBavariaEqasimDemandExtraction.parseArgs(args);
         assertEquals("/tmp/out", p.outputDir);
     }
+
+    @Test
+    void parsesAllSweepFlags() {
+        String[] args = {
+                "--sample", "10",
+                "--asc-yaml", "a.yml",
+                "--travel-times", "t.tsv",
+                "--search-horizon", "1800",
+                "--max-detour-factor", "1.3",
+                "--min-drt-cost-per-km", "0.05",
+                "--inter-degree-keep-fraction", "0.01"
+        };
+        ParsedArgs p = RunBavariaEqasimDemandExtraction.parseArgs(args);
+        assertEquals(1800.0, p.searchHorizon);
+        assertEquals(1.3, p.maxDetourFactor);
+        assertEquals(0.05, p.minDrtCostPerKm);
+        assertEquals(0.01, p.interDegreeKeepFraction);
+    }
+
+    @Test
+    void sweepFlagsDefaultToNaNWhenAbsent() {
+        String[] args = {
+                "--sample", "10",
+                "--asc-yaml", "a.yml",
+                "--travel-times", "t.tsv"
+        };
+        ParsedArgs p = RunBavariaEqasimDemandExtraction.parseArgs(args);
+        assertEquals(true, Double.isNaN(p.searchHorizon));
+        assertEquals(true, Double.isNaN(p.maxDetourFactor));
+        assertEquals(true, Double.isNaN(p.minDrtCostPerKm));
+        assertEquals(true, Double.isNaN(p.interDegreeKeepFraction));
+    }
 }

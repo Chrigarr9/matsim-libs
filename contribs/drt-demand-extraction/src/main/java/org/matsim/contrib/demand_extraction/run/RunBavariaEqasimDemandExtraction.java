@@ -86,12 +86,22 @@ public class RunBavariaEqasimDemandExtraction {
 		public final String ascYaml;
 		public final String travelTimesPath;
 		public final String outputDir;
+		public final double searchHorizon;
+		public final double maxDetourFactor;
+		public final double minDrtCostPerKm;
+		public final double interDegreeKeepFraction;
 
-		ParsedArgs(int sample, String ascYaml, String travelTimesPath, String outputDir) {
+		ParsedArgs(int sample, String ascYaml, String travelTimesPath, String outputDir,
+				double searchHorizon, double maxDetourFactor,
+				double minDrtCostPerKm, double interDegreeKeepFraction) {
 			this.sample = sample;
 			this.ascYaml = ascYaml;
 			this.travelTimesPath = travelTimesPath;
 			this.outputDir = outputDir;
+			this.searchHorizon = searchHorizon;
+			this.maxDetourFactor = maxDetourFactor;
+			this.minDrtCostPerKm = minDrtCostPerKm;
+			this.interDegreeKeepFraction = interDegreeKeepFraction;
 		}
 	}
 
@@ -100,6 +110,10 @@ public class RunBavariaEqasimDemandExtraction {
 		String ascYaml = null;
 		String travelTimesPath = null;
 		String outputDir = null;
+		double searchHorizon = Double.NaN;
+		double maxDetourFactor = Double.NaN;
+		double minDrtCostPerKm = Double.NaN;
+		double interDegreeKeepFraction = Double.NaN;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -107,10 +121,15 @@ public class RunBavariaEqasimDemandExtraction {
 				case "--asc-yaml" -> ascYaml = args[++i];
 				case "--travel-times" -> travelTimesPath = args[++i];
 				case "--output-dir" -> outputDir = args[++i];
+				case "--search-horizon" -> searchHorizon = Double.parseDouble(args[++i]);
+				case "--max-detour-factor" -> maxDetourFactor = Double.parseDouble(args[++i]);
+				case "--min-drt-cost-per-km" -> minDrtCostPerKm = Double.parseDouble(args[++i]);
+				case "--inter-degree-keep-fraction" -> interDegreeKeepFraction = Double.parseDouble(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
-		return new ParsedArgs(sample, ascYaml, travelTimesPath, outputDir);
+		return new ParsedArgs(sample, ascYaml, travelTimesPath, outputDir,
+				searchHorizon, maxDetourFactor, minDrtCostPerKm, interDegreeKeepFraction);
 	}
 
 	public static void main(String[] args) throws Exception {
@@ -118,7 +137,8 @@ public class RunBavariaEqasimDemandExtraction {
 
 		if (p.sample < 0 || p.ascYaml == null || p.travelTimesPath == null) {
 			System.err.println("Usage: --sample <N> --asc-yaml <path> --travel-times <path> "
-					+ "[--output-dir <path>]");
+					+ "[--output-dir <path>] [--search-horizon <s>] [--max-detour-factor <f>] "
+					+ "[--min-drt-cost-per-km <eur>] [--inter-degree-keep-fraction <f>]");
 			System.exit(1);
 		}
 
