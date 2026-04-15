@@ -425,57 +425,77 @@ public final class OrderingEnumerator {
 			segMap.put(c, network.getSegment(prevLink, requests[c].originLinkId, currentTime));
 		}
 
-		// Two-level sort: primary = parent-consistent rank, secondary = cheapest-next-segment.
+		// Split candidates by parent-consistent rank, sort each group by segment
+		// distance independently, then iterate each group with its own distance-cut
+		// break. This is required for correctness: a two-level sort (rank primary,
+		// distance secondary) combined with a single distance-cut break is unsound
+		// — rank-1 candidates with shorter distances sit behind rank-0 and are
+		// silently skipped when an expensive rank-0 triggers the break. Splitting
+		// into two passes restores admissibility while preserving the seed-bias
+		// optimization (rank-0 visited first tightens bestValidDist before rank-1).
 		int nextParentLocal = nextUnplacedInSeed(seedLocalOrigin, used);
 		int newRequestLocal = used[seedLocalNewRequest] ? -1 : seedLocalNewRequest;
-		candidates.sort((a, b) -> {
-			int rankA = parentConsistentRank(a, nextParentLocal, newRequestLocal);
-			int rankB = parentConsistentRank(b, nextParentLocal, newRequestLocal);
-			if (rankA != rankB) return Integer.compare(rankA, rankB);
-			return Double.compare(segMap.get(a).getDistance(), segMap.get(b).getDistance());
-		});
-
-		int candCount = candidates.size();
-		for (int idx = 0; idx < candCount; idx++) {
-			int c = candidates.get(idx);
-			TravelSegment seg = segMap.get(c);
-			double newPartialDist = partialDist + seg.getDistance();
-			if (newPartialDist > bestValidDist[0]) {
-				EnumerationStats s = EnumerationStats.get();
-				s.bnbOriginCuts++;
-				s.bnbOriginSkippedCandidates += (candCount - idx);
-				break;
+		List<Integer> rank0 = new ArrayList<>();
+		List<Integer> rank1 = new ArrayList<>();
+		for (int c : candidates) {
+			if (parentConsistentRank(c, nextParentLocal, newRequestLocal) == 0) {
+				rank0.add(c);
+			} else {
+				rank1.add(c);
 			}
+		}
+		Comparator<Integer> byDistOrigin = (a, b) -> Double.compare(
+				segMap.get(a).getDistance(), segMap.get(b).getDistance());
+		rank0.sort(byDistOrigin);
+		rank1.sort(byDistOrigin);
 
-			double newPickupTime = currentTime + seg.getTravelTime();
-			DrtRequest reqC = requests[c];
-			double delayC = newPickupTime - reqC.getRequestTime();
-			double newLowC = -delayC - reqC.getMaxNegativeDelay();
-			double newHighC = (reqC.getMaxPositiveDelay()
-					- Math.max(0.0, reqC.getPositiveDelayRelComponent())) - delayC;
-			double newL = currentL > newLowC ? currentL : newLowC;
-			double newU = currentU < newHighC ? currentU : newHighC;
-			if (newL > newU + DELAY_WINDOW_EPSILON) {
-				EnumerationStats.get().prunedByDelayWindowOrigin++;
-				continue;
+		// Process rank0 then rank1, each with its own break. Each sub-loop is
+		// sound because its list is distance-sorted internally. bestValidDist[0]
+		// may tighten during the rank0 pass; rank1's break uses the current value.
+		for (int pass = 0; pass < 2; pass++) {
+			List<Integer> group = (pass == 0) ? rank0 : rank1;
+			int groupCount = group.size();
+			for (int idx = 0; idx < groupCount; idx++) {
+				int c = group.get(idx);
+				TravelSegment seg = segMap.get(c);
+				double newPartialDist = partialDist + seg.getDistance();
+				if (newPartialDist > bestValidDist[0]) {
+					EnumerationStats s = EnumerationStats.get();
+					s.bnbOriginCuts++;
+					s.bnbOriginSkippedCandidates += (groupCount - idx);
+					break;
+				}
+
+				double newPickupTime = currentTime + seg.getTravelTime();
+				DrtRequest reqC = requests[c];
+				double delayC = newPickupTime - reqC.getRequestTime();
+				double newLowC = -delayC - reqC.getMaxNegativeDelay();
+				double newHighC = (reqC.getMaxPositiveDelay()
+						- Math.max(0.0, reqC.getPositiveDelayRelComponent())) - delayC;
+				double newL = currentL > newLowC ? currentL : newLowC;
+				double newU = currentU < newHighC ? currentU : newHighC;
+				if (newL > newU + DELAY_WINDOW_EPSILON) {
+					EnumerationStats.get().prunedByDelayWindowOrigin++;
+					continue;
+				}
+
+				used[c] = true;
+				perm[depth] = c;
+				pickupTimes[c] = newPickupTime;
+				connTT[depth - 1] = seg.getTravelTime();
+				connDist[depth - 1] = seg.getDistance();
+				connUtil[depth - 1] = seg.getNetworkUtility();
+				double newTotalMinInRemaining = totalMinInRemaining - minIn[c];
+				enumerateOriginsSeededWithEval(adj, n, pairs, network, requests,
+						requestIndices, bestValidDist, used, perm, pickupTimes, depth + 1,
+						newPartialDist, newPickupTime,
+						newL, newU,
+						seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
+						minIn, newTotalMinInRemaining,
+						evaluator,
+						connTT, connDist, connUtil);
+				used[c] = false;
 			}
-
-			used[c] = true;
-			perm[depth] = c;
-			pickupTimes[c] = newPickupTime;
-			connTT[depth - 1] = seg.getTravelTime();
-			connDist[depth - 1] = seg.getDistance();
-			connUtil[depth - 1] = seg.getNetworkUtility();
-			double newTotalMinInRemaining = totalMinInRemaining - minIn[c];
-			enumerateOriginsSeededWithEval(adj, n, pairs, network, requests,
-					requestIndices, bestValidDist, used, perm, pickupTimes, depth + 1,
-					newPartialDist, newPickupTime,
-					newL, newU,
-					seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
-					minIn, newTotalMinInRemaining,
-					evaluator,
-					connTT, connDist, connUtil);
-			used[c] = false;
 		}
 	}
 
@@ -924,87 +944,99 @@ public final class OrderingEnumerator {
 					requests[c].destinationLinkId, currentTime));
 		}
 
-		// Two-level sort: primary = parent-consistent rank, secondary = cheapest-next-segment.
+		// Split candidates by parent-consistent rank, sort each group by segment
+		// distance independently, then iterate each group with its own distance-cut
+		// break. See enumerateOriginsSeededWithEval for the correctness rationale.
 		int nextParentLocal = nextUnplacedInSeed(seedLocalDest, used);
 		int newRequestLocal = used[seedLocalNewRequest] ? -1 : seedLocalNewRequest;
-		candidates.sort((a, b) -> {
-			int rankA = parentConsistentRank(a, nextParentLocal, newRequestLocal);
-			int rankB = parentConsistentRank(b, nextParentLocal, newRequestLocal);
-			if (rankA != rankB) return Integer.compare(rankA, rankB);
-			return Double.compare(segMap.get(a).getDistance(), segMap.get(b).getDistance());
-		});
-
-		int candCount = candidates.size();
-		for (int idx = 0; idx < candCount; idx++) {
-			int c = candidates.get(idx);
-			TravelSegment seg = segMap.get(c);
-			double newPartialDist = partialDist + seg.getDistance();
-			if (newPartialDist > bestValidDist[0]) {
-				EnumerationStats sDest = EnumerationStats.get();
-				sDest.bnbDestCuts++;
-				sDest.bnbDestSkippedCandidates += (candCount - idx);
-				break;
+		List<Integer> rank0 = new ArrayList<>();
+		List<Integer> rank1 = new ArrayList<>();
+		for (int c : candidates) {
+			if (parentConsistentRank(c, nextParentLocal, newRequestLocal) == 0) {
+				rank0.add(c);
+			} else {
+				rank1.add(c);
 			}
+		}
+		Comparator<Integer> byDistDest = (a, b) -> Double.compare(
+				segMap.get(a).getDistance(), segMap.get(b).getDistance());
+		rank0.sort(byDistDest);
+		rank1.sort(byDistDest);
 
-			double newTime = currentTime + seg.getTravelTime();
-
-			// Check at Dropoff: passenger c's ride is now complete.
-			double fullInVehicle = newTime - pickupTimes[c];
-			if (fullInVehicle > requests[c].getMaxTravelTime()) {
-				stats.prunedByDropoffCheck++;
-				continue;
-			}
-
-			// Check B: after routing to this candidate's destination, would any
-			// remaining in-vehicle passenger exceed their maxTravelTime?
-			int bustedVictim = -1;
-			for (int p = 0; p < n; p++) {
-				if (used[p] || p == c) continue;
-				if (newTime - pickupTimes[p] > requests[p].getMaxTravelTime()) {
-					bustedVictim = p;
+		for (int pass = 0; pass < 2; pass++) {
+			List<Integer> group = (pass == 0) ? rank0 : rank1;
+			int groupCount = group.size();
+			for (int idx = 0; idx < groupCount; idx++) {
+				int c = group.get(idx);
+				TravelSegment seg = segMap.get(c);
+				double newPartialDist = partialDist + seg.getDistance();
+				if (newPartialDist > bestValidDist[0]) {
+					EnumerationStats sDest = EnumerationStats.get();
+					sDest.bnbDestCuts++;
+					sDest.bnbDestSkippedCandidates += (groupCount - idx);
 					break;
 				}
-			}
-			if (bustedVictim >= 0) {
-				stats.prunedByTravelTime++;
-				continue;
-			}
 
-			// Delay-window dropoff tightening.
-			DrtRequest reqC = requests[c];
-			double detourTimeC = fullInVehicle - reqC.getTravelTime();
-			double posRelC = reqC.getPositiveDelayRelComponent();
-			double negRelC = reqC.getNegativeDelayRelComponent();
-			double posAdjC = posRelC > 0 ? Math.max(0.0, posRelC - detourTimeC) : 0.0;
-			double negAdjC = negRelC > 0 ? Math.max(0.0, negRelC - detourTimeC) : 0.0;
-			double effMaxPosC = reqC.getMaxPositiveDelay() - detourTimeC - posAdjC;
-			double effMaxNegC = reqC.getMaxNegativeDelay() - negAdjC;
-			double delayC = pickupTimes[c] - reqC.getRequestTime();
-			double actualLowC = -delayC - effMaxNegC;
-			double actualHighC = effMaxPosC - delayC;
-			double newL = currentL > actualLowC ? currentL : actualLowC;
-			double newU = currentU < actualHighC ? currentU : actualHighC;
-			if (newL > newU + DELAY_WINDOW_EPSILON) {
-				EnumerationStats.get().prunedByDelayWindowDropoff++;
-				continue;
-			}
+				double newTime = currentTime + seg.getTravelTime();
 
-			used[c] = true;
-			perm[depth] = c;
-			int connIdx = n - 1 + depth;
-			connTT[connIdx] = seg.getTravelTime();
-			connDist[connIdx] = seg.getDistance();
-			connUtil[connIdx] = seg.getNetworkUtility();
-			double newTotalMinInRemainingDest = totalMinInRemaining - minIn[c + n];
-			enumerateDestTopoSeededWithEval(adj, n, origPerm, origPos, requestIndices, network, requests,
-					bestValidDist, used, perm, depth + 1,
-					newPartialDist, newTime,
-					requests[c].destinationLinkId, pickupTimes,
-					newL, newU,
-					seedLocalDest, seedLocalNewRequest,
-					minIn, newTotalMinInRemainingDest,
-					evaluator, connTT, connDist, connUtil);
-			used[c] = false;
+				// Check at Dropoff: passenger c's ride is now complete.
+				double fullInVehicle = newTime - pickupTimes[c];
+				if (fullInVehicle > requests[c].getMaxTravelTime()) {
+					stats.prunedByDropoffCheck++;
+					continue;
+				}
+
+				// Check B: after routing to this candidate's destination, would any
+				// remaining in-vehicle passenger exceed their maxTravelTime?
+				int bustedVictim = -1;
+				for (int p = 0; p < n; p++) {
+					if (used[p] || p == c) continue;
+					if (newTime - pickupTimes[p] > requests[p].getMaxTravelTime()) {
+						bustedVictim = p;
+						break;
+					}
+				}
+				if (bustedVictim >= 0) {
+					stats.prunedByTravelTime++;
+					continue;
+				}
+
+				// Delay-window dropoff tightening.
+				DrtRequest reqC = requests[c];
+				double detourTimeC = fullInVehicle - reqC.getTravelTime();
+				double posRelC = reqC.getPositiveDelayRelComponent();
+				double negRelC = reqC.getNegativeDelayRelComponent();
+				double posAdjC = posRelC > 0 ? Math.max(0.0, posRelC - detourTimeC) : 0.0;
+				double negAdjC = negRelC > 0 ? Math.max(0.0, negRelC - detourTimeC) : 0.0;
+				double effMaxPosC = reqC.getMaxPositiveDelay() - detourTimeC - posAdjC;
+				double effMaxNegC = reqC.getMaxNegativeDelay() - negAdjC;
+				double delayC = pickupTimes[c] - reqC.getRequestTime();
+				double actualLowC = -delayC - effMaxNegC;
+				double actualHighC = effMaxPosC - delayC;
+				double newL = currentL > actualLowC ? currentL : actualLowC;
+				double newU = currentU < actualHighC ? currentU : actualHighC;
+				if (newL > newU + DELAY_WINDOW_EPSILON) {
+					EnumerationStats.get().prunedByDelayWindowDropoff++;
+					continue;
+				}
+
+				used[c] = true;
+				perm[depth] = c;
+				int connIdx = n - 1 + depth;
+				connTT[connIdx] = seg.getTravelTime();
+				connDist[connIdx] = seg.getDistance();
+				connUtil[connIdx] = seg.getNetworkUtility();
+				double newTotalMinInRemainingDest = totalMinInRemaining - minIn[c + n];
+				enumerateDestTopoSeededWithEval(adj, n, origPerm, origPos, requestIndices, network, requests,
+						bestValidDist, used, perm, depth + 1,
+						newPartialDist, newTime,
+						requests[c].destinationLinkId, pickupTimes,
+						newL, newU,
+						seedLocalDest, seedLocalNewRequest,
+						minIn, newTotalMinInRemainingDest,
+						evaluator, connTT, connDist, connUtil);
+				used[c] = false;
+			}
 		}
 	}
 
