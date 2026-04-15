@@ -3,11 +3,15 @@ package org.matsim.contrib.demand_extraction.algorithm.extension;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.logging.log4j.LogManager;
@@ -82,10 +86,13 @@ public final class RideExtender {
 	/**
 	 * Extend rides from degree D to degree D+1 using ordering-based enumeration.
 	 *
-	 * <p>Parallelizes over base sets using a ForkJoinPool. Each thread independently
-	 * discovers candidate sets from its base sets, claims them via atomic
-	 * {@code ConcurrentHashMap.add()} for dedup, then processes inline (enumerate
-	 * orderings, route, validate). Zero intermediate storage of candidate sets.
+	 * <p>Streaming producer/consumer: a single producer thread walks parent rides
+	 * in deterministic sort order, claims each unique child-set hash in a
+	 * {@link HashSet}, and offers {@link ExtensionTask}s to a bounded
+	 * {@link ArrayBlockingQueue}. N workers drain the queue in parallel and
+	 * call {@link #processSet} (enumerate orderings, route, validate). Claim
+	 * order follows producer iteration, so canonical parent selection is
+	 * deterministic regardless of worker completion order.
 	 *
 	 * @param ridesToExtend degree-D rides (1 per request set)
 	 * @param nextRideIndex starting index for new rides
@@ -122,56 +129,46 @@ public final class RideExtender {
 		log.info("  {} base rides in {} unique request sets, {} threads",
 				parents.size(), uniqueBaseSets.size(), parallelism);
 
-		// Phase 1 (sequential): enumerate every (parentRide, newReq) extension and
-		// pick a canonical parent per unique child set. Canonical rule: the parent
-		// with lex-smallest sorted request indices wins. This is a total order, so
-		// the canonical map is deterministic regardless of iteration sequence.
-		// Sequential cost: one int[] clone + sort + hash + merge per (parent, newReq)
-		// tuple; dominated by phase 2 in practice.
-		Map<Long, CanonicalExtension> canonicalExtensions = new HashMap<>();
-		int totalEnumerated = 0;
-		for (Ride parentRide : parents) {
-			int[] baseSetIndices = sortedRequestIndices(parentRide);
-			int[] neighbors;
-			if (prevDegreeGraph != null) {
-				neighbors = prevDegreeGraph.findExtensions(baseSetIndices);
-			} else {
-				neighbors = graph.findCommonNeighborsSorted(baseSetIndices);
-			}
-			for (int newReq : neighbors) {
-				int[] newSet = buildSortedRequestSet(baseSetIndices, newReq);
-				long newSetHash = hashRequestSet(newSet);
-				totalEnumerated++;
-				CanonicalExtension incoming =
-						new CanonicalExtension(parentRide, baseSetIndices, newSet, newSetHash);
-				canonicalExtensions.merge(newSetHash, incoming, (existing, candidate) ->
-						compareSortedIntArrays(existing.parentSortedIndices,
-								candidate.parentSortedIndices) <= 0
-						? existing : candidate);
-			}
-		}
-		int canonicalCount = canonicalExtensions.size();
-		int dedupSkipped = totalEnumerated - canonicalCount;
-
-		// Phase 2 (parallel): process each canonical extension exactly once. Since
-		// each newSetHash has a unique canonical (parent, newReq) pair, no races on
-		// resultBySetHash.put — the output is a pure function of the deterministic
-		// canonical map.
+		// Streaming dedup: single producer walks parents in sorted order,
+		// claims each unique child-set hash, and offers tasks to a bounded
+		// queue. Workers drain the queue in parallel. Claim order = producer
+		// iteration order = sort order, so canonical parent selection is
+		// deterministic regardless of worker completion order.
+		//
+		// Memory win vs the prior two-phase design: the CanonicalExtension
+		// map materialized ~64M entries at deg-4/25% (~6-8 GB). Here the only
+		// dedup state is a HashSet<Long> of claimed hashes (~3-4 GB at the
+		// same scale) plus a bounded queue of at most 4 * parallelism tasks.
 		ConcurrentHashMap<Long, Ride> resultBySetHash = new ConcurrentHashMap<>();
 		AtomicInteger setsProcessed = new AtomicInteger();
 		AtomicInteger resultsFound = new AtomicInteger();
 		ConcurrentHashMap<Long, EnumerationStats> threadStatsMap = new ConcurrentHashMap<>();
 
-		ForkJoinPool pool = new ForkJoinPool(parallelism);
-		try {
-			pool.submit(() ->
-				canonicalExtensions.values().parallelStream().forEach(ext -> {
-					threadStatsMap.putIfAbsent(Thread.currentThread().getId(), EnumerationStats.get());
+		BlockingQueue<ExtensionTask> queue = new ArrayBlockingQueue<>(Math.max(16, parallelism * 4));
+		ExecutorService workers = Executors.newFixedThreadPool(parallelism);
+
+		// We need the final counts *after* enumeration for the completion log.
+		// They're written by the producer and read by the main thread after join.
+		int[] enumerationCounters = new int[2]; // [0] = totalEnumerated, [1] = claimedCount
+
+		// Submit N worker tasks
+		for (int t = 0; t < parallelism; t++) {
+			workers.submit(() -> {
+				threadStatsMap.putIfAbsent(Thread.currentThread().getId(), EnumerationStats.get());
+				while (true) {
+					ExtensionTask task;
+					try {
+						task = queue.take();
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+						return;
+					}
+					if (task == POISON) return;
 
 					int done = setsProcessed.incrementAndGet();
-					Ride bestRide = processSet(ext.newSet, ext.newSetHash, targetDegree, ext.parentRide);
+					Ride bestRide = processSet(task.newSet, task.newSetHash, targetDegree, task.parentRide);
 					if (bestRide != null) {
-						resultBySetHash.put(ext.newSetHash, bestRide);
+						resultBySetHash.put(task.newSetHash, bestRide);
 						resultsFound.incrementAndGet();
 					}
 
@@ -179,19 +176,68 @@ public final class RideExtender {
 					if (Integer.bitCount(done) == 1 && done >= 256) {
 						double elapsed = (System.currentTimeMillis() - phaseStartTime) / 1000.0;
 						double rate = done / Math.max(0.001, elapsed);
-						int remaining = canonicalCount - done;
-						double etaSeconds = remaining / Math.max(1, rate);
-						log.info("  Progress: {}/{} canonical sets ({} results), {} sets/s, ETA {}",
-								done, canonicalCount, resultsFound.get(),
-								String.format("%.0f", rate), formatEta(etaSeconds));
+						log.info("  Progress: {} sets processed ({} results), {} sets/s",
+								done, resultsFound.get(), String.format("%.0f", rate));
 					}
-				})
-			).get();
-		} catch (InterruptedException | ExecutionException e) {
-			throw new RuntimeException("Parallel extension failed", e);
-		} finally {
-			pool.shutdown();
+				}
+			});
 		}
+
+		// Producer: single thread walks parents in sort order, claims hashes,
+		// enqueues tasks. Sequential by construction so claim order is
+		// deterministic.
+		try {
+			HashSet<Long> claimedHashes = new HashSet<>(Math.max(1024, parents.size() * 4));
+			int totalEnumerated = 0;
+			for (Ride parentRide : parents) {
+				int[] baseSetIndices = sortedRequestIndices(parentRide);
+				int[] neighbors;
+				if (prevDegreeGraph != null) {
+					neighbors = prevDegreeGraph.findExtensions(baseSetIndices);
+				} else {
+					neighbors = graph.findCommonNeighborsSorted(baseSetIndices);
+				}
+				for (int newReq : neighbors) {
+					int[] newSet = buildSortedRequestSet(baseSetIndices, newReq);
+					long newSetHash = hashRequestSet(newSet);
+					totalEnumerated++;
+					if (!claimedHashes.add(newSetHash)) {
+						continue; // duplicate child set — a lex-smaller parent already claimed it
+					}
+					try {
+						queue.put(new ExtensionTask(parentRide, newSet, newSetHash));
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+						throw new RuntimeException("Producer interrupted", e);
+					}
+				}
+			}
+			enumerationCounters[0] = totalEnumerated;
+			enumerationCounters[1] = claimedHashes.size();
+
+			// Signal workers to finish
+			for (int t = 0; t < parallelism; t++) {
+				queue.put(POISON);
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new RuntimeException("Producer interrupted sending poison pills", e);
+		}
+
+		// Wait for workers to drain
+		workers.shutdown();
+		try {
+			if (!workers.awaitTermination(24, TimeUnit.HOURS)) {
+				throw new RuntimeException("Workers did not terminate within 24h");
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new RuntimeException("Interrupted waiting for workers", e);
+		}
+
+		int totalEnumerated = enumerationCounters[0];
+		int canonicalCount = enumerationCounters[1];
+		int dedupSkipped = totalEnumerated - canonicalCount;
 
 		// Log profiling stats (thread-local values captured via threadStatsMap)
 		if (!threadStatsMap.isEmpty()) {
@@ -242,23 +288,44 @@ public final class RideExtender {
 	}
 
 	/**
-	 * Canonical assignment of one (parent, newSet) extension to process. Emitted
-	 * by phase 1 of {@link #extendRides} and consumed in phase 2.
+	 * Total order on (parent routedDistance, parent sortedRequestIndices).
+	 * Primary key: routed distance ASC (shortest parent gives the tightest
+	 * B&B seed for the child set). Secondary key: lex on sorted indices to
+	 * break distance ties deterministically.
+	 *
+	 * <p>Distances within {@link #EPSILON} are treated as equal to prevent
+	 * FP noise from flipping canonical parent choices between runs.
+	 *
+	 * <p>Package-private for unit testing — keep the signature primitive
+	 * so tests don't need to construct full {@link Ride} fixtures.
 	 */
-	private static final class CanonicalExtension {
+	static int compareParentCanonicalKey(double distA, int[] indicesA,
+										 double distB, int[] indicesB) {
+		double diff = distA - distB;
+		if (diff < -EPSILON) return -1;
+		if (diff > EPSILON) return 1;
+		return compareSortedIntArrays(indicesA, indicesB);
+	}
+
+	/**
+	 * Work item handed from the producer to a worker: one claimed child set
+	 * with its seed parent ride. Allocated once per claimed set. No references
+	 * beyond the parent ride and the child int[]; GC'd after worker processes.
+	 */
+	private static final class ExtensionTask {
 		final Ride parentRide;
-		final int[] parentSortedIndices;
 		final int[] newSet;
 		final long newSetHash;
 
-		CanonicalExtension(Ride parentRide, int[] parentSortedIndices,
-						   int[] newSet, long newSetHash) {
+		ExtensionTask(Ride parentRide, int[] newSet, long newSetHash) {
 			this.parentRide = parentRide;
-			this.parentSortedIndices = parentSortedIndices;
 			this.newSet = newSet;
 			this.newSetHash = newSetHash;
 		}
 	}
+
+	/** Sentinel poison pill used to signal worker termination. */
+	private static final ExtensionTask POISON = new ExtensionTask(null, null, 0L);
 
 	/**
 	 * Process a single candidate set: enumerate orderings, route, validate, return best ride.
