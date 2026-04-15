@@ -641,9 +641,6 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 		// Pruning settings: heuristic pruning controls combinatorial growth during ride
 		// extension
 		exMasConfig.setHeuristicPruningEnabled(true);
-		exMasConfig.setPruningKeepTopFractionPerRequestSet(0.3); // 1.0 keeps all per request-set group
-		exMasConfig.setPruningMinRidesToKeepPerRequestSet(3); // minimum floor per group
-		exMasConfig.setPruningMaxRidesToKeepPerRequestSet(0); // hard cap (0 disables)
 		// Degree-aware distance-savings pruning:
 		// requiredSaving(d) = scale * log2(d) (clamped).
 		// scale < 0 disables; scale = 0 matches legacy non-improving (rideDistance <=
@@ -651,9 +648,6 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 		exMasConfig.setPruningDistanceSavingsLogScale(0.25);
 		exMasConfig.setPruningDistanceSavingsMax(0.75);
 		exMasConfig.setPruningDistanceSavingsMinDegree(3); // do not prune paired rides (degree 2)
-		exMasConfig.setPruningRankingObjective("rideDistance"); // rideDistance | passengerTravelTime | passengerUtility
-		exMasConfig.setPruningRankingGoal("minimize"); // minimize | maximize
-		exMasConfig.setPruningKeepTopNExtensionsPerBaseRide(0); // per-base cap (0 disables)
 		
 		// Limit successors to improve performance (Top-K pruning)
 		exMasConfig.setMaxSuccessors(50);

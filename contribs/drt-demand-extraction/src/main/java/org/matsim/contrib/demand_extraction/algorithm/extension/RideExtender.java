@@ -705,43 +705,10 @@ public final class RideExtender {
 		return requiredSaving;
 	}
 
-	private double objectiveValue(Ride r) {
-		String obj = exMasConfig.getPruningRankingObjective();
-		if (obj == null)
-			obj = "rideDistance";
-		switch (obj) {
-			case "passengerTravelTime":
-				return sumPassengerTravelTimes(r);
-			case "passengerUtility":
-				return -sumPassengerUtilities(r);
-			case "rideDistance":
-			default:
-				return r.getRideDistance();
-		}
-	}
-
 	private double sumRequestDistances(Ride r) {
 		return Arrays.stream(r.getRequests())
 				.mapToDouble(DrtRequest::getDistance)
 				.sum();
-	}
-
-	private double sumPassengerTravelTimes(Ride r) {
-		double[] t = r.getPassengerTravelTimes();
-		double s = 0.0;
-		if (t != null)
-			for (double v : t)
-				s += v;
-		return s;
-	}
-
-	private double sumPassengerUtilities(Ride r) {
-		double[] u = r.getPassengerNetworkUtilities();
-		double s = 0.0;
-		if (u != null)
-			for (double v : u)
-				s += v;
-		return s;
 	}
 
 	// --- Utility methods ---

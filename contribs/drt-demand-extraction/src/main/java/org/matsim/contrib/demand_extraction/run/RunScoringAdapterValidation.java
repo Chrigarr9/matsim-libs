@@ -431,7 +431,6 @@ public class RunScoringAdapterValidation {
 		exMasConfig.setOpportunityCostModel(ExMasConfigGroup.OpportunityCostModel.LOG);
 		exMasConfig.setPtOptimizeDepartureTime(false);
 		exMasConfig.setHeuristicPruningEnabled(true);
-		exMasConfig.setPruningKeepTopFractionPerRequestSet(0.3);
 
 		Set<String> privateVehicles = new HashSet<>(Set.of("car", "bike"));
 		exMasConfig.setPrivateVehicleModes(privateVehicles);

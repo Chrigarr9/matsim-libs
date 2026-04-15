@@ -91,11 +91,8 @@ public class RunBavaria30kmDemandExtraction {
 		String travelTimesFile = null; // path to pre-computed travel_times.tsv
 		boolean noPruning = false; // disable all pruning (for baseline comparison)
 		boolean noPredecessors = false; // disable predecessor/successor + Shapley calculation
-		int postExtMaxPerSet = 0;
-		double postExtKeepTop = 1.0;
 		int maxDegree = 16;
 		double interDegreeKeep = 0.10;
-		int interDegreeMinPerReq = 0;
 		Integer networkTimeBinSize = null; // diagnostic override for MatsimNetworkCache binning
 
 		for (int i = 0; i < args.length; i++) {
@@ -123,11 +120,8 @@ public class RunBavaria30kmDemandExtraction {
 				case "--travel-times" -> travelTimesFile = args[++i];
 				case "--no-pruning" -> noPruning = true;
 				case "--no-predecessors" -> noPredecessors = true;
-				case "--post-ext-max-per-set" -> postExtMaxPerSet = Integer.parseInt(args[++i]);
-				case "--post-ext-keep-top" -> postExtKeepTop = Double.parseDouble(args[++i]);
 				case "--max-degree" -> maxDegree = Integer.parseInt(args[++i]);
 				case "--inter-degree-keep" -> interDegreeKeep = Double.parseDouble(args[++i]);
-				case "--inter-degree-min-per-request" -> interDegreeMinPerReq = Integer.parseInt(args[++i]);
 				case "--network-time-bin-size" -> networkTimeBinSize = Integer.parseInt(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
@@ -192,8 +186,7 @@ public class RunBavaria30kmDemandExtraction {
 
 		configureForDemandExtraction(config, outDir, sampleSize, iterations,
 				algorithmProcessCount, heuristicsProcessCount, deterministic, noPruning,
-				noPredecessors, postExtMaxPerSet, postExtKeepTop, maxDegree,
-				interDegreeKeep, interDegreeMinPerReq);
+				noPredecessors, maxDegree, interDegreeKeep);
 		String runId = config.controller().getRunId();
 
 		// Trip-level spatial filter: uses resolved filter center (from --filter-municipality or --filter-center)
@@ -606,8 +599,7 @@ public class RunBavaria30kmDemandExtraction {
 	private static void configureForDemandExtraction(Config config, Path outputDir,
 			int sampleSize, int iterations, int algorithmProcessCount,
 			int heuristicsProcessCount, boolean deterministic, boolean noPruning,
-			boolean noPredecessors, int postExtMaxPerSet, double postExtKeepTop, int maxDegree,
-			double interDegreeKeep, int interDegreeMinPerReq) {
+			boolean noPredecessors, int maxDegree, double interDegreeKeep) {
 
 		// VSP defaults
 		config.vspExperimental().setVspDefaultsCheckingLevel(
@@ -634,8 +626,7 @@ public class RunBavaria30kmDemandExtraction {
 
 		// Configure ExMAS (same as RunKelheimDemandExtraction)
 		configureExMas(config, algorithmProcessCount, heuristicsProcessCount, deterministic,
-				noPruning, noPredecessors, postExtMaxPerSet, postExtKeepTop, maxDegree,
-				interDegreeKeep, interDegreeMinPerReq);
+				noPruning, noPredecessors, maxDegree, interDegreeKeep);
 
 		logScoringParameters(config);
 	}
@@ -649,8 +640,7 @@ public class RunBavaria30kmDemandExtraction {
 	 * Settings aligned with ExMasKelheimE2ETest for consistency.
 	 */
 	private static void configureExMas(Config config, int algorithmProcessCount, int heuristicsProcessCount, boolean deterministic, boolean noPruning,
-			boolean noPredecessors, int postExtMaxPerSet, double postExtKeepTop, int maxDegree,
-			double interDegreeKeep, int interDegreeMinPerReq) {
+			boolean noPredecessors, int maxDegree, double interDegreeKeep) {
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 
 		// DRT mode must match Kelheim config
@@ -718,9 +708,6 @@ public class RunBavaria30kmDemandExtraction {
 		// Pruning settings: heuristic pruning controls combinatorial growth during ride
 		// extension
 		exMasConfig.setHeuristicPruningEnabled(true);
-		exMasConfig.setPruningKeepTopFractionPerRequestSet(0.3); // 1.0 keeps all per request-set group
-		exMasConfig.setPruningMinRidesToKeepPerRequestSet(3); // minimum floor per group
-		exMasConfig.setPruningMaxRidesToKeepPerRequestSet(0); // hard cap (0 disables)
 		// Degree-aware distance-savings pruning:
 		// requiredSaving(d) = scale * log2(d) (clamped).
 		// scale < 0 disables; scale = 0 matches legacy non-improving (rideDistance <=
@@ -731,20 +718,12 @@ public class RunBavaria30kmDemandExtraction {
 		exMasConfig.setPruningDistanceSavingsLogScale(0.15);
 		exMasConfig.setPruningDistanceSavingsMax(0.75);
 		exMasConfig.setPruningDistanceSavingsMinDegree(2); // prune paired rides after graph construction
-		exMasConfig.setPruningRankingObjective("rideDistance"); // rideDistance | passengerTravelTime | passengerUtility
-		exMasConfig.setPruningRankingGoal("minimize"); // minimize | maximize
-		exMasConfig.setPruningKeepTopNExtensionsPerBaseRide(0); // per-base cap (0 disables)
 
 		if (noPruning) {
 			log.info("=== NO-PRUNING MODE: disabling all pruning for baseline comparison ===");
 			exMasConfig.setHeuristicPruningEnabled(false);
 			exMasConfig.setPruningDistanceSavingsLogScale(-1.0);
-			exMasConfig.setPruningKeepTopFractionPerRequestSet(1.0);
-			exMasConfig.setPruningMinRidesToKeepPerRequestSet(0);
-			exMasConfig.setPruningMaxRidesToKeepPerRequestSet(0);
-			exMasConfig.setPruningKeepTopNExtensionsPerBaseRide(0);
 			interDegreeKeep = 1.0; // disable inter-degree pruning in no-pruning mode
-			interDegreeMinPerReq = 0;
 		}
 
 		// Limit successors to improve performance (Top-K pruning)
@@ -758,19 +737,9 @@ public class RunBavaria30kmDemandExtraction {
 		// TODO: Fix SwissRailRaptor range query settings configuration
 		exMasConfig.setPtOptimizeDepartureTime(false);
 
-		// Post-extension pruning
-		exMasConfig.setPostExtensionMaxPerSet(postExtMaxPerSet);
-		exMasConfig.setPostExtensionKeepTopFraction(postExtKeepTop);
-		if (postExtMaxPerSet > 0 || postExtKeepTop < 1.0) {
-			log.info("  Post-extension pruning: maxPerSet={}, keepTopFraction={}",
-					postExtMaxPerSet, postExtKeepTop);
-		}
-
 		// Inter-degree pruning: mandatory, direct fraction (no sqrt scaling)
 		exMasConfig.setInterDegreeKeepFraction(interDegreeKeep);
-		exMasConfig.setInterDegreeMinRidesPerRequest(interDegreeMinPerReq);
-		log.info("  Inter-degree pruning: keepFraction={}, minRidesPerRequest={}",
-				interDegreeKeep, interDegreeMinPerReq);
+		log.info("  Inter-degree pruning: keepFraction={}", interDegreeKeep);
 
 		// Defer budget validation out of the extension DFS — budget is subsumed by max-travel-time
 		// on Bavaria, so per-ordering validation is pure overhead (7-11% CPU at high degrees).

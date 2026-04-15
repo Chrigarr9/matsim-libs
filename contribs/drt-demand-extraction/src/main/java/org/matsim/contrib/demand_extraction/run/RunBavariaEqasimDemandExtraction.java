@@ -456,18 +456,47 @@ public class RunBavariaEqasimDemandExtraction {
 		exMasConfig.setWorkActivityType("work");
 		exMasConfig.setEducationActivityType("education");
 		exMasConfig.setMinAge(13);
+
+		// DRT service quality floors for budget calculation (ported from 30km)
+		exMasConfig.setMinDrtCostPerKm(0.0);
+		exMasConfig.setMinMaxDetourFactor(1.0);
+		exMasConfig.setMinMaxWaitingTime(0.0);
 		exMasConfig.setMinDrtAccessEgressDistance(100.0);
+
+		// ExMAS algorithm parameters
 		exMasConfig.setSearchHorizon(3600.0);
 		exMasConfig.setMaxDetourFactor(1.5);
 		exMasConfig.setMaxAbsoluteDetour(3600);
 		exMasConfig.setMaxPoolingDegree(16);
+
 		exMasConfig.setCalcPredecessors(false);
 		exMasConfig.setCalcShapleyValues(false);
+
 		// eqasim betaTravelTime already includes opportunity cost
 		exMasConfig.setOpportunityCostModel(ExMasConfigGroup.OpportunityCostModel.NONE);
 		exMasConfig.setPtOptimizeDepartureTime(false);
+
+		// Parallelism (use all cores)
+		exMasConfig.setAlgorithmProcessCount(-1);
+		exMasConfig.setHeuristicsProcessCount(-1);
+
+		// Heuristic pruning — degree-aware distance savings (ported from 30km)
 		exMasConfig.setHeuristicPruningEnabled(true);
-		exMasConfig.setPruningKeepTopFractionPerRequestSet(0.3);
+		exMasConfig.setPruningDistanceSavingsLogScale(0.15);
+		exMasConfig.setPruningDistanceSavingsMax(0.75);
+		exMasConfig.setPruningDistanceSavingsMinDegree(2);
+
+		// Cap successor list (ported from 30km — major perf lever)
+		exMasConfig.setMaxSuccessors(50);
+
+		// Defer per-ordering budget validation out of the extension DFS.
+		// Budget is subsumed by max-travel-time on Bavaria, so per-ordering check is
+		// pure overhead (7-11% CPU at high degrees). BudgetValidator.populateBudgetsBatch
+		// runs once after extension completes.
+		exMasConfig.setDeferExtensionBudgetValidation(true);
+
+		// Inter-degree pruning default — may be overridden by CLI sweep flag below
+		exMasConfig.setInterDegreeKeepFraction(0.10);
 
 		// Sweep-flag overrides. Applied after defaults so CLI always wins.
 		if (!Double.isNaN(p.searchHorizon)) {

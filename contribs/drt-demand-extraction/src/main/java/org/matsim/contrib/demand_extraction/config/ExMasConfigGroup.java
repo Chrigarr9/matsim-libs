@@ -177,17 +177,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	// Heuristic pruning (to control combinatorial growth during ride extension)
 	private boolean pruningEnabled = true;
-	// Fraction of rides KEPT (not pruned) within each request-set group. Range
-	// (0,1].
-	// Grouping key is the request index set (same passengers) and objective ranking
-	// is applied within each group.
-	private double pruningFraction = 0.5;
-	// Lower bound on how many rides to keep per request-set group (if that many
-	// exist).
-	private int pruningMinToKeep = 3;
-	// Optional hard cap on how many rides to keep per request-set group (0
-	// disables).
-	private int pruningMaxRidesToKeepPerRequestSet = 0;
 	// Degree-aware distance savings pruning (applied vs serving requests separately)
 	// requiredSaving(d) = min(maxSaving, max(0, pruningDistanceSavingsLogScale * log2(d)))
 	// Keep ride iff: rideDistance <= (1 - requiredSaving(d)) * sum(request distances)
@@ -202,25 +191,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// Default 3 ensures paired rides (degree 2) are not removed, which is important
 	// for shareability graph connectivity.
 	private int pruningDistanceSavingsMinDegree = 3;
-	private String pruningObjective = "rideDistance"; // rideDistance | passengerTravelTime | passengerUtility
-	private String pruningGoal = "minimize"; // minimize | maximize
-	// If >0, limit per-base extension candidates (for each base ride, keep only the
-	// top-N extensions by objective).
-	// This is applied before the per-request-set group pruning.
-	private int pruningTopNPerBase = 0;
-
-	// Post-extension pruning (applied after all degrees are generated, before post-processing)
-	// MaxPerSet: keep only the N best rides per request set (by rideDistance). 0 = disabled.
-	private int postExtensionMaxPerSet = 0;
-	// Per-degree percentile: keep only the top X% of rides (by distanceSavings) within each degree.
-	// 1.0 = disabled (keep all). 0.05 = keep top 5%.
-	private double postExtensionKeepTopFraction = 1.0;
 
 	// Inter-degree pruning: keep only the top fraction of rides after EACH degree extension.
 	// Applied directly (no sqrt scaling). 1.0 = disabled. 0.10 = keep top 10%.
 	private double interDegreeKeepFraction = 0.10;
-	// Per-request floor: ensure each request appears in at least N rides after pruning. 0 = disabled.
-	private int interDegreeMinRidesPerRequest = 0;
 
 	// Calculate Shapley values for rides (distance contribution per passenger)
 	private boolean calcShapleyValues = true;
@@ -762,36 +736,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.pruningEnabled = heuristicPruningEnabled;
 	}
 
-	@StringGetter("pruningKeepTopFractionPerRequestSet")
-	public double getPruningKeepTopFractionPerRequestSet() {
-		return pruningFraction;
-	}
-
-	@StringSetter("pruningKeepTopFractionPerRequestSet")
-	public void setPruningKeepTopFractionPerRequestSet(double pruningKeepTopFractionPerRequestSet) {
-		this.pruningFraction = pruningKeepTopFractionPerRequestSet;
-	}
-
-	@StringGetter("pruningMinRidesToKeepPerRequestSet")
-	public int getPruningMinRidesToKeepPerRequestSet() {
-		return pruningMinToKeep;
-	}
-
-	@StringSetter("pruningMinRidesToKeepPerRequestSet")
-	public void setPruningMinRidesToKeepPerRequestSet(int pruningMinRidesToKeepPerRequestSet) {
-		this.pruningMinToKeep = pruningMinRidesToKeepPerRequestSet;
-	}
-
-	@StringGetter("pruningMaxRidesToKeepPerRequestSet")
-	public int getPruningMaxRidesToKeepPerRequestSet() {
-		return pruningMaxRidesToKeepPerRequestSet;
-	}
-
-	@StringSetter("pruningMaxRidesToKeepPerRequestSet")
-	public void setPruningMaxRidesToKeepPerRequestSet(int pruningMaxRidesToKeepPerRequestSet) {
-		this.pruningMaxRidesToKeepPerRequestSet = pruningMaxRidesToKeepPerRequestSet;
-	}
-
 	@StringGetter("pruningDistanceSavingsLogScale")
 	public double getPruningDistanceSavingsLogScale() {
 		return pruningDistanceSavingsLogScale;
@@ -822,56 +766,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.pruningDistanceSavingsMinDegree = pruningDistanceSavingsMinDegree;
 	}
 
-	@StringGetter("pruningRankingObjective")
-	public String getPruningRankingObjective() {
-		return pruningObjective;
-	}
-
-	@StringSetter("pruningRankingObjective")
-	public void setPruningRankingObjective(String pruningRankingObjective) {
-		this.pruningObjective = pruningRankingObjective;
-	}
-
-	@StringGetter("pruningRankingGoal")
-	public String getPruningRankingGoal() {
-		return pruningGoal;
-	}
-
-	@StringSetter("pruningRankingGoal")
-	public void setPruningRankingGoal(String pruningRankingGoal) {
-		this.pruningGoal = pruningRankingGoal;
-	}
-
-	@StringGetter("pruningKeepTopNExtensionsPerBaseRide")
-	public int getPruningKeepTopNExtensionsPerBaseRide() {
-		return pruningTopNPerBase;
-	}
-
-	@StringSetter("pruningKeepTopNExtensionsPerBaseRide")
-	public void setPruningKeepTopNExtensionsPerBaseRide(int pruningKeepTopNExtensionsPerBaseRide) {
-		this.pruningTopNPerBase = pruningKeepTopNExtensionsPerBaseRide;
-	}
-
-	@StringGetter("postExtensionMaxPerSet")
-	public int getPostExtensionMaxPerSet() {
-		return postExtensionMaxPerSet;
-	}
-
-	@StringSetter("postExtensionMaxPerSet")
-	public void setPostExtensionMaxPerSet(int postExtensionMaxPerSet) {
-		this.postExtensionMaxPerSet = postExtensionMaxPerSet;
-	}
-
-	@StringGetter("postExtensionKeepTopFraction")
-	public double getPostExtensionKeepTopFraction() {
-		return postExtensionKeepTopFraction;
-	}
-
-	@StringSetter("postExtensionKeepTopFraction")
-	public void setPostExtensionKeepTopFraction(double postExtensionKeepTopFraction) {
-		this.postExtensionKeepTopFraction = postExtensionKeepTopFraction;
-	}
-
 	@StringGetter("interDegreeKeepFraction")
 	public double getInterDegreeKeepFraction() {
 		return interDegreeKeepFraction;
@@ -880,16 +774,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter("interDegreeKeepFraction")
 	public void setInterDegreeKeepFraction(double interDegreeKeepFraction) {
 		this.interDegreeKeepFraction = interDegreeKeepFraction;
-	}
-
-	@StringGetter("interDegreeMinRidesPerRequest")
-	public int getInterDegreeMinRidesPerRequest() {
-		return interDegreeMinRidesPerRequest;
-	}
-
-	@StringSetter("interDegreeMinRidesPerRequest")
-	public void setInterDegreeMinRidesPerRequest(int interDegreeMinRidesPerRequest) {
-		this.interDegreeMinRidesPerRequest = interDegreeMinRidesPerRequest;
 	}
 
 	@StringGetter("calcShapleyValues")
@@ -1244,37 +1128,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Parallelism for Shapley/predecessor calculations. -1 = all processors, 1 = sequential. Default: -1");
 		map.put("heuristicPruningEnabled",
 				"Enable heuristic pruning during ride extension to avoid combinatorial explosion. Default: true");
-		map.put("pruningKeepTopFractionPerRequestSet",
-				"Keep top fraction of rides per request-set group after each extension. Range (0,1]. Default: 0.5");
-		map.put("pruningMinRidesToKeepPerRequestSet",
-				"Minimum number of rides to keep per request-set group regardless of fraction. Default: 3");
-		map.put("pruningMaxRidesToKeepPerRequestSet",
-				"Maximum number of rides to keep per request-set group (0 disables). Default: 0");
 		map.put("pruningDistanceSavingsLogScale",
 				"Degree-aware distance savings pruning: requiredSaving(d)=scale*log2(d), clamped; keep iff rideDistance <= (1-requiredSaving)*sum(request distances). scale<0 disables; scale=0 matches legacy non-improving (rideDistance <= sumDistances). Default: 0.0");
 		map.put("pruningDistanceSavingsMax",
 				"Maximum requiredSaving(d) clamp for distance savings pruning (0-0.99). Default: 0.9");
 		map.put("pruningDistanceSavingsMinDegree",
 				"Minimum pooling degree for applying distance savings pruning. Default: 3 (do not prune paired rides). ");
-		map.put("pruningRankingObjective",
-				"Objective for ranking rides within groups: rideDistance | passengerTravelTime | passengerUtility. Default: rideDistance");
-		map.put("pruningRankingGoal", "Ranking goal for pruning objective: minimize | maximize. Default: minimize");
-		map.put("pruningKeepTopNExtensionsPerBaseRide",
-				"Limit number of extensions per base ride to top N by objective (0 disables). Default: 0");
-		map.put("postExtensionMaxPerSet",
-				"Post-extension pruning: keep only the N best rides (by rideDistance) per request set. "
-				+ "Applied after all extension degrees complete, before Shapley/predecessors. 0 = disabled. Default: 0");
-		map.put("postExtensionKeepTopFraction",
-				"Post-extension pruning: keep only the top fraction of rides (by distanceSavings) within each degree. "
-				+ "1.0 = disabled. 0.10 = keep top 10% per degree. 0.05 = keep top 5%. Applied after MaxPerSet. Default: 1.0");
 		map.put("interDegreeKeepFraction",
 				"Inter-degree pruning: keep only the top fraction of rides (by distanceSavings) after EACH degree extension. "
 				+ "Applied directly (no sqrt scaling). Survivors become base sets for next degree AND final output. "
 				+ "1.0 = disabled. 0.10 = keep top 10%. Default: 0.10");
-		map.put("interDegreeMinRidesPerRequest",
-				"Per-request floor for inter-degree pruning: ensure each request appears in at least N rides after pruning. "
-				+ "If a request has fewer rides above the threshold, its best rides are rescued. "
-				+ "0 = disabled. Default: 0");
 		map.put("calcShapleyValues", "Calculate Shapley values for each ride (distance contribution per passenger). Default: true");
 		map.put("calcPredecessors",
 				"Calculate predecessor/successor relationships between rides. When enabled, connection cache is automatically written. Default: true");

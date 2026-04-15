@@ -144,7 +144,6 @@ public final class ExMasEngine {
 		log.info("PHASE 4: Iterative Ride Extension");
 		log.info("======================================================================");
 		double interDegreeKeepFraction = exMasConfig.getInterDegreeKeepFraction();
-		int interDegreeMinPerRequest = exMasConfig.getInterDegreeMinRidesPerRequest();
 		int nextRideIndex = allRides.size();
 		DegreeGraph prevDegreeGraph = null;
 		for (int degree = 2; degree < maxDegree; degree++) {
@@ -166,8 +165,7 @@ public final class ExMasEngine {
 			// Direct fraction (no sqrt scaling). Survivors = output + base sets for next degree.
 			int generatedCount = extended.size();
 			if (interDegreeKeepFraction < 1.0) {
-				PostExtensionPruner pruner = new PostExtensionPruner(
-						0, interDegreeKeepFraction, interDegreeMinPerRequest);
+				PostExtensionPruner pruner = new PostExtensionPruner(interDegreeKeepFraction);
 				extended = pruner.prune(extended);
 			}
 

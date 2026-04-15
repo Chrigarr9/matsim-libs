@@ -10,7 +10,6 @@ import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.engine.ExMasEngine;
-import org.matsim.contrib.demand_extraction.algorithm.engine.PostExtensionPruner;
 import org.matsim.contrib.demand_extraction.algorithm.engine.RidePostProcessor;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
@@ -115,10 +114,6 @@ public class DemandExtractionListener implements ShutdownListener {
 			exMasConfig.getMaxPoolingDegree(),
 			exMasConfig);
 		List<Ride> rides = exmasEngine.run(requests);
-
-		// Post-extension pruning: compress ride database before expensive post-processing
-		PostExtensionPruner pruner = new PostExtensionPruner(exMasConfig);
-		rides = pruner.prune(rides);
 
 		// Post-process rides with advanced metrics (maxCost, Shapley, predecessors)
 		RidePostProcessor postProcessor = new RidePostProcessor(exMasConfig, networkCache, budgetToConstraintsCalculator, population);

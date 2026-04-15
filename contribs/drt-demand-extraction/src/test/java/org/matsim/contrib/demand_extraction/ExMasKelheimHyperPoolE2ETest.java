@@ -220,8 +220,6 @@ public class ExMasKelheimHyperPoolE2ETest {
 		exMasConfig.setMaxPoolingDegree(5); // Reduced to 5 to prevent OOM with 3x population
 
 		// AGGRESSIVE PRUNING to control memory usage with large population
-		exMasConfig.setPruningKeepTopFractionPerRequestSet(0.3); // Keep only top 30% of rides per request set
-		exMasConfig.setPruningMaxRidesToKeepPerRequestSet(20); // Max 20 rides per request set
 		exMasConfig.setPruningDistanceSavingsLogScale(0.15); // Enable distance-based pruning (increasing with degree)
 		exMasConfig.setPruningDistanceSavingsMinDegree(3); // Apply distance pruning from degree 3+
 
