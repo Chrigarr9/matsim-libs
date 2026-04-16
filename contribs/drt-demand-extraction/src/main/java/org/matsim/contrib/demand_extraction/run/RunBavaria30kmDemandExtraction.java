@@ -95,6 +95,12 @@ public class RunBavaria30kmDemandExtraction {
 		double interDegreeKeep = 0.10;
 		Integer networkTimeBinSize = null; // diagnostic override for MatsimNetworkCache binning
 
+		// Sweep knobs — applied as overrides after configureForDemandExtraction when NaN-guarded
+		double searchHorizonOverride = Double.NaN;
+		double maxDetourFactorOverride = Double.NaN;
+		double minDrtCostPerKmOverride = Double.NaN;
+		double pairKeepTopFractionOverride = Double.NaN;
+
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
 				case "--scenario-path" -> scenarioPath = args[++i];
@@ -121,7 +127,12 @@ public class RunBavaria30kmDemandExtraction {
 				case "--no-pruning" -> noPruning = true;
 				case "--no-predecessors" -> noPredecessors = true;
 				case "--max-degree" -> maxDegree = Integer.parseInt(args[++i]);
-				case "--inter-degree-keep" -> interDegreeKeep = Double.parseDouble(args[++i]);
+				case "--inter-degree-keep", "--inter-degree-keep-fraction"
+						-> interDegreeKeep = Double.parseDouble(args[++i]);
+				case "--search-horizon" -> searchHorizonOverride = Double.parseDouble(args[++i]);
+				case "--max-detour-factor" -> maxDetourFactorOverride = Double.parseDouble(args[++i]);
+				case "--min-drt-cost-per-km" -> minDrtCostPerKmOverride = Double.parseDouble(args[++i]);
+				case "--pair-keep-top-fraction" -> pairKeepTopFractionOverride = Double.parseDouble(args[++i]);
 				case "--network-time-bin-size" -> networkTimeBinSize = Integer.parseInt(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
@@ -205,6 +216,27 @@ public class RunBavaria30kmDemandExtraction {
 			ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 			exMasConfig.setNetworkTimeBinSize(networkTimeBinSize);
 			log.info("Network time-bin size overridden: {} seconds", networkTimeBinSize);
+		}
+
+		// Sweep-flag overrides applied after configureForDemandExtraction. NaN = not set.
+		{
+			ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
+			if (!Double.isNaN(searchHorizonOverride)) {
+				log.info("  Override: searchHorizon = {}", searchHorizonOverride);
+				exMasConfig.setSearchHorizon(searchHorizonOverride);
+			}
+			if (!Double.isNaN(maxDetourFactorOverride)) {
+				log.info("  Override: maxDetourFactor = {}", maxDetourFactorOverride);
+				exMasConfig.setMaxDetourFactor(maxDetourFactorOverride);
+			}
+			if (!Double.isNaN(minDrtCostPerKmOverride)) {
+				log.info("  Override: minDrtCostPerKm = {}", minDrtCostPerKmOverride);
+				exMasConfig.setMinDrtCostPerKm(minDrtCostPerKmOverride);
+			}
+			if (!Double.isNaN(pairKeepTopFractionOverride)) {
+				log.info("  Override: pairKeepTopFraction = {}", pairKeepTopFractionOverride);
+				exMasConfig.setPairKeepTopFraction(pairKeepTopFractionOverride);
+			}
 		}
 
 		DemandExtractionConfigValidator.prepareConfigForDemandExtraction(config);

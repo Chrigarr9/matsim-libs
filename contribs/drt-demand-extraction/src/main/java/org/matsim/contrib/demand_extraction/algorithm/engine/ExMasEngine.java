@@ -111,13 +111,13 @@ public final class ExMasEngine {
 		int algorithmProcessCount = exMasConfig.getAlgorithmProcessCount();
 		PairGenerator pairGen = new PairGenerator(network, budgetValidator, horizon, algorithmProcessCount);
         List<Ride> pairRides = pairGen.generatePairs(reqArray);
-		allRides.addAll(pairRides);
 
         if (maxDegree <= 2) {
+			allRides.addAll(pairRides);
 			return completeEarly(algorithmStartTime, "maxDegree <= 2");
         }
 
-        // Phase 3: Build sharability graph from pairs
+        // Phase 3: Build shareability graph from ALL pairs (before pruning)
 		log.info("");
 		log.info("PHASE 3: Building Shareability Graph");
 		log.info("======================================================================");
@@ -127,10 +127,12 @@ public final class ExMasEngine {
 		log.info("Graph built: {} edges, {} nodes in {}s",
 				graph.getEdgeCount(), graph.getNodeCount(), String.format("%.1f", graphElapsed / 1000.0));
 
-		// Optional: prune which degree-2 rides are used as extension bases AFTER the shareability graph
-		// is constructed. This keeps the shareability graph complete (built from all pair rides).
-		// It only reduces which pair rides we try to extend to higher degrees.
+		// Prune pair rides AFTER graph construction. Graph stays complete (built from
+		// all pairs). Pruned pairs are removed from both the output AND the extension
+		// base set — the MIP only needs one ride per request set, and the extension
+		// re-enumerates orderings independently of the base ride's FIFO/LIFO variant.
 		List<Ride> currentDegreeRides = maybePrunePairRidesAfterGraph(pairRides);
+		allRides.addAll(currentDegreeRides);
 
 		// Pre-compute scoring contexts for all requests (avoids plan parsing during extension)
 		budgetValidator.precomputeScoringContexts(drtRequests);
@@ -431,55 +433,98 @@ public final class ExMasEngine {
 	}
 
 	/**
-	 * Optionally prune pair rides after graph construction based on distance savings.
-	 * Keeps the shareability graph complete but reduces which pair rides we try to extend.
+	 * Prune pair rides after graph construction. Three sequential passes:
+	 *
+	 * <ol>
+	 *   <li><b>Best-per-set dedup</b> (always on): For each request-set (same two passengers),
+	 *       keep only the variant with shortest rideDistance. Collapses FIFO/LIFO duplicates.
+	 *       Lossless for the MIP (picks one per set) and effectively lossless for extension
+	 *       (re-enumerates orderings anyway).</li>
+	 *   <li><b>Distance-savings gate</b>: Drop pairs below the degree-2 savings threshold
+	 *       (only if pruningDistanceSavingsMinDegree &le; 2). Existing behavior.</li>
+	 *   <li><b>Top-fraction filter</b>: Keep only the top X% of remaining pairs by distance
+	 *       savings (controlled by pairKeepTopFraction, default 1.0 = disabled).</li>
+	 * </ol>
+	 *
+	 * All passes run AFTER the shareability graph is built, preserving graph completeness.
 	 */
 	private List<Ride> maybePrunePairRidesAfterGraph(List<Ride> pairRides) {
 		if (pairRides.isEmpty()) {
 			return pairRides;
 		}
+		int initial = pairRides.size();
+
+		// --- Pass 1: Best-per-set dedup (always on) ---
+		java.util.Map<String, Ride> bestPerSet = new java.util.HashMap<>();
+		for (Ride r : pairRides) {
+			int[] indices = r.getRequestIndices().clone();
+			Arrays.sort(indices);
+			String key = Arrays.toString(indices);
+			Ride existing = bestPerSet.get(key);
+			if (existing == null || r.getRideDistance() < existing.getRideDistance()) {
+				bestPerSet.put(key, r);
+			}
+		}
+		List<Ride> result = new ArrayList<>(bestPerSet.values());
+		int afterDedup = result.size();
+		int dedupRemoved = initial - afterDedup;
+		if (dedupRemoved > 0) {
+			log.info("Pair-ride best-per-set dedup (after graph): kept {}/{} (removed {} FIFO/LIFO duplicates)",
+					afterDedup, initial, dedupRemoved);
+		}
+
+		// --- Pass 2: Distance-savings gate (existing behavior) ---
 		double scale = exMasConfig.getPruningDistanceSavingsLogScale();
-		if (scale < 0) {
-			return pairRides;
-		}
 		int minDegree = Math.max(2, exMasConfig.getPruningDistanceSavingsMinDegree());
-		// If the user wants minDegree=2, they explicitly allow pruning of degree-2 rides.
-		// Only do it here (after graph construction) to keep the graph complete.
-		if (minDegree > 2) {
-			return pairRides;
+		if (scale >= 0 && minDegree <= 2) {
+			double maxSaving = Math.min(0.99, Math.max(0.0, exMasConfig.getPruningDistanceSavingsMax()));
+			double requiredSaving = computeRequiredSavingForDegree(2, scale, maxSaving, minDegree);
+			int beforeGate = result.size();
+			result = result.stream().filter(r -> {
+				double sumDistances = Arrays.stream(r.getRequests()).mapToDouble(DrtRequest::getDistance).sum();
+				if (!(sumDistances > 0)) return true;
+				return r.getRideDistance() <= (1.0 - requiredSaving) * sumDistances;
+			}).collect(Collectors.toList());
+			log.info("Pair-ride distance-savings gate (after graph): kept {}/{} (removed {}); requiredSaving>={}%%",
+					result.size(), beforeGate, beforeGate - result.size(),
+					String.format(java.util.Locale.ROOT, "%.1f", 100.0 * requiredSaving));
 		}
 
-		double maxSaving = exMasConfig.getPruningDistanceSavingsMax();
-		if (!(maxSaving >= 0)) {
-			maxSaving = 0.0;
+		// --- Pass 3: Top-fraction filter by distance savings ---
+		double pairKeepTop = exMasConfig.getPairKeepTopFraction();
+		if (pairKeepTop < 1.0 && !result.isEmpty()) {
+			int beforeFrac = result.size();
+			// Compute fractional savings for each pair
+			double[] savings = new double[result.size()];
+			for (int i = 0; i < result.size(); i++) {
+				Ride r = result.get(i);
+				double sumDist = Arrays.stream(r.getRequests()).mapToDouble(DrtRequest::getDistance).sum();
+				savings[i] = sumDist > 0 ? 1.0 - r.getRideDistance() / sumDist : 0;
+			}
+			// Find threshold at (1 - keepFraction) percentile
+			double[] sorted = savings.clone();
+			Arrays.sort(sorted);
+			int threshIdx = (int) Math.floor(sorted.length * (1.0 - pairKeepTop));
+			threshIdx = Math.min(threshIdx, sorted.length - 1);
+			double threshold = sorted[threshIdx];
+
+			List<Ride> filtered = new ArrayList<>();
+			for (int i = 0; i < result.size(); i++) {
+				if (savings[i] >= threshold) {
+					filtered.add(result.get(i));
+				}
+			}
+			result = filtered;
+			log.info("Pair-ride top-fraction filter (after graph): kept {}/{} (removed {}, threshold={}, keepFraction={})",
+					result.size(), beforeFrac, beforeFrac - result.size(),
+					String.format(java.util.Locale.ROOT, "%.4f", threshold),
+					String.format(java.util.Locale.ROOT, "%.2f", pairKeepTop));
 		}
-		maxSaving = Math.min(0.99, maxSaving);
-		double requiredSaving = computeRequiredSavingForDegree(2, scale, maxSaving, minDegree);
 
-		int before = pairRides.size();
-		List<Ride> kept = pairRides.stream().filter(r -> {
-			if (r.getDegree() != 2) {
-				return true;
-			}
-			double sumDistances = Arrays.stream(r.getRequests()).mapToDouble(DrtRequest::getDistance).sum();
-			if (!(sumDistances > 0)) {
-				return true;
-			}
-			double maxRideDistance = (1.0 - requiredSaving) * sumDistances;
-			return r.getRideDistance() <= maxRideDistance;
-		}).toList();
-
-		int after = kept.size();
-		int removed = before - after;
-		log.info("Pair-ride base pruning (after graph): kept {}/{} (removed {}); distance-savings gate for degree 2: requiredSaving>={}%% (scale={}, maxSaving={})",
-				after,
-				before,
-				removed,
-				String.format(java.util.Locale.ROOT, "%.1f", 100.0 * requiredSaving),
-				String.format(java.util.Locale.ROOT, "%.3f", scale),
-				String.format(java.util.Locale.ROOT, "%.2f", maxSaving));
-
-		return kept;
+		log.info("Pair-ride base pruning (after graph): {} -> {} total ({} removed, {} reduction)",
+				initial, result.size(), initial - result.size(),
+				String.format(java.util.Locale.ROOT, "%.1f%%", (1.0 - (double) result.size() / initial) * 100));
+		return result;
 	}
 
 	private static double computeRequiredSavingForDegree(int degree, double scale, double maxSaving, int minDegree) {

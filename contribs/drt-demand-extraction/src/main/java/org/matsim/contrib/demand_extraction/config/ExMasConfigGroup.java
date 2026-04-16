@@ -192,6 +192,11 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// for shareability graph connectivity.
 	private int pruningDistanceSavingsMinDegree = 3;
 
+	// Post-graph pair pruning: keep top fraction of degree-2 rides (by distance savings)
+	// after the shareability graph is built. Applied AFTER best-per-set dedup and AFTER
+	// the distance-savings gate. 1.0 = disabled. 0.50 = keep top 50%.
+	private double pairKeepTopFraction = 1.0;
+
 	// Inter-degree pruning: keep only the top fraction of rides after EACH degree extension.
 	// Applied directly (no sqrt scaling). 1.0 = disabled. 0.10 = keep top 10%.
 	private double interDegreeKeepFraction = 0.10;
@@ -766,6 +771,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.pruningDistanceSavingsMinDegree = pruningDistanceSavingsMinDegree;
 	}
 
+	@StringGetter("pairKeepTopFraction")
+	public double getPairKeepTopFraction() {
+		return pairKeepTopFraction;
+	}
+
+	@StringSetter("pairKeepTopFraction")
+	public void setPairKeepTopFraction(double pairKeepTopFraction) {
+		this.pairKeepTopFraction = pairKeepTopFraction;
+	}
+
 	@StringGetter("interDegreeKeepFraction")
 	public double getInterDegreeKeepFraction() {
 		return interDegreeKeepFraction;
@@ -1134,6 +1149,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Maximum requiredSaving(d) clamp for distance savings pruning (0-0.99). Default: 0.9");
 		map.put("pruningDistanceSavingsMinDegree",
 				"Minimum pooling degree for applying distance savings pruning. Default: 3 (do not prune paired rides). ");
+		map.put("pairKeepTopFraction",
+				"Post-graph pair pruning: keep only the top fraction of degree-2 rides (by distance savings) "
+				+ "after the shareability graph is built and best-per-set dedup is applied. "
+				+ "1.0 = disabled. 0.50 = keep top 50%. Default: 1.0 (disabled)");
 		map.put("interDegreeKeepFraction",
 				"Inter-degree pruning: keep only the top fraction of rides (by distanceSavings) after EACH degree extension. "
 				+ "Applied directly (no sqrt scaling). Survivors become base sets for next degree AND final output. "
