@@ -91,11 +91,13 @@ public final class ExMasEngine {
         
         DrtRequest[] reqArray = drtRequests.toArray(new DrtRequest[0]);
 
+		int algorithmProcessCount = exMasConfig.getAlgorithmProcessCount();
+
 		// Phase 1: Generate single rides with budget validation
 		log.info("");
 		log.info("PHASE 1: Single Ride Generation");
 		log.info("======================================================================");
-		SingleRideGenerator singleGen = new SingleRideGenerator(network, budgetValidator);
+		SingleRideGenerator singleGen = new SingleRideGenerator(network, budgetValidator, algorithmProcessCount);
         List<Ride> singleRides = singleGen.generate(drtRequests);
 		allRides.addAll(singleRides);
 
@@ -108,7 +110,6 @@ public final class ExMasEngine {
 		log.info("");
 		log.info("PHASE 2: Pair Ride Generation");
 		log.info("======================================================================");
-		int algorithmProcessCount = exMasConfig.getAlgorithmProcessCount();
 		PairGenerator pairGen = new PairGenerator(network, budgetValidator, horizon, algorithmProcessCount);
         List<Ride> pairRides = pairGen.generatePairs(reqArray);
 
