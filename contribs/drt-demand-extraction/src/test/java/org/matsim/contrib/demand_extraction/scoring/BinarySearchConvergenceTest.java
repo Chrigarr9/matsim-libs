@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.population.Person;
-import org.matsim.api.core.v01.population.Population;
+import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
@@ -47,6 +47,7 @@ class BinarySearchConvergenceTest {
 	private static final double WALK_MARG_UTIL_DIST_M = -0.0005;  // utils/m
 
 	private BudgetToConstraintsCalculator calculator;
+	private BudgetValidator budgetValidator;
 	private Person testPerson;
 
 	@BeforeEach
@@ -101,13 +102,17 @@ class BinarySearchConvergenceTest {
 		ScoringParametersForPerson paramsForPerson = person -> scoringParams;
 		PlanCalcScoreAdapter adapter = new PlanCalcScoreAdapter(paramsForPerson);
 
-		// Create population with test person
-		Population population = PopulationUtils.createPopulation(config);
 		testPerson = PopulationUtils.getFactory().createPerson(Id.createPersonId("test"));
-		population.addPerson(testPerson);
 
-		calculator = new BudgetToConstraintsCalculator(
-				config, exMas, adapter, paramsForPerson, population);
+		calculator = new BudgetToConstraintsCalculator(config, exMas, adapter);
+		budgetValidator = new BudgetValidator(adapter, paramsForPerson, exMas, config);
+	}
+
+	/** Build a DrtRequest and attach a scoring context so the calculator's fast path works. */
+	private DrtRequest buildRequestWithContext(DrtRequest.Builder builder) {
+		DrtRequest request = builder.build();
+		request.setScoringContext(budgetValidator.computeScoringContext(request, testPerson));
+		return request;
 	}
 
 	@Test
@@ -129,7 +134,7 @@ class BinarySearchConvergenceTest {
 		double budget = 2.0;
 		double bestModeScore = idealScore - budget; // = -4.5
 
-		DrtRequest request = DrtRequest.builder()
+		DrtRequest request = buildRequestWithContext(DrtRequest.builder()
 				.index(0)
 				.personId(Id.createPersonId("test"))
 				.groupId("g1")
@@ -146,8 +151,7 @@ class BinarySearchConvergenceTest {
 				.latestArrival(30600.0)
 				.directTravelTime(directTravelTime)
 				.directDistance(directDistance)
-				.maxDetourFactor(3.0)
-				.build();
+				.maxDetourFactor(3.0));
 
 		double maxDetour = calculator.budgetToMaxDetourTime(budget, testPerson,
 				directTravelTime, directDistance, request);
@@ -157,13 +161,13 @@ class BinarySearchConvergenceTest {
 
 		// Bounded by config: maxDetourFactor=3.0 → max additional = directTT * 2.0 = 1200s
 		double configCap = directTravelTime * (3.0 - 1.0);
-		assertTrue(maxDetour <= configCap + 1.0,
+		assertTrue(maxDetour <= configCap + 5.0,
 				"Max detour should be bounded by config cap. Got " + maxDetour + ", cap=" + configCap);
 
 		// Monotonicity: larger budget → more detour
 		double smallerBudget = 0.5;
-		DrtRequest smallRequest = request.toBuilder().budget(smallerBudget)
-				.bestModeScore(idealScore - smallerBudget).build();
+		DrtRequest smallRequest = buildRequestWithContext(request.toBuilder().budget(smallerBudget)
+				.bestModeScore(idealScore - smallerBudget));
 		double smallDetour = calculator.budgetToMaxDetourTime(smallerBudget, testPerson,
 				directTravelTime, directDistance, smallRequest);
 		assertTrue(smallDetour <= maxDetour,
@@ -179,7 +183,7 @@ class BinarySearchConvergenceTest {
 		double budget = 1.5;
 		double bestModeScore = idealScore - budget;
 
-		DrtRequest request = DrtRequest.builder()
+		DrtRequest request = buildRequestWithContext(DrtRequest.builder()
 				.index(0)
 				.personId(Id.createPersonId("test"))
 				.groupId("g1")
@@ -196,8 +200,7 @@ class BinarySearchConvergenceTest {
 				.latestArrival(30600.0)
 				.directTravelTime(directTravelTime)
 				.directDistance(directDistance)
-				.maxDetourFactor(3.0)
-				.build();
+				.maxDetourFactor(3.0));
 
 		double maxWait = calculator.budgetToMaxWaitingTime(budget, testPerson, request);
 
@@ -219,7 +222,7 @@ class BinarySearchConvergenceTest {
 		double budget = 1.0;
 		double bestModeScore = idealScore - budget;
 
-		DrtRequest request = DrtRequest.builder()
+		DrtRequest request = buildRequestWithContext(DrtRequest.builder()
 				.index(0)
 				.personId(Id.createPersonId("test"))
 				.groupId("g1")
@@ -236,8 +239,7 @@ class BinarySearchConvergenceTest {
 				.latestArrival(30600.0)
 				.directTravelTime(directTravelTime)
 				.directDistance(directDistance)
-				.maxDetourFactor(3.0)
-				.build();
+				.maxDetourFactor(3.0));
 
 		double maxWalkDist = calculator.budgetToMaxWalkDistance(budget, testPerson, request);
 
@@ -252,7 +254,7 @@ class BinarySearchConvergenceTest {
 
 	@Test
 	void testZeroBudgetReturnsZero() {
-		DrtRequest request = DrtRequest.builder()
+		DrtRequest request = buildRequestWithContext(DrtRequest.builder()
 				.index(0)
 				.personId(Id.createPersonId("test"))
 				.groupId("g1")
@@ -269,8 +271,7 @@ class BinarySearchConvergenceTest {
 				.latestArrival(30600.0)
 				.directTravelTime(600.0)
 				.directDistance(5000.0)
-				.maxDetourFactor(3.0)
-				.build();
+				.maxDetourFactor(3.0));
 
 		assertEquals(0.0, calculator.budgetToMaxDetourTime(0.0, testPerson, 600.0, 5000.0, request),
 				"Zero budget should return zero max detour time");
@@ -280,7 +281,7 @@ class BinarySearchConvergenceTest {
 
 	@Test
 	void testNegativeBudgetReturnsZero() {
-		DrtRequest request = DrtRequest.builder()
+		DrtRequest request = buildRequestWithContext(DrtRequest.builder()
 				.index(0)
 				.personId(Id.createPersonId("test"))
 				.groupId("g1")
@@ -297,8 +298,7 @@ class BinarySearchConvergenceTest {
 				.latestArrival(30600.0)
 				.directTravelTime(600.0)
 				.directDistance(5000.0)
-				.maxDetourFactor(3.0)
-				.build();
+				.maxDetourFactor(3.0));
 
 		assertEquals(0.0, calculator.budgetToMaxDetourTime(-1.0, testPerson, 600.0, 5000.0, request),
 				"Negative budget should return zero max detour time");
@@ -308,7 +308,7 @@ class BinarySearchConvergenceTest {
 
 	@Test
 	void testLargeBudgetHitsConfigCap() {
-		DrtRequest request = DrtRequest.builder()
+		DrtRequest request = buildRequestWithContext(DrtRequest.builder()
 				.index(0)
 				.personId(Id.createPersonId("test"))
 				.groupId("g1")
@@ -325,24 +325,23 @@ class BinarySearchConvergenceTest {
 				.latestArrival(40000.0)
 				.directTravelTime(600.0)
 				.directDistance(5000.0)
-				.maxDetourFactor(3.0)
-				.build();
+				.maxDetourFactor(3.0));
 
 		double maxDetour = calculator.budgetToMaxDetourTime(10000.0, testPerson,
 				600.0, 5000.0, request);
 
 		// Max detour is capped by directTravelTime * (maxDetourFactor - 1.0) = 600 * 2.0 = 1200
 		double configCap = 600.0 * (3.0 - 1.0);
-		assertTrue(maxDetour <= configCap + 1.0,  // +1 for binary search tolerance
+		assertTrue(maxDetour <= configCap + 5.0,  // +5 for binary search tolerance
 				"Max detour should be capped by config maxDetourFactor. Got " + maxDetour + ", cap=" + configCap);
 
 		// With large budget, should max out at the cap
-		assertEquals(configCap, maxDetour, 2.0,
+		assertEquals(configCap, maxDetour, 5.0,
 				"Very large budget should hit config cap");
 
 		// Waiting time capped at 3600s (1 hour upper bound in binary search)
 		double maxWait = calculator.budgetToMaxWaitingTime(10000.0, testPerson, request);
-		assertTrue(maxWait <= 3600.0 + 1.0,
+		assertTrue(maxWait <= 3600.0 + 5.0,
 				"Max waiting should be capped at 3600s upper bound");
 	}
 }

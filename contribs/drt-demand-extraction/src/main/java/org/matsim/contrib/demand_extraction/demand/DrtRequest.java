@@ -94,9 +94,10 @@ public class DrtRequest {
 											// faster/better)
 
 	/**
-	 * Pre-computed scoring context for fast budget validation.
-	 * Populated once per request by BudgetValidator.precomputeScoringContexts().
-	 * Contains all data that is constant across orderings/sets/degrees.
+	 * Pre-computed scoring context holding pre-resolved activities, scoring parameters,
+	 * and mutable template trip objects. Populated once at construction time by
+	 * DrtRequestFactory via BudgetValidator.computeScoringContext. Every scoring call
+	 * (budget calculation, binary search, ride validation) reuses this context.
 	 * Volatile for thread-safe publication to ForkJoinPool worker threads.
 	 */
 	private volatile ScoringContext scoringContext;

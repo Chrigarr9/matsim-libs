@@ -134,9 +134,6 @@ public final class ExMasEngine {
 		List<Ride> currentDegreeRides = maybePrunePairRidesAfterGraph(pairRides);
 		allRides.addAll(currentDegreeRides);
 
-		// Pre-compute scoring contexts for all requests (avoids plan parsing during extension)
-		budgetValidator.precomputeScoringContexts(drtRequests);
-
         // Phase 4: Iteratively extend rides with budget validation
 		// The ordering-based RideExtender enumerates valid orderings directly from
 		// pairwise constraints in the shareability graph — no rideMap needed.

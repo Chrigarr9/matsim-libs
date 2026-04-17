@@ -81,17 +81,6 @@ public interface DemandExtractionScoringAdapter {
 	boolean includesOpportunityCost();
 
 	/**
-	 * Does this adapter support scoring degraded trips for iterative constraint search?
-	 *
-	 * <p>Iterative search constructs synthetic DRT trips with varying travel time,
-	 * distance, and walk distance, then scores them. This requires the adapter to
-	 * produce meaningful utility for trips that were not actually routed.
-	 *
-	 * @return true if the adapter can score synthetic/degraded trip elements
-	 */
-	boolean supportsIterativeConstraints();
-
-	/**
 	 * Daily monetary constant for a mode, converted to utils.
 	 *
 	 * <p>Returns {@code dailyMoneyConstant * marginalUtilityOfMoney + dailyUtilityConstant}

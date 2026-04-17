@@ -79,7 +79,6 @@ class ScoringAdapterResolverTest {
 
 		assertEquals("planCalcScore", adapter.getName());
 		assertFalse(adapter.includesOpportunityCost());
-		assertTrue(adapter.supportsIterativeConstraints());
 		assertFalse(adapter.supportsDistanceSpecificMoneyUtility());
 	}
 
@@ -168,8 +167,6 @@ class ScoringAdapterResolverTest {
 				() -> assertEquals("planCalcScore", adapter.getName()),
 				() -> assertFalse(adapter.includesOpportunityCost(),
 						"planCalcScore does not include opportunity cost"),
-				() -> assertTrue(adapter.supportsIterativeConstraints(),
-						"planCalcScore supports iterative constraints"),
 				() -> assertFalse(adapter.supportsDistanceSpecificMoneyUtility(),
 						"planCalcScore has flat money utility")
 		);

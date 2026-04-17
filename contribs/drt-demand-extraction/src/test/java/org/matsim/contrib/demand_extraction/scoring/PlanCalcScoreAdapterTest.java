@@ -291,12 +291,6 @@ class PlanCalcScoreAdapterTest {
 	}
 
 	@Test
-	void testSupportsIterativeConstraints() {
-		assertTrue(adapter.supportsIterativeConstraints(),
-				"PlanCalcScoreAdapter should support iterative constraints");
-	}
-
-	@Test
 	void testDoesNotSupportDistanceSpecificMoneyUtility() {
 		assertFalse(adapter.supportsDistanceSpecificMoneyUtility(),
 				"PlanCalcScoreAdapter should NOT support distance-specific money utility");

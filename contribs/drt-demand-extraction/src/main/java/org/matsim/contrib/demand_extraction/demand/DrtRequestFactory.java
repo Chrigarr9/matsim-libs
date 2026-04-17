@@ -316,116 +316,22 @@ public class DrtRequestFactory {
 
 		double requestTime = trip.getOriginActivity().getEndTime().orElse(0.0);
 
-		// Build temporary request to use BudgetValidator for budget calculation
-		// This ensures consistent methodology between initial and ride validation
-		DrtRequest tempRequest = DrtRequest.builder()
-				.index(requestIndex)
-				.personId(person.getId())
-				.groupId(groupId)
-				.tripIndex(tripIdx)
-				.isCommute(isCommute)
-				.budget(0.0) // Will be calculated
-				.bestModeScore(bestBaselineMode.getValue())
-				.bestMode(bestBaselineMode.getKey())
-				.originLinkId(originLinkId)
-				.destinationLinkId(destinationLinkId)
-				.originX(originCoord.getX())
-				.originY(originCoord.getY())
-				.destinationX(destCoord.getX())
-				.destinationY(destCoord.getY())
-				.originLinkCoordFromX(originLinkFrom.getX())
-				.originLinkCoordFromY(originLinkFrom.getY())
-				.originLinkCoordToX(originLinkTo.getX())
-				.originLinkCoordToY(originLinkTo.getY())
-				.destinationLinkCoordFromX(destLinkFrom.getX())
-				.destinationLinkCoordFromY(destLinkFrom.getY())
-				.destinationLinkCoordToX(destLinkTo.getX())
-				.destinationLinkCoordToY(destLinkTo.getY())
-				.requestTime(requestTime)
-				.directTravelTime(drtAttrs.travelTime())
-				.directDistance(drtAttrs.distance())
-				.maxDetourFactor(exmasConfig.getMaxDetourFactor())
-				// Temporary placeholders for time windows (will be recalculated with actual
-				// budget)
-				.earliestDeparture(requestTime)
-				.latestArrival(requestTime + drtAttrs.travelTime())
-				.build();
-
-		// Calculate budget using BudgetValidator for consistency
-		double budget = budgetValidator.calculateBudget(tempRequest);
-
-		// Skip requests with non-positive budget: DRT is not better than the best
-		// alternative mode, so serving this passenger would never be beneficial.
-		if (budget <= 0.0) {
-			log.debug(
-					"Skipping request index {} (person: {}): non-positive budget ({}) — "
-							+ "DRT does not outperform best baseline mode ({})",
-					requestIndex, person.getId(), String.format("%.2f", budget),
-					bestBaselineMode.getKey());
-			return null;
-		}
-
-		// Calculate max detour factor as minimum of budget-derived and config limit
-		// This determines the maximum acceptable trip duration (e.g., 1.5 means 50%
-		// longer than direct)
-		double budgetDerivedDetour = budgetToConstraintsCalculator.budgetToMaxDetourTime(
-				budget, person, drtAttrs.travelTime(), drtAttrs.distance(), tempRequest);
-		double configMaxDetour = drtAttrs.travelTime() * (exmasConfig.getMaxDetourFactor() - 1.0);
-		double maxAbsoluteDetour = Math.min(budgetDerivedDetour, configMaxDetour);
-		
-		// Apply absolute detour cap if configured
-		if (exmasConfig.getMaxAbsoluteDetour() != null) {
-			maxAbsoluteDetour = Math.min(maxAbsoluteDetour, (double) exmasConfig.getMaxAbsoluteDetour());
-		}
-		
-		double effectiveMaxDetourFactor = 1.0 + (maxAbsoluteDetour / drtAttrs.travelTime());
-
-		// Flexibility controls WHEN someone can depart/arrive (temporal window)
-		// This is INDEPENDENT from detour (which controls HOW LONG the trip can take)
-		
-		// Origin flexibility (Negative Flexibility): how much earlier/later can passenger depart?
-		// Corresponds to max_negative_delay in Python
-		double originFlex = flexibilityCalculator.calculateOriginFlexibility(person, trip.getOriginActivity(), maxAbsoluteDetour);
-
-		// Destination flexibility (Positive Flexibility): how much earlier/later can passenger arrive?
-		// Corresponds to max_positive_delay in Python
-		double destFlex = flexibilityCalculator.calculateDestinationFlexibility(person, trip.getDestinationActivity(), maxAbsoluteDetour);
-
-		// Time window calculation (matching Python reference implementation):
-		// earliest_departure = treq - max_negative_delay (flexibility)
-		// latest_departure = treq + max_positive_delay (flexibility)
-		// earliest_arrival = earliest_departure + travel_time
-		// latest_arrival = latest_departure + travel_time
-		//
-		// Note: max_travel_time is SEPARATE and equals directTravelTime *
-		// maxDetourFactor
-
-		double earliestDep = requestTime - originFlex;
-		double latestDep = requestTime + destFlex;
-		double latestArr = latestDep + drtAttrs.travelTime();
-
-		// Calculate PT accessibility metrics
-		// ptMetrics[0] = carTravelTime, ptMetrics[1] = ptTravelTime
+		// PT accessibility = ptTravelTime / carTravelTime (higher = PT slower, 1.0 = parity)
 		double carTravelTime = (ptMetrics != null && ptMetrics.length > 0) ? ptMetrics[0] : Double.NaN;
 		double ptTravelTime = (ptMetrics != null && ptMetrics.length > 1) ? ptMetrics[1] : Double.NaN;
+		double ptAccessibility = (Double.isFinite(carTravelTime) && Double.isFinite(ptTravelTime) && carTravelTime > 0)
+				? ptTravelTime / carTravelTime
+				: Double.NaN;
 
-		// PT accessibility = ptTravelTime / carTravelTime
-		// Higher value = PT is slower (worse accessibility)
-		// Lower value = PT is faster (better accessibility)
-		// Value of 1.0 = PT and car are equally fast
-		double ptAccessibility = Double.NaN;
-	if (Double.isFinite(carTravelTime) && Double.isFinite(ptTravelTime) && carTravelTime > 0) {
-		ptAccessibility = ptTravelTime / carTravelTime;
-		}
-
-		// Build final request with calculated budget and time windows
-		return DrtRequest.builder()
+		// Build a draft request with every field that doesn't depend on the budget.
+		// Budget, time windows, and maxDetourFactor are placeholders, refined below
+		// once the binary search runs over this draft.
+		DrtRequest draft = DrtRequest.builder()
 				.index(requestIndex)
 				.personId(person.getId())
 				.groupId(groupId)
 				.tripIndex(tripIdx)
 				.isCommute(isCommute)
-				.budget(budget)
 				.bestModeScore(bestBaselineMode.getValue())
 				.bestMode(bestBaselineMode.getKey())
 				.originLinkId(originLinkId)
@@ -445,15 +351,53 @@ public class DrtRequestFactory {
 				.originActivityType(originActivity.getType())
 				.destinationActivityType(destActivity.getType())
 				.requestTime(requestTime)
-				.earliestDeparture(earliestDep)
-				.latestArrival(latestArr)
 				.directTravelTime(drtAttrs.travelTime())
 				.directDistance(drtAttrs.distance())
-				.maxDetourFactor(effectiveMaxDetourFactor)
 				.carTravelTime(carTravelTime)
 				.ptTravelTime(ptTravelTime)
 				.ptAccessibility(ptAccessibility)
+				.budget(0.0)
+				.earliestDeparture(requestTime)
+				.latestArrival(requestTime + drtAttrs.travelTime())
+				.maxDetourFactor(exmasConfig.getMaxDetourFactor())
 				.build();
+
+		draft.setScoringContext(budgetValidator.computeScoringContext(draft, person));
+
+		double budget = budgetValidator.calculateBudget(draft);
+		if (budget <= 0.0) {
+			log.debug(
+					"Skipping request index {} (person: {}): non-positive budget ({}) — "
+							+ "DRT does not outperform best baseline mode ({})",
+					requestIndex, person.getId(), String.format("%.2f", budget),
+					bestBaselineMode.getKey());
+			return null;
+		}
+
+		// maxDetourFactor = min(budget-derived detour, config cap, absolute cap if configured)
+		double budgetDerivedDetour = budgetToConstraintsCalculator.budgetToMaxDetourTime(
+				budget, person, drtAttrs.travelTime(), drtAttrs.distance(), draft);
+		double configMaxDetour = drtAttrs.travelTime() * (exmasConfig.getMaxDetourFactor() - 1.0);
+		double maxAbsoluteDetour = Math.min(budgetDerivedDetour, configMaxDetour);
+		if (exmasConfig.getMaxAbsoluteDetour() != null) {
+			maxAbsoluteDetour = Math.min(maxAbsoluteDetour, (double) exmasConfig.getMaxAbsoluteDetour());
+		}
+		double effectiveMaxDetourFactor = 1.0 + (maxAbsoluteDetour / drtAttrs.travelTime());
+
+		// Temporal flexibility (departure/arrival windows) — independent from detour.
+		double originFlex = flexibilityCalculator.calculateOriginFlexibility(person, trip.getOriginActivity(), maxAbsoluteDetour);
+		double destFlex = flexibilityCalculator.calculateDestinationFlexibility(person, trip.getDestinationActivity(), maxAbsoluteDetour);
+		double earliestDep = requestTime - originFlex;
+		double latestArr = requestTime + destFlex + drtAttrs.travelTime();
+
+		DrtRequest finalRequest = draft.toBuilder()
+				.budget(budget)
+				.earliestDeparture(earliestDep)
+				.latestArrival(latestArr)
+				.maxDetourFactor(effectiveMaxDetourFactor)
+				.build();
+		finalRequest.setScoringContext(draft.getScoringContext());
+		return finalRequest;
 	}
 
 	/**

@@ -133,11 +133,6 @@ public class EqasimScoringAdapter implements DemandExtractionScoringAdapter {
 	}
 
 	@Override
-	public boolean supportsIterativeConstraints() {
-		return true;
-	}
-
-	@Override
 	public boolean supportsDistanceSpecificMoneyUtility() {
 		return true;
 	}
