@@ -95,6 +95,11 @@ public class RunBavaria30kmDemandExtraction {
 		double interDegreeKeep = 0.10;
 		Integer networkTimeBinSize = null; // diagnostic override for MatsimNetworkCache binning
 
+		// Pruner selection — defaults match ExMasConfigGroup (COVERAGE_TOPK, K=20, ABS_SAVINGS).
+		String pruningModeArg = null;            // null => config default (COVERAGE_TOPK)
+		Integer pruningCoverageKArg = null;      // null => config default (20)
+		String pruningQualityMetricArg = null;   // null => config default (ABS_SAVINGS)
+
 		// Sweep knobs — applied as overrides after configureForDemandExtraction when NaN-guarded
 		double searchHorizonOverride = Double.NaN;
 		double maxDetourFactorOverride = Double.NaN;
@@ -129,6 +134,9 @@ public class RunBavaria30kmDemandExtraction {
 				case "--max-degree" -> maxDegree = Integer.parseInt(args[++i]);
 				case "--inter-degree-keep", "--inter-degree-keep-fraction"
 						-> interDegreeKeep = Double.parseDouble(args[++i]);
+				case "--pruning-mode" -> pruningModeArg = args[++i];
+				case "--pruning-coverage-k" -> pruningCoverageKArg = Integer.parseInt(args[++i]);
+				case "--pruning-quality-metric" -> pruningQualityMetricArg = args[++i];
 				case "--search-horizon" -> searchHorizonOverride = Double.parseDouble(args[++i]);
 				case "--max-detour-factor" -> maxDetourFactorOverride = Double.parseDouble(args[++i]);
 				case "--min-drt-cost-per-km" -> minDrtCostPerKmOverride = Double.parseDouble(args[++i]);
@@ -198,6 +206,25 @@ public class RunBavaria30kmDemandExtraction {
 		configureForDemandExtraction(config, outDir, sampleSize, iterations,
 				algorithmProcessCount, heuristicsProcessCount, deterministic, noPruning,
 				noPredecessors, maxDegree, interDegreeKeep);
+
+		// Pruner CLI overrides applied after configureForDemandExtraction (which registers
+		// ExMasConfigGroup with the defaults). Unset flags fall through to config defaults.
+		if (pruningModeArg != null || pruningCoverageKArg != null || pruningQualityMetricArg != null) {
+			ExMasConfigGroup ex = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
+			if (pruningModeArg != null) {
+				ex.setPruningMode(ExMasConfigGroup.PruningMode.valueOf(pruningModeArg.toUpperCase()));
+				log.info("  Pruner override: pruningMode={}", ex.getPruningMode());
+			}
+			if (pruningCoverageKArg != null) {
+				ex.setPruningCoverageK(pruningCoverageKArg);
+				log.info("  Pruner override: pruningCoverageK={}", ex.getPruningCoverageK());
+			}
+			if (pruningQualityMetricArg != null) {
+				ex.setPruningQualityMetric(ExMasConfigGroup.PruningQualityMetric.valueOf(pruningQualityMetricArg.toUpperCase()));
+				log.info("  Pruner override: pruningQualityMetric={}", ex.getPruningQualityMetric());
+			}
+		}
+
 		String runId = config.controller().getRunId();
 
 		// Trip-level spatial filter: uses resolved filter center (from --filter-municipality or --filter-center)
@@ -506,18 +533,45 @@ public class RunBavaria30kmDemandExtraction {
 
 	/**
 	 * Register eqasim activity types with sensible typical durations.
-	 * Bavaria eqasim uses simple names (home, work, etc.), not Snz-suffixed.
+	 * Registers BOTH simple names (home, work, etc.) AND duration-split variants
+	 * (home_600, home_1200, ..., home_86400) so populations from either eqasim or
+	 * Snz-style base simulations are accepted.
 	 */
 	private static void registerEqasimActivities(Config config) {
 		ScoringConfigGroup scoring = config.scoring();
 
-		// Scored activities with typical durations
+		// Scored activities with typical durations (simple names)
 		addActivityParams(scoring, "home", 12 * 3600, true);
 		addActivityParams(scoring, "work", 8 * 3600, true);
 		addActivityParams(scoring, "education", 6 * 3600, true);
 		addActivityParams(scoring, "shop", 1 * 3600, true);
 		addActivityParams(scoring, "leisure", 2 * 3600, true);
 		addActivityParams(scoring, "other", 2 * 3600, true);
+
+		// Duration-split variants: <type>_600, <type>_1200, ..., <type>_86400 (600s bins)
+		// Needed when population uses Snz-style duration-encoded activity types.
+		String[][] scoredDurationTypes = {
+			{"home", "-1", "-1"},
+			{"work", "6", "20"},
+			{"education", "7", "22"},
+			{"shop", "8", "20"},
+			{"leisure", "9", "27"},
+			{"other", "-1", "-1"},
+		};
+		for (String[] typeInfo : scoredDurationTypes) {
+			String baseType = typeInfo[0];
+			double openTime = Double.parseDouble(typeInfo[1]) * 3600;
+			double closeTime = Double.parseDouble(typeInfo[2]) * 3600;
+			for (long duration = 600; duration <= 86400; duration += 600) {
+				String typeName = baseType + "_" + duration;
+				if (scoring.getActivityParams(typeName) != null) continue;
+				ActivityParams params = new ActivityParams(typeName);
+				params.setTypicalDuration(duration);
+				if (openTime > 0) params.setOpeningTime(openTime);
+				if (closeTime > 0) params.setClosingTime(closeTime);
+				scoring.addActivityParams(params);
+			}
+		}
 
 		// Non-scored activities
 		addActivityParams(scoring, "outside", -1, false);
@@ -526,11 +580,12 @@ public class RunBavaria30kmDemandExtraction {
 
 		// Interaction activities (never scored)
 		for (String mode : new String[]{"car", "pt", "bike", "walk", "drt", "ride",
-				"taxi", "other", "car_passenger"}) {
+				"taxi", "other", "car_passenger", "bicycle"}) {
 			addActivityParams(scoring, mode + " interaction", -1, false);
 		}
 
-		log.info("Registered {} eqasim activity types", scoring.getActivityParams().size());
+		log.info("Registered {} eqasim activity types (simple + duration-split)",
+				scoring.getActivityParams().size());
 	}
 
 	private static void addActivityParams(ScoringConfigGroup scoring, String type,

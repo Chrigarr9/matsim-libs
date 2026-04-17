@@ -142,7 +142,6 @@ public final class ExMasEngine {
 		log.info("");
 		log.info("PHASE 4: Iterative Ride Extension");
 		log.info("======================================================================");
-		double interDegreeKeepFraction = exMasConfig.getInterDegreeKeepFraction();
 		int nextRideIndex = allRides.size();
 		DegreeGraph prevDegreeGraph = null;
 		for (int degree = 2; degree < maxDegree; degree++) {
@@ -160,11 +159,13 @@ public final class ExMasEngine {
 				break;
 			}
 
-			// Mandatory inter-degree pruning: keep top X% by distance savings.
-			// Direct fraction (no sqrt scaling). Survivors = output + base sets for next degree.
+			// Inter-degree pruning: delegates to PostExtensionPruner. Mode selected from config:
+			//   RATIO_THRESHOLD — legacy per-degree top-X% by savingsRatio (gated by interDegreeKeepFraction<1)
+			//   COVERAGE_TOPK   — per-request top-K by quality metric (default, always active)
+			// Survivors become base sets for next degree AND final output.
 			int generatedCount = extended.size();
-			if (interDegreeKeepFraction < 1.0) {
-				PostExtensionPruner pruner = new PostExtensionPruner(interDegreeKeepFraction);
+			PostExtensionPruner pruner = buildPruner(exMasConfig);
+			if (pruner != null) {
 				extended = pruner.prune(extended);
 			}
 
@@ -522,6 +523,26 @@ public final class ExMasEngine {
 				initial, result.size(), initial - result.size(),
 				String.format(java.util.Locale.ROOT, "%.1f%%", (1.0 - (double) result.size() / initial) * 100));
 		return result;
+	}
+
+	/**
+	 * Build the inter-degree pruner from config, or null if pruning is disabled.
+	 * RATIO_THRESHOLD with keepTopFraction >= 1.0 returns null (no-op pass-through).
+	 */
+	private static PostExtensionPruner buildPruner(org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg) {
+		switch (cfg.getPruningMode()) {
+			case RATIO_THRESHOLD:
+				double frac = cfg.getInterDegreeKeepFraction();
+				return frac < 1.0 ? PostExtensionPruner.ratioThreshold(frac) : null;
+			case COVERAGE_TOPK:
+				PostExtensionPruner.QualityMetric metric = switch (cfg.getPruningQualityMetric()) {
+					case ABS_SAVINGS -> PostExtensionPruner.ABS_SAVINGS;
+					case RATIO_SAVINGS -> PostExtensionPruner.RATIO_SAVINGS;
+				};
+				return PostExtensionPruner.coverageTopK(cfg.getPruningCoverageK(), metric);
+			default:
+				throw new IllegalStateException("Unknown pruning mode: " + cfg.getPruningMode());
+		}
 	}
 
 	private static double computeRequiredSavingForDegree(int degree, double scale, double maxSaving, int minDegree) {
