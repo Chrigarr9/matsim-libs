@@ -67,7 +67,7 @@ public class RunBavariaEqasimDemandExtraction {
 	private static final Logger log = LogManager.getLogger(RunBavariaEqasimDemandExtraction.class);
 
 	private static final String SCENARIO_PATH =
-			"../../../matsim_scenarios/bavaria/output/kelheim_30km_100pct";
+			"../../../matsim_scenarios/bavaria/output/kelheim_calib_10pct";
 	private static final String POPULATION_DIR =
 			"../../../matsim_scenarios/bavaria/output/populations_eqasim";
 	private static final String FILE_PREFIX = "kelheim_30km_100pct_";
@@ -208,12 +208,26 @@ public class RunBavariaEqasimDemandExtraction {
 			}
 		});
 
-		// Load offline travel times, bind as car TravelTime
+		// Load offline travel times, bind as car TravelTime.
+		//
+		// Also bind car TravelDisutilityFactory to OnlyTimeDependentTravelDisutilityFactory.
+		// The eqasim runner's `registerMinimalModeParams` sets car.margUtilTraveling /
+		// margUtilDistance / monetaryDistanceRate all to 0, and `configureEqasim` sets
+		// performing_utils_hr=0 (because eqasim betaTravelTime already includes opportunity
+		// cost). MATSim's default RandomizingTimeDistanceTravelDisutilityFactory would then
+		// produce zero disutility on every link, collapsing SpeedyALT's A* to exhaustive
+		// Dijkstra on the full 30 km network and making every routing call ~60× slower.
+		// OnlyTimeDependentTravelDisutilityFactory ignores scoring params and uses the
+		// bound TravelTime directly, restoring a proper routing cost gradient.
+		// Scoring is unaffected: eqasim goes through EqasimScoringAdapter, which reads
+		// BavariaModeParameters, not MATSim ModeParams.
 		TravelTime offlineTravelTime = loadOfflineTravelTimes(p.travelTimesPath);
 		controler.addOverridingModule(new org.matsim.core.controler.AbstractModule() {
 			@Override
 			public void install() {
 				addTravelTimeBinding(TransportMode.car).toInstance(offlineTravelTime);
+				addTravelDisutilityFactoryBinding(TransportMode.car)
+						.toInstance(new org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutilityFactory());
 			}
 		});
 
