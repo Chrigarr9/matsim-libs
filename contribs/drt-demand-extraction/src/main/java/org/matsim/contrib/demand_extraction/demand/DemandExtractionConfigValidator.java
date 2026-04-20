@@ -3,6 +3,8 @@ package org.matsim.contrib.demand_extraction.demand;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import ch.sbb.matsim.config.SwissRailRaptorConfigGroup;
+
 import org.matsim.contrib.drt.optimizer.insertion.selective.SelectiveInsertionSearchParams;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.contrib.drt.run.MultiModeDrtConfigGroup;
@@ -14,7 +16,6 @@ import org.matsim.core.config.groups.RoutingConfigGroup;
 import org.matsim.core.config.groups.ScoringConfigGroup;
 import org.matsim.core.config.groups.TravelTimeCalculatorConfigGroup;
 
-import ch.sbb.matsim.config.SwissRailRaptorConfigGroup;
 
 /**
  * Comprehensive configuration validator and setup utility for ExMAS demand
@@ -164,14 +165,29 @@ public class DemandExtractionConfigValidator {
 	}
 
 	/**
-	 * Configures SwissRailRaptor (PT router) based on ExMas settings.
-	 * 
-	 * When ptOptimizeDepartureTime is enabled, sets up range query mode to allow
-	 * flexible departure times for better PT connections.
-	 * 
-	 * Range query settings are derived from ExMas flexibility parameters:
-	 * - maxEarlierDeparture: originFlexibilityAbsolute
-	 * - maxLaterDeparture: originFlexibilityAbsolute
+	 * Configures SwissRailRaptor (PT router) range query for departure-time
+	 * optimisation.
+	 *
+	 * When ptOptimizeDepartureTime is enabled, SRR uses range query mode so the
+	 * agent is routed via the best PT connection within a time window. Without
+	 * this, SRR routes from the exact activity end time; if the next bus is
+	 * 40 min away that waiting time inflates PT cost and artificially boosts DRT
+	 * demand by making PT look worse than it realistically is.
+	 *
+	 * The range window is derived from ExMas flexibility parameters:
+	 *   maxEarlierDeparture = negativeFlexibilityAbsolute (default: 0 s)
+	 *   maxLaterDeparture   = negativeFlexibilityAbsolute (default: 0 s)
+	 * With a [0, 0] window SRR is equivalent to its standard (non-range) mode.
+	 * Widen via the flexibility config when realistic departure flexibility
+	 * matters (e.g. Lyon urban scenario).
+	 *
+	 * Bug fixed: SRR's getRangeQuerySettings(subpopulation) and
+	 * getRouteSelector(subpopulation) perform direct map lookups with NO fallback
+	 * — they return null for any named subpopulation (e.g. "person") even when a
+	 * null-key default entry exists, causing NPEs in performRangeQuery. We add
+	 * explicit entries for BOTH null (no subpopulation attribute) and "person"
+	 * (standard MATSim/eqasim subpopulation name) for RangeQuerySettings AND
+	 * RouteSelectorParameterSet.
 	 */
 	private static void ensurePtRouterConfigCorrect(Config config, ExMasConfigGroup exMasConfig) {
 		if (!exMasConfig.isPtOptimizeDepartureTime()) {
@@ -179,39 +195,45 @@ public class DemandExtractionConfigValidator {
 			return;
 		}
 
-		// Get or create SwissRailRaptorConfigGroup
 		SwissRailRaptorConfigGroup raptorConfig = ConfigUtils.addOrGetModule(config, SwissRailRaptorConfigGroup.class);
-
-		// Always enable range query for PT optimization
 		raptorConfig.setUseRangeQuery(true);
 
-		// Use ExMas origin flexibility for PT range query
-		// This allows agents to depart earlier/later to catch better connections
 		double originFlexAbs = getDefaultFromMapString(exMasConfig.getNegativeFlexibilityAbsoluteMap(), 0.0);
 		int maxEarlierDeparture = (int) originFlexAbs;
 		int maxLaterDeparture = (int) originFlexAbs;
 
-		// Check if ANY range query settings exist by checking the parameter sets
-		var existingSettings = raptorConfig.getParameterSets("RangeQuerySettings");
-		boolean hasRangeSettings = !existingSettings.isEmpty();
+		log.info("Configuring SwissRailRaptor range query (maxEarlier={}s, maxLater={}s)", maxEarlierDeparture, maxLaterDeparture);
 
-		if (!hasRangeSettings) {
-			log.info("Configuring SwissRailRaptor DEFAULT range query for flexible PT departure times");
-
-			// Create DEFAULT range query settings (no subpopulation = applies to all)
-			SwissRailRaptorConfigGroup.RangeQuerySettingsParameterSet defaultSettings = new SwissRailRaptorConfigGroup.RangeQuerySettingsParameterSet();
-			// NOT setting subpopulation makes this the DEFAULT for all subpopulations
-			defaultSettings.setMaxEarlierDeparture(maxEarlierDeparture);
-			defaultSettings.setMaxLaterDeparture(maxLaterDeparture);
-
-			raptorConfig.addParameterSet(defaultSettings);
-
-			log.info("  maxEarlierDeparture: {}s (from ExMas originFlexibilityAbsolute)", maxEarlierDeparture);
-			log.info("  maxLaterDeparture: {}s (from ExMas originFlexibilityAbsolute)", maxLaterDeparture);
-			log.info("  Applies to: ALL subpopulations (default settings)");
+		// RangeQuerySettings — needed for performRangeQuery().
+		// Must be added for both null (no subpopulation attr) AND "person"
+		// because SRR has no default-fallback in getRangeQuerySettings().
+		if (raptorConfig.getParameterSets("rangeQuerySettings").isEmpty()) {
+			for (String subpop : new String[]{ null, "person" }) {
+				SwissRailRaptorConfigGroup.RangeQuerySettingsParameterSet s =
+						new SwissRailRaptorConfigGroup.RangeQuerySettingsParameterSet();
+				if (subpop != null) s.setSubpopulations(subpop);
+				s.setMaxEarlierDeparture(maxEarlierDeparture);
+				s.setMaxLaterDeparture(maxLaterDeparture);
+				raptorConfig.addParameterSet(s);
+			}
+			log.info("  Added rangeQuerySettings for null + 'person' subpopulations");
 		} else {
-			log.info("SwissRailRaptor range query settings already configured");
-			log.info("  Number of parameter sets: {}", existingSettings.size());
+			log.info("  rangeQuerySettings already configured ({} sets)", raptorConfig.getParameterSets("rangeQuerySettings").size());
+		}
+
+		// RouteSelectorParameterSet — needed when ConfigurableRaptorRouteSelector
+		// is active (which it is in range query mode). Same no-fallback bug.
+		if (raptorConfig.getParameterSets("routeSelector").isEmpty()) {
+			for (String subpop : new String[]{ null, "person" }) {
+				SwissRailRaptorConfigGroup.RouteSelectorParameterSet s =
+						new SwissRailRaptorConfigGroup.RouteSelectorParameterSet();
+				if (subpop != null) s.setSubpopulations(subpop);
+				// Use SRR defaults: betaTravelTime=1, betaDepartureTime=1, betaTransfers=300
+				raptorConfig.addParameterSet(s);
+			}
+			log.info("  Added routeSelector settings for null + 'person' subpopulations");
+		} else {
+			log.info("  routeSelector settings already configured ({} sets)", raptorConfig.getParameterSets("routeSelector").size());
 		}
 	}
 

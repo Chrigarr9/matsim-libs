@@ -223,8 +223,7 @@ public class ExMasKelheimHyperPoolE2ETest {
 		exMasConfig.setPruningDistanceSavingsLogScale(0.15); // Enable distance-based pruning (increasing with degree)
 		exMasConfig.setPruningDistanceSavingsMinDegree(3); // Apply distance pruning from degree 3+
 
-		// TEMPORARY: Disable PT optimization due to SwissRailRaptor configuration issue
-		exMasConfig.setPtOptimizeDepartureTime(false);
+		exMasConfig.setPtOptimizeDepartureTime(true);
 
 		// ========================================
 		// HYPERPOOL CONFIGURATION (NEW!)
@@ -265,11 +264,11 @@ public class ExMasKelheimHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// Updated format has 27 fields
-				Assertions.assertEquals(28, parts.length, "Each request should have 28 fields (includes activity types)");
+				// Current format: 29 fields (incl. isEducation col 5, maxCostPerKm col 28)
+				Assertions.assertEquals(29, parts.length, "Each request should have 29 fields");
 
 				String personId = parts[1]; // personId is column 1 (after index)
-				double budget = Double.parseDouble(parts[5]); // budget is column 5
+				double budget = Double.parseDouble(parts[6]); // budget is column 6 (after isEducation)
 				personIds.add(personId);
 
 				// Budget should be a valid number
@@ -313,20 +312,21 @@ public class ExMasKelheimHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				Assertions.assertEquals(34, parts.length, "Each ride should have 34 fields (with HyperPool)");
+				// Current format: 35 fields (incl. isEducations col 9, maxCostsPerKm col 18)
+				Assertions.assertEquals(35, parts.length, "Each ride should have 35 fields");
 
 				int degree = Integer.parseInt(parts[1]);
 				String variant = parts[3]; // DOOR_TO_DOOR, STOP_TO_STOP, or HYPER_POOLED
 				String requestIndices = parts[4];
-				String remainingBudgets = parts[15];
+				String remainingBudgets = parts[16]; // was 15, shifted by isEducations
 
-				// Stop-related fields (indices 23-32)
-				String pickupStopLinkId = parts[23];
-				String pickupStopX = parts[24];
-				String pickupStopY = parts[25];
-				String dropoffStopLinkId = parts[27];
-				String accessWalkDistances = parts[31];
-				String egressWalkDistances = parts[32];
+				// Stop-related fields (shifted by +2 due to isEducations + maxCostsPerKm)
+				String pickupStopLinkId = parts[25]; // was 23
+				String pickupStopX = parts[26];      // was 24
+				String pickupStopY = parts[27];      // was 25
+				String dropoffStopLinkId = parts[29]; // was 27
+				String accessWalkDistances = parts[33]; // was 31
+				String egressWalkDistances = parts[34]; // was 32
 
 				// Track by degree and variant
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
@@ -377,7 +377,7 @@ public class ExMasKelheimHyperPoolE2ETest {
 
 				// Store ride for comparison
 				RideRecord record = new RideRecord(variant, degree, budgets,
-					Double.parseDouble(parts[21]), Double.parseDouble(parts[22])); // rideTravelTime, rideDistance
+					Double.parseDouble(parts[23]), Double.parseDouble(parts[24])); // rideTravelTime, rideDistance
 				ridesByRequestSet.computeIfAbsent(requestIndices, k -> new ArrayList<>()).add(record);
 
 				rideCount++;

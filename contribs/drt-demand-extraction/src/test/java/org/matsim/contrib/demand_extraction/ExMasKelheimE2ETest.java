@@ -194,9 +194,7 @@ public class ExMasKelheimE2ETest {
 		// exMasConfig.setPositiveFlexibilityRelativeMap("default:0.5"); // 0% of detour time
 		exMasConfig.setMaxPoolingDegree(10); // Allow up to 10 passengers
 
-		// TEMPORARY: Disable PT optimization due to SwissRailRaptor configuration issue
-		// TODO: Fix SwissRailRaptor range query settings configuration
-		exMasConfig.setPtOptimizeDepartureTime(false);
+		exMasConfig.setPtOptimizeDepartureTime(true);
 
 		// Note: DRT config and scoring params are now auto-configured by
 		// DemandExtractionModule
@@ -216,15 +214,16 @@ public class ExMasKelheimE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// Updated format has 27 fields:
-				// index,personId,groupId,tripIndex,isCommute,budget,requestTime,
-				// originLinkId,destinationLinkId,originX,originY,destinationX,destinationY,directTravelTime,
-				// directDistance,earliestDeparture,latestArrival,maxTravelTime,maxPositiveDelay,maxNegativeDelay,
-				// baseModeScore,baseMode,originActivityType,destinationActivityType,carTravelTime,ptTravelTime,ptAccessibility
-				Assertions.assertEquals(28, parts.length, "Each request should have 28 fields (includes activity types)");
+				// Current format has 29 fields:
+				// index,personId,groupId,tripIndex,isCommute,isEducation,budget,requestTime,
+				// originLinkId,destinationLinkId,originX,originY,destinationX,destinationY,
+				// originActivityType,destinationActivityType,directTravelTime,directDistance,
+				// earliestDeparture,latestArrival,maxTravelTime,maxPositiveDelay,maxNegativeDelay,
+				// baseModeScore,baseMode,carTravelTime,ptTravelTime,ptAccessibility,maxCostPerKm
+				Assertions.assertEquals(29, parts.length, "Each request should have 29 fields");
 
-				String personId = parts[1]; // personId is now column 1 (after index)
-				double budget = Double.parseDouble(parts[5]); // budget is now column 5
+				String personId = parts[1]; // personId is column 1 (after index)
+				double budget = Double.parseDouble(parts[6]); // budget is column 6 (after isEducation)
 				personIds.add(personId);
 
 				// Budget should be a valid number
@@ -261,14 +260,16 @@ public class ExMasKelheimE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// Updated format (34 fields, with HyperPool stop-based pooling):
-				// rideIndex,degree,kind,variant,requestIndices,personIds,groupIds,requestTimes,isCommutes,
-				// originsOrdered,destinationsOrdered,passengerTravelTimes,passengerDistances,delays,detours,
-				// remainingBudgets,maxCosts,shapleyValues,successors,startTime,endTime,rideTravelTime,rideDistance,
+				// Current format (35 fields):
+				// rideIndex,degree,kind,variant,requestIndices,personIds,groupIds,requestTimes,
+				// isCommutes,isEducations,originsOrdered,destinationsOrdered,
+				// passengerTravelTimes,passengerDistances,delays,detours,remainingBudgets,
+				// maxCosts,maxCostsPerKm,shapleyValues,successors,startTime,endTime,
+				// rideTravelTime,rideDistance,
 				// pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty,
 				// dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty,
 				// accessWalkDistances,egressWalkDistances
-				Assertions.assertEquals(34, parts.length, "Each ride should have 34 fields (with HyperPool stop fields)");
+				Assertions.assertEquals(35, parts.length, "Each ride should have 35 fields");
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();
@@ -277,11 +278,10 @@ public class ExMasKelheimE2ETest {
 
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
 
-				// rideTravelTime is field 21 (was 20), rideDistance is field 22 (was 21)
-				double duration = Double.parseDouble(parts[21]);
+				double duration = Double.parseDouble(parts[23]); // rideTravelTime
 				Assertions.assertTrue(duration >= 0, "Duration should be non-negative");
 
-				double distance = Double.parseDouble(parts[22]);
+				double distance = Double.parseDouble(parts[24]); // rideDistance
 				Assertions.assertTrue(distance >= 0, "Distance should be non-negative");
 
 				// Verify remaining budgets are present (field 14)
