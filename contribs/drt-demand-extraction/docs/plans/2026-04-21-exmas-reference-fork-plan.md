@@ -990,7 +990,7 @@ git commit -m "fix(exmas-port): <specific divergence> — now matches golden"
 
 ## Phase 6.5 — Cross-check against Python ExMAS reference
 
-**Purpose:** the Java `main` ExMAS we ported from is itself derived from Kucharski's original Python ExMAS (`github.com/RafalKucharski/ExMAS` — check the repo name when starting; maintainer may have moved it). If `main`'s Java deviated from the Python during its own porting, our `exmas/` inherits that deviation. Comparing our port to the Python ground truth catches semantic drift that the Kelheim golden can't see (because the golden measures "reconstructed == main", not "reconstructed == Kucharski's algorithm").
+**Purpose:** the Java `main` ExMAS we ported from is itself derived from Kucharski's original Python ExMAS (`github.com/RafalKucharskiPK/ExMAS`). If `main`'s Java deviated from the Python during its own porting, our `exmas/` inherits that deviation. Comparing our port to the Python ground truth catches semantic drift that the Kelheim golden can't see (because the golden measures "reconstructed == main", not "reconstructed == Kucharski's algorithm").
 
 **Scope:** code-level review, not a full runtime comparison. A full runtime comparison would require porting Kelheim to Python ExMAS's input format (travel-time matrix + request list) — significant work with limited incremental information. Code review catches algorithmic divergences much cheaper.
 
@@ -1002,9 +1002,7 @@ A runtime comparison is a **stretch goal** — attempt only if the code review s
 
 ```bash
 # Clone to a scratch location outside the repo
-git clone https://github.com/RafalKucharski/ExMAS /tmp/exmas-python
-# If that URL is stale, search for "ExMAS Kucharski" on GitHub — the algorithm
-# is also embedded in the MaaSSim repo (github.com/RafalKucharski/MaaSSim)
+git clone https://github.com/RafalKucharskiPK/ExMAS /tmp/exmas-python
 
 cd /tmp/exmas-python
 # Identify the core extension-loop module. Typical names:
@@ -1025,7 +1023,7 @@ Structure:
 # ExMAS Port Review — Python vs Java (main) vs our port
 
 **Date:** <date>
-**Python source:** github.com/RafalKucharski/ExMAS @ <sha>
+**Python source:** github.com/RafalKucharskiPK/ExMAS @ <sha>
 **main's Java:** matsim-libs/contribs/drt-demand-extraction @ main
 **Our port:** algorithm/exmas/ on feature/exmas-reference-fork
 
