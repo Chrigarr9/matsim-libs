@@ -22,8 +22,13 @@ import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
 
 import com.google.inject.Inject;
+import com.google.inject.Injector;
 import com.google.inject.Provider;
+import com.google.inject.Provides;
+import com.google.inject.Singleton;
 import com.google.inject.name.Named;
+
+import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasAlgorithm;
 
 /**
  * Guice module for ExMAS algorithm components.
@@ -73,6 +78,23 @@ public class ExMasAlgorithmModule extends AbstractModule {
         bind(BudgetValidator.class).asEagerSingleton();
         bind(BudgetToConstraintsCalculator.class).asEagerSingleton();
         bind(MatsimNetworkCache.class).asEagerSingleton();
+    }
+
+    /**
+     * Strategy dispatch. Selects the Stage-1 algorithm from
+     * {@link ExMasConfigGroup#getAlgorithm()}.
+     * <p>Phase 1: only {@code BAMAS} is wired; {@code EXMAS} throws until
+     * {@link org.matsim.contrib.demand_extraction.algorithm.exmas.ExMasReferenceAlgorithm}
+     * lands in Phase 2.
+     */
+    @Provides
+    @Singleton
+    public ExMasAlgorithm provideExMasAlgorithm(Injector injector, ExMasConfigGroup cfg) {
+        return switch (cfg.getAlgorithm()) {
+            case BAMAS -> injector.getInstance(BamasAlgorithm.class);
+            case EXMAS -> throw new UnsupportedOperationException(
+                    "ExMasReferenceAlgorithm lands in Phase 2 of feature/exmas-reference-fork");
+        };
     }
 
 	/**

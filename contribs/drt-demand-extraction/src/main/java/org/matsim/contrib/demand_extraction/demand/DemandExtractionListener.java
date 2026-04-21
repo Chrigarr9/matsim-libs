@@ -8,8 +8,9 @@ import java.util.List;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.population.Population;
+import org.matsim.contrib.demand_extraction.algorithm.AlgorithmResult;
+import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithm;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
-import org.matsim.contrib.demand_extraction.algorithm.engine.ExMasEngine;
 import org.matsim.contrib.demand_extraction.algorithm.engine.RidePostProcessor;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
@@ -40,6 +41,7 @@ public class DemandExtractionListener implements ShutdownListener {
 	private final BudgetToConstraintsCalculator budgetToConstraintsCalculator;
 	private final OutputDirectoryHierarchy outputDirectory;
 	private final RequestSampler requestSampler;
+	private final ExMasAlgorithm algorithm;
 
     @Inject
 	public DemandExtractionListener(
@@ -53,7 +55,8 @@ public class DemandExtractionListener implements ShutdownListener {
 			BudgetValidator budgetValidator,
 			BudgetToConstraintsCalculator budgetToConstraintsCalculator,
 			OutputDirectoryHierarchy outputDirectory,
-			RequestSampler requestSampler) {
+			RequestSampler requestSampler,
+			ExMasAlgorithm algorithm) {
         this.modeRoutingCache = modeRoutingCache;
         this.chainIdentifier = chainIdentifier;
         this.requestFactory = requestFactory;
@@ -65,6 +68,7 @@ public class DemandExtractionListener implements ShutdownListener {
 		this.budgetToConstraintsCalculator = budgetToConstraintsCalculator;
 		this.outputDirectory = outputDirectory;
 		this.requestSampler = requestSampler;
+		this.algorithm = algorithm;
     }
 
     @Override
@@ -103,17 +107,12 @@ public class DemandExtractionListener implements ShutdownListener {
 		// Apply sampling if configured
 		requests = requestSampler.sampleRequests(requests);
 
-		// 4. Generate ExMAS Rides (with budget validation)
+		// 4. Generate Stage-1 Rides via the selected strategy (BAMAS or ExMAS reference).
 		log.info("");
-		log.info("STEP 4: Running ExMAS ride generation algorithm");
+		log.info("STEP 4: Running {} ride generation algorithm", exMasConfig.getAlgorithm());
 		log.info("----------------------------------------------------------------------");
-		ExMasEngine exmasEngine = new ExMasEngine(
-			networkCache,
-			budgetValidator,
-			exMasConfig.getSearchHorizon(),
-			exMasConfig.getMaxPoolingDegree(),
-			exMasConfig);
-		List<Ride> rides = exmasEngine.run(requests);
+		AlgorithmResult algorithmResult = algorithm.run(requests);
+		List<Ride> rides = algorithmResult.rides();
 
 		// Post-process rides with advanced metrics (maxCost, Shapley, predecessors)
 		RidePostProcessor postProcessor = new RidePostProcessor(exMasConfig, networkCache, budgetToConstraintsCalculator, population);
