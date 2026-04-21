@@ -78,6 +78,10 @@ public class ExMasAlgorithmModule extends AbstractModule {
         bind(BudgetValidator.class).asEagerSingleton();
         bind(BudgetToConstraintsCalculator.class).asEagerSingleton();
         bind(MatsimNetworkCache.class).asEagerSingleton();
+
+        // Strategy implementations (MATSim disables Guice JIT bindings, so these
+        // must be bound explicitly for provideExMasAlgorithm to resolve them).
+        bind(BamasAlgorithm.class);
     }
 
     /**
