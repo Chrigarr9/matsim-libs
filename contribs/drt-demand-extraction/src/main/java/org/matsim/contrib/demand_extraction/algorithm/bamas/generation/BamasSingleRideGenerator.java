@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.generation;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.generation;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -26,18 +26,18 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  *
  * Python reference: src/exmas_commuters/core/exmas/rides.py lines 12-41
  */
-public final class SingleRideGenerator {
-	private static final Logger log = LogManager.getLogger(SingleRideGenerator.class);
+public final class BamasSingleRideGenerator {
+	private static final Logger log = LogManager.getLogger(BamasSingleRideGenerator.class);
 
 	private final MatsimNetworkCache networkCache;
 	private final BudgetValidator budgetValidator;
 	private final boolean useParallel;
 
-	public SingleRideGenerator(MatsimNetworkCache networkCache, BudgetValidator budgetValidator) {
+	public BamasSingleRideGenerator(MatsimNetworkCache networkCache, BudgetValidator budgetValidator) {
 		this(networkCache, budgetValidator, -1);
 	}
 
-	public SingleRideGenerator(MatsimNetworkCache networkCache, BudgetValidator budgetValidator,
+	public BamasSingleRideGenerator(MatsimNetworkCache networkCache, BudgetValidator budgetValidator,
 			int algorithmProcessCount) {
 		this.networkCache = networkCache;
 		this.budgetValidator = budgetValidator;

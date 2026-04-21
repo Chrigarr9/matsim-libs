@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.extension;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.extension;
 
 import org.junit.jupiter.api.Test;
 

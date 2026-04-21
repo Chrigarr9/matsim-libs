@@ -144,7 +144,7 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	private int networkTimeBinSize = 60 * 60; // Network cache time bin size in seconds (1 hour)
 
-	// If true, RideExtender skips per-ordering budget validation and BudgetValidator.populateBudgetsBatch
+	// If true, BamasRideExtender skips per-ordering budget validation and BudgetValidator.populateBudgetsBatch
 	// is called once after the extension loop. Safe ONLY when budget validation never rejects on the
 	// scenario (e.g. Bavaria, where budget is subsumed by max-travel-time). On scenarios where budget
 	// actually rejects, this can drop sets whose shortest ordering fails budget but a longer feasible
@@ -1186,7 +1186,7 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("networkTimeBinSize",
 				"Time bin size for network travel time caching (seconds). Queries within same bin reuse cached values. Default: 900 (15 min)");
 		map.put("deferExtensionBudgetValidation",
-				"If true, RideExtender skips per-ordering budget validation and BudgetValidator " +
+				"If true, BamasRideExtender skips per-ordering budget validation and BudgetValidator " +
 				"populates remainingBudgets once after the extension loop. Safe ONLY when budget " +
 				"validation never rejects (e.g. Bavaria). May drop feasible sets on scenarios " +
 				"where budget actively rejects orderings. Default: false");

@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.engine;
+package org.matsim.contrib.demand_extraction.algorithm.bamas;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -13,10 +13,11 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
-import org.matsim.contrib.demand_extraction.algorithm.extension.RideExtender;
-import org.matsim.contrib.demand_extraction.algorithm.graph.DegreeGraph;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.extension.BamasRideExtender;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.graph.DegreeGraph;
+import org.matsim.contrib.demand_extraction.algorithm.engine.PostExtensionPruner;
 import org.matsim.contrib.demand_extraction.algorithm.generation.PairGenerator;
-import org.matsim.contrib.demand_extraction.algorithm.generation.SingleRideGenerator;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.generation.BamasSingleRideGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.generation.StopBasedRideGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.hyperpool.HyperPoolGenerator;
@@ -37,8 +38,8 @@ import org.matsim.facilities.ActivityFacilities;
  * - MATSim network routing
  * - Iterative ride extension up to maxDegree
  */
-public final class ExMasEngine {
-	private static final Logger log = LogManager.getLogger(ExMasEngine.class);
+public final class BamasEngine {
+	private static final Logger log = LogManager.getLogger(BamasEngine.class);
 
 	private final MatsimNetworkCache network;
 	private final BudgetValidator budgetValidator;
@@ -52,13 +53,13 @@ public final class ExMasEngine {
 	private List<HyperPooledRide> hyperPooledRides;
 	private ShareabilityGraph graph;
 
-	public ExMasEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
+	public BamasEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
 					   double horizon, int maxDegree,
 					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig) {
 		this(network, budgetValidator, horizon, maxDegree, exMasConfig, null);
 	}
 
-	public ExMasEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
+	public BamasEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
 					   double horizon, int maxDegree,
 					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig,
 					   ActivityFacilities facilities) {
@@ -97,7 +98,7 @@ public final class ExMasEngine {
 		log.info("");
 		log.info("PHASE 1: Single Ride Generation");
 		log.info("======================================================================");
-		SingleRideGenerator singleGen = new SingleRideGenerator(network, budgetValidator, algorithmProcessCount);
+		BamasSingleRideGenerator singleGen = new BamasSingleRideGenerator(network, budgetValidator, algorithmProcessCount);
         List<Ride> singleRides = singleGen.generate(drtRequests);
 		allRides.addAll(singleRides);
 
@@ -136,7 +137,7 @@ public final class ExMasEngine {
 		allRides.addAll(currentDegreeRides);
 
         // Phase 4: Iteratively extend rides with budget validation
-		// The ordering-based RideExtender enumerates valid orderings directly from
+		// The ordering-based BamasRideExtender enumerates valid orderings directly from
 		// pairwise constraints in the shareability graph — no rideMap needed.
 		// It returns top-1 per set, so MaxPerSet pruning is redundant.
 		// Percentile pruning across sets is still applied to bound memory.
@@ -146,7 +147,7 @@ public final class ExMasEngine {
 		int nextRideIndex = allRides.size();
 		DegreeGraph prevDegreeGraph = null;
 		for (int degree = 2; degree < maxDegree; degree++) {
-			RideExtender extender = new RideExtender(network, graph, budgetValidator,
+			BamasRideExtender extender = new BamasRideExtender(network, graph, budgetValidator,
 													 requests, exMasConfig, prevDegreeGraph);
 			List<Ride> extended = extender.extendRides(currentDegreeRides, nextRideIndex);
 			long graphBuildStart = System.currentTimeMillis();

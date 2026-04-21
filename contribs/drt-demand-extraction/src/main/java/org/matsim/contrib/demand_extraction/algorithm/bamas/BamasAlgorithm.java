@@ -6,7 +6,7 @@ import java.util.Map;
 import org.matsim.contrib.demand_extraction.algorithm.AlgorithmResult;
 import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithm;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
-import org.matsim.contrib.demand_extraction.algorithm.engine.ExMasEngine;
+// BamasEngine is in this same package (algorithm.bamas) — no explicit import needed.
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
@@ -15,13 +15,8 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import com.google.inject.Inject;
 
 /**
- * Adapter wrapping the current ride-generation engine ({@link ExMasEngine},
- * scheduled to become {@code BamasEngine} in Phase 3) behind the
- * {@link ExMasAlgorithm} strategy interface.
- *
- * <p>Phase 1 scaffold — the engine is still called {@code ExMasEngine} in
- * source; renaming to {@code BamasEngine} happens mechanically in Phase 3
- * alongside the package move to {@code algorithm/bamas/}.
+ * Adapter wrapping {@link BamasEngine} behind the {@link ExMasAlgorithm}
+ * strategy interface.
  */
 public class BamasAlgorithm implements ExMasAlgorithm {
 	private final MatsimNetworkCache network;
@@ -39,7 +34,7 @@ public class BamasAlgorithm implements ExMasAlgorithm {
 
 	@Override
 	public AlgorithmResult run(List<DrtRequest> requests) {
-		ExMasEngine engine = new ExMasEngine(
+		BamasEngine engine = new BamasEngine(
 				network,
 				budgetValidator,
 				exMasConfig.getSearchHorizon(),

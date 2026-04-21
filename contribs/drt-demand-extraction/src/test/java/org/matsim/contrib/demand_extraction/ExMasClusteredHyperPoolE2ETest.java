@@ -58,7 +58,7 @@ import org.matsim.core.utils.io.IOUtils;
  * - Hyper-pooled rides: YES (algorithm generates them, see logs)
  *
  * NOTE: HyperPooledRide objects are generated but not written to CSV yet.
- * They're stored separately in ExMasEngine.getHyperPooledRides().
+ * They're stored separately in BamasEngine.getHyperPooledRides().
  * Check logs for "Hyper-Pooling (HyperPool Stage 2)" to see generation stats.
  */
 public class ExMasClusteredHyperPoolE2ETest {

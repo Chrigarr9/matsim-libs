@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.extension;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.extension;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -21,7 +21,7 @@ import org.matsim.api.core.v01.network.Link;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
-import org.matsim.contrib.demand_extraction.algorithm.graph.DegreeGraph;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.graph.DegreeGraph;
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
@@ -40,8 +40,8 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  * position + cartesian product of FIFO/LIFO combos) which was ordering-dependent on
  * base rides and missed valid orderings due to top-1-per-set pruning at lower degrees.
  */
-public final class RideExtender {
-	private static final Logger log = LogManager.getLogger(RideExtender.class);
+public final class BamasRideExtender {
+	private static final Logger log = LogManager.getLogger(BamasRideExtender.class);
 
 	private final MatsimNetworkCache network;
 	private final ShareabilityGraph graph;
@@ -55,12 +55,12 @@ public final class RideExtender {
 	// Stored after extendRides completes: valid rides by set hash, used for graph building
 	private ConcurrentHashMap<Long, Ride> lastResultBySetHash;
 
-	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
+	public BamasRideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig) {
 		this(network, graph, budgetValidator, requests, exMasConfig, null);
 	}
 
-	public RideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
+	public BamasRideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig,
 						DegreeGraph prevDegreeGraph) {
 		this.network = network;

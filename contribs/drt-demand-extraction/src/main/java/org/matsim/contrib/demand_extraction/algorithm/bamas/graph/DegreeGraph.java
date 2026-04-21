@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.graph;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.graph;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -126,7 +126,7 @@ public final class DegreeGraph {
         return h;
     }
 
-    /** Must match RideExtender.hashRequestSet */
+    /** Must match BamasRideExtender.hashRequestSet */
     public static long hashRequestSet(int[] sortedIndices) {
         long h = 0;
         for (int idx : sortedIndices) {

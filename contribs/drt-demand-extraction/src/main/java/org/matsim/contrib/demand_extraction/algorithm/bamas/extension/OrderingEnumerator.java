@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.extension;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.extension;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -101,7 +101,7 @@ public final class OrderingEnumerator {
 	 *
 	 * <p>At each recursion depth, candidates are sorted by routed segment distance
 	 * from the previous stop. The accumulated partial ride distance is tracked with
-	 * cumulative departure times (matching {@code RideExtender.buildRideFromOrdering}
+	 * cumulative departure times (matching {@code BamasRideExtender.buildRideFromOrdering}
 	 * exactly). When partial distance exceeds the threshold, all remaining sorted
 	 * candidates are pruned via {@code break}.
 	 *
