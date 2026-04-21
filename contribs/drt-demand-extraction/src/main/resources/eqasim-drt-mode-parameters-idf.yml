@@ -1,0 +1,17 @@
+# DRT mode choice parameters for eqasim demand extraction — IDF-calibrated.
+#
+# PT-equivalent (not car-equivalent): DRT inherits the conservative IDF PT
+# utility coefficients so the budget calculation doesn't favour DRT over PT
+# at the scoring stage. The user chose PT over car in the Bavaria calibration
+# session (2026-04-19) as the more conservative assumption for a shared-ride
+# service: alpha_u stays pinned to the PT reference (0.0), and in-vehicle
+# time penalty matches PT's -0.017 rather than car's -0.06.
+#
+# Source: IDFModeParameters.buildDefault() pt.* fields (Hörl & Balac 2021,
+# TR-C 130). Used by RunLyonEqasimDemandExtraction. Bavaria/Kelheim scenarios
+# use the sibling file eqasim-drt-mode-parameters.yml (Bavaria car-equivalent).
+
+drt.alpha_u: 0.0                       # from IDF pt.alpha_u (reference)
+drt.betaTravelTime_u_min: -0.017       # from IDF pt.betaInVehicleTime_u_min
+drt.betaWaitingTime_u_min: -0.0484     # from IDF pt.betaWaitingTime_u_min
+drt.betaAccessEgressTime_u_min: -0.0804  # from IDF pt.betaAccessEgressTime_u_min

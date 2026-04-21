@@ -109,6 +109,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// Default: car and bike (modes that need to return to their origin)
 	private Set<String> privateVehicleModes = Set.of("car", "bike");
 
+	// Plan-level modes that should NOT produce DRT requests — e.g., car_passenger
+	// in eqasim IDF scenarios, whose estimator is ZeroUtilityEstimator and whose
+	// "best baseline" score is therefore meaningless. Without this filter such
+	// trips are silently reassigned to pt/walk/bike and inflate demand. Default
+	// empty = no filter (preserves Bavaria behaviour).
+	private Set<String> excludedTripModes = Set.of();
+
 	// DRT service quality parameters for budget calculation
 	// These define the "best possible" service level used to calculate the baseline
 	// DRT score
@@ -560,6 +567,14 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	public void setPrivateVehicleModes(Set<String> privateVehicleModes) {
 		this.privateVehicleModes = privateVehicleModes;
+	}
+
+	public Set<String> getExcludedTripModes() {
+		return excludedTripModes;
+	}
+
+	public void setExcludedTripModes(Set<String> excludedTripModes) {
+		this.excludedTripModes = excludedTripModes != null ? excludedTripModes : Set.of();
 	}
 
 	@StringGetter("minDrtCostPerKm")
