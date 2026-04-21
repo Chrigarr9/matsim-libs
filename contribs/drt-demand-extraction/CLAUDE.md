@@ -33,20 +33,41 @@ MATSim contrib module that extracts DRT demand from MATSim population plans and 
 
 **Pipeline:** MATSim agent plans -> DRT requests with utility budgets -> feasible shared rides (ExMAS) -> optional stop-based/hyper-pooled rides
 
+## Algorithm fork
+
+Two stage-1 algorithms co-exist, selected by `--algorithm=exmas|bamas` (default `bamas`):
+
+- **`algorithm/exmas/`** — reference ExMAS, ported from `main` branch, **frozen**. Used by Paper 1 R1 (vanilla ExMAS baseline). Verified equivalent to `main`'s binary on Kelheim by `ExMasReferencePortRegressionTest`.
+- **`algorithm/bamas/`** — Budget-Aware Matching of Autonomous Shared-rides (the active algorithm). Used by Paper 1 R2 (BAMAS no-pruning) and R3 (BAMAS production defaults).
+
+Paper 1 R1/R2/R3 profiles live in `org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile`. Per-scenario setup is in `scenarios/{Kelheim,LyonEqasim}ScenarioFixture` so runners and tests share the same configuration.
+
+See `docs/plans/2026-04-21-exmas-reference-fork-design.md` for the architecture.
+
 ## Commands
 
 ```bash
-# Build
+# Build (requires JDK 25 — eqasim 2.1.0 is compiled with Java 25)
 cd matsim-libs/contribs/drt-demand-extraction
 mvn clean install
 
-# Test
-mvn test
-mvn test -Dtest=ExMasDemandExtractionE2ETest    # Basic demand extraction
-mvn test -Dtest=ExMasHyperPoolE2ETest            # HyperPool Stage 1 & 2
-mvn test -Dtest=ExMasKelheimE2ETest              # Kelheim scenario
-mvn test -Dtest=ExMasKelheimHyperPoolE2ETest     # Kelheim HyperPool (2610 agents)
-mvn clean install -DskipTests                     # Build without tests
+# Tests
+mvn test                                                              # default (Kelheim cells, all unit tests)
+mvn test -Djunit.groups=scenario-lyon -Djunit.excludedGroups=         # Lyon cells (needs LYON_* env vars below)
+mvn test -Djunit.groups=regression    -Djunit.excludedGroups=         # ExMAS port regression vs main golden
+mvn test -Dtest=ExMasAlgorithmE2ETest                                  # Parameterised matrix (R1/R2/R3 × Kelheim)
+mvn test -Dtest=ExMasKelheimE2ETest                                    # Kelheim (R3 default)
+mvn test -Dtest=ExMasKelheimHyperPoolE2ETest                           # Kelheim HyperPool
+mvn clean install -DskipTests                                          # Build without tests
+
+# Lyon test env vars
+export LYON_SCENARIO_DIR=/path/to/output_lyon_drt_10pct/lyon_drt_area
+export LYON_SCENARIO_PREFIX=lyon_drt_area_   # default
+export LYON_TRAVEL_TIMES_TSV=/path/to/travel_times.tsv
+export LYON_SAMPLE_PCT=10                     # default 1
+
+# Regenerate ExMAS port regression golden against current main HEAD
+scripts/regenerate_exmas_reference_golden.sh [--force]
 ```
 
 ## Architecture
