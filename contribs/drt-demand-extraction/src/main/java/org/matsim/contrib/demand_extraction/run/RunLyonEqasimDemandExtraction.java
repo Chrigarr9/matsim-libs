@@ -390,11 +390,6 @@ public class RunLyonEqasimDemandExtraction {
 
 		exMas.setPrivateVehicleModes(new HashSet<>(Set.of("car", "bike", "motorcycle")));
 
-		// Drop trips whose original plan mode is car_passenger — the IDF
-		// estimator for that mode is ZeroUtilityEstimator (a stub), which makes
-		// the baseline score meaningless and produces spurious DRT demand
-		// whenever the DRT utility clears 0. See research entry
-		// .project-memory/eqasim-idf-calibration-methodology-2026-04-20.md.
 		exMas.setExcludedTripModes(Set.of("car_passenger"));
 
 		exMas.setTripFilterRadiusKm(TRIP_FILTER_RADIUS_KM);
