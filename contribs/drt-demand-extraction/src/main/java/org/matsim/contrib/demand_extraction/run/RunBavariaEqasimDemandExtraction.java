@@ -90,10 +90,12 @@ public class RunBavariaEqasimDemandExtraction {
 		public final double maxDetourFactor;
 		public final double minDrtCostPerKm;
 		public final double interDegreeKeepFraction;
+		public final ExMasConfigGroup.Algorithm algorithm;
 
 		ParsedArgs(int sample, String ascYaml, String travelTimesPath, String outputDir,
 				double searchHorizon, double maxDetourFactor,
-				double minDrtCostPerKm, double interDegreeKeepFraction) {
+				double minDrtCostPerKm, double interDegreeKeepFraction,
+				ExMasConfigGroup.Algorithm algorithm) {
 			this.sample = sample;
 			this.ascYaml = ascYaml;
 			this.travelTimesPath = travelTimesPath;
@@ -102,6 +104,7 @@ public class RunBavariaEqasimDemandExtraction {
 			this.maxDetourFactor = maxDetourFactor;
 			this.minDrtCostPerKm = minDrtCostPerKm;
 			this.interDegreeKeepFraction = interDegreeKeepFraction;
+			this.algorithm = algorithm;
 		}
 	}
 
@@ -114,6 +117,7 @@ public class RunBavariaEqasimDemandExtraction {
 		double maxDetourFactor = Double.NaN;
 		double minDrtCostPerKm = Double.NaN;
 		double interDegreeKeepFraction = Double.NaN;
+		ExMasConfigGroup.Algorithm algorithm = ExMasConfigGroup.Algorithm.BAMAS;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -125,11 +129,12 @@ public class RunBavariaEqasimDemandExtraction {
 				case "--max-detour-factor" -> maxDetourFactor = Double.parseDouble(args[++i]);
 				case "--min-drt-cost-per-km" -> minDrtCostPerKm = Double.parseDouble(args[++i]);
 				case "--inter-degree-keep-fraction" -> interDegreeKeepFraction = Double.parseDouble(args[++i]);
+				case "--algorithm" -> algorithm = ExMasConfigGroup.Algorithm.valueOf(args[++i].toUpperCase());
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
 		return new ParsedArgs(sample, ascYaml, travelTimesPath, outputDir,
-				searchHorizon, maxDetourFactor, minDrtCostPerKm, interDegreeKeepFraction);
+				searchHorizon, maxDetourFactor, minDrtCostPerKm, interDegreeKeepFraction, algorithm);
 	}
 
 	public static void main(String[] args) throws Exception {
@@ -461,6 +466,7 @@ public class RunBavariaEqasimDemandExtraction {
 				ControllerConfigGroup.RoutingAlgorithmType.SpeedyALT);
 
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
+		exMasConfig.setAlgorithm(p.algorithm);
 		exMasConfig.setDrtMode("drt");
 		Set<String> baseModes = new HashSet<>(Set.of("car", "pt", "walk", "bike"));
 		exMasConfig.setBaseModes(baseModes);
