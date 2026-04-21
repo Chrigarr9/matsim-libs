@@ -29,8 +29,8 @@ public final class AttributeAdapter {
      * @param rnd random source for income stochasticity (same as PreparePopulation.java)
      */
     public static void adapt(Person person, int householdSize, Random rnd) {
-        adaptCarAvailability(person);
         adaptLicenseAndMinors(person);
+        adaptCarAvailability(person);
         adaptPtSubscription(person);
         adaptSubpopulation(person);
         adaptHouseholdSizeGroup(person, householdSize);

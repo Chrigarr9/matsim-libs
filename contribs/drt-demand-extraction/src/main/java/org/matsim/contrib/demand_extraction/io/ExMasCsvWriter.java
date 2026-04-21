@@ -44,7 +44,7 @@ public final class ExMasCsvWriter {
 		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
 			// Header includes all request attributes
 			// Note: baseMode/baseModeScore are the mode we compare DRT against (typically the best available mode)
-			writer.write("index,personId,groupId,tripIndex,isCommute,budget,requestTime," +
+			writer.write("index,personId,groupId,tripIndex,isCommute,isEducation,budget,requestTime," +
 					"originLinkId,destinationLinkId,originX,originY,destinationX,destinationY," +
 					"originActivityType,destinationActivityType," +
 					"directTravelTime,directDistance,earliestDeparture,latestArrival," +
@@ -57,8 +57,8 @@ public final class ExMasCsvWriter {
 						? req.budget / (req.directDistance / 1000.0)
 						: Double.MAX_VALUE;
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%s,%s,%d,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f,%.4f",
-						req.index, req.personId, req.groupId, req.tripIndex, req.isCommute,
+						"%d,%s,%s,%d,%b,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f,%.4f",
+						req.index, req.personId, req.groupId, req.tripIndex, req.isCommute, req.isEducation,
 						req.budget, req.requestTime,
 						req.originLinkId, req.destinationLinkId,
 						req.originX, req.originY, req.destinationX, req.destinationY,
@@ -99,7 +99,7 @@ public final class ExMasCsvWriter {
 			// Note: predecessors removed (not needed for optimization), successors kept for path cover
 			// Stop-based columns added at the end for backward compatibility
 			writer.write("rideIndex,degree,kind,variant," +
-					"requestIndices,personIds,groupIds,requestTimes,isCommutes," +
+					"requestIndices,personIds,groupIds,requestTimes,isCommutes,isEducations," +
 					"originsOrdered,destinationsOrdered," +
 					"passengerTravelTimes,passengerDistances,delays,detours,remainingBudgets,maxCosts,maxCostsPerKm,shapleyValues,successors," +
 					"startTime,endTime,rideTravelTime,rideDistance," +
@@ -128,6 +128,9 @@ public final class ExMasCsvWriter {
 						.toArray());
 				String isCommutes = formatBooleanArray(Arrays.stream(requests)
 						.map(r -> r.isCommute)
+						.toArray(Boolean[]::new));
+				String isEducations = formatBooleanArray(Arrays.stream(requests)
+						.map(r -> r.isEducation)
 						.toArray(Boolean[]::new));
 
 				// Format origin/destination sequences
@@ -185,9 +188,9 @@ public final class ExMasCsvWriter {
 				}
 
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s",
 						ride.getIndex(), ride.getDegree(), ride.getKind(), variant,
-						reqIndices, personIds, groupIds, requestTimes, isCommutes,
+						reqIndices, personIds, groupIds, requestTimes, isCommutes, isEducations,
 						origins, destinations,
 						pttimes, pdists, delays, detours, budgets, maxCosts, maxCostsPerKm, shapleyValues, successors,
 						ride.getStartTime(), ride.getEndTime(),
