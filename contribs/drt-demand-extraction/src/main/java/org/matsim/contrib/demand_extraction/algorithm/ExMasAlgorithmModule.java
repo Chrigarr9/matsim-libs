@@ -29,6 +29,7 @@ import com.google.inject.Singleton;
 import com.google.inject.name.Named;
 
 import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasAlgorithm;
+import org.matsim.contrib.demand_extraction.algorithm.exmas.ExMasReferenceAlgorithm;
 
 /**
  * Guice module for ExMAS algorithm components.
@@ -82,22 +83,19 @@ public class ExMasAlgorithmModule extends AbstractModule {
         // Strategy implementations (MATSim disables Guice JIT bindings, so these
         // must be bound explicitly for provideExMasAlgorithm to resolve them).
         bind(BamasAlgorithm.class);
+        bind(ExMasReferenceAlgorithm.class);
     }
 
     /**
      * Strategy dispatch. Selects the Stage-1 algorithm from
      * {@link ExMasConfigGroup#getAlgorithm()}.
-     * <p>Phase 1: only {@code BAMAS} is wired; {@code EXMAS} throws until
-     * {@link org.matsim.contrib.demand_extraction.algorithm.exmas.ExMasReferenceAlgorithm}
-     * lands in Phase 2.
      */
     @Provides
     @Singleton
     public ExMasAlgorithm provideExMasAlgorithm(Injector injector, ExMasConfigGroup cfg) {
         return switch (cfg.getAlgorithm()) {
             case BAMAS -> injector.getInstance(BamasAlgorithm.class);
-            case EXMAS -> throw new UnsupportedOperationException(
-                    "ExMasReferenceAlgorithm lands in Phase 2 of feature/exmas-reference-fork");
+            case EXMAS -> injector.getInstance(ExMasReferenceAlgorithm.class);
         };
     }
 
