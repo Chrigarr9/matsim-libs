@@ -44,7 +44,7 @@ public final class ExMasCsvWriter {
 		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
 			// Header includes all request attributes
 			// Note: baseMode/baseModeScore are the mode we compare DRT against (typically the best available mode)
-			writer.write("index,personId,groupId,tripIndex,isCommute,budget,requestTime," +
+			writer.write("index,personId,groupId,tripIndex,isCommute,isEducation,budget,requestTime," +
 					"originLinkId,destinationLinkId,originX,originY,destinationX,destinationY," +
 					"originActivityType,destinationActivityType," +
 					"directTravelTime,directDistance,earliestDeparture,latestArrival," +
@@ -57,8 +57,8 @@ public final class ExMasCsvWriter {
 						? req.budget / (req.directDistance / 1000.0)
 						: Double.MAX_VALUE;
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%s,%s,%d,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f,%.4f",
-						req.index, req.personId, req.groupId, req.tripIndex, req.isCommute,
+						"%d,%s,%s,%d,%b,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f,%.4f",
+						req.index, req.personId, req.groupId, req.tripIndex, req.isCommute, req.isEducation,
 						req.budget, req.requestTime,
 						req.originLinkId, req.destinationLinkId,
 						req.originX, req.originY, req.destinationX, req.destinationY,
