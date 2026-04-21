@@ -33,9 +33,9 @@ mvn clean install -DskipTests -Denforcer.skip=true
 
 **Commit:** no commit; this is a sanity check.
 
-### Task 0.2: Spot-check R1 pruner default assumption
+### Task 0.2: Investigate main's pruner default (informational only)
 
-**Purpose:** design §2.3 flagged a 5-minute verification. Confirm `main`'s default `PostExtensionPruner` mode so R1 matches `main`'s defaults.
+**Purpose:** understand what `main`'s default pruner behaviour is, purely for documentation. **R1 is vanilla ExMAS with NO pruning regardless of what `main` does.** The paper's C1 claim is "our algorithm matches *vanilla* ExMAS", not "our algorithm matches main's opinionated ExMAS defaults". If `main` happens to have pruning on by default, that's a Kelheim-specific configuration choice, not part of the ExMAS reference semantics.
 
 **Commands:**
 
@@ -44,17 +44,22 @@ git show main:contribs/drt-demand-extraction/src/main/java/org/matsim/contrib/de
 git show main:contribs/drt-demand-extraction/src/main/java/org/matsim/contrib/demand_extraction/algorithm/engine/ExMasEngine.java | grep -n -i 'pruner\|postExtension'
 ```
 
-**Decide:** if `main`'s engine calls the pruner with `RATIO_THRESHOLD` on by default, R1 config is `RATIO_THRESHOLD` with `main`'s parameters. Otherwise R1 = `NONE`. Record the decision in a short memory file.
+**Record the finding** in a memory file at Dissertation root (not submodule):
+
+```
+.project-memory/exmas-reference-pruner-default-2026-04-21.md
+```
+
+Contents: one paragraph noting "`main`'s default is X; R1 is vanilla (NONE) for paper comparison purposes — deviation from `main`'s runner defaults is intentional."
+
+**Implication for Task 6.1 (golden generation):** `main`'s Kelheim test may run with pruning enabled if that's the runner default. To generate an *unpruned* golden, run `main`'s Kelheim test with config override `postExtensionPrunerMode=NONE` (or whatever the equivalent knob is on `main`), not the stock test invocation. This ensures the golden is "main's algorithm in vanilla configuration", matching R1.
 
 **Commit:**
 
 ```bash
-# In .project-memory/ at Dissertation root (NOT in the submodule):
-# write exmas-reference-pruner-default-2026-04-21.md with the finding
 cd ../../../
-# edit .project-memory/exmas-reference-pruner-default-2026-04-21.md
 git add .project-memory/exmas-reference-pruner-default-2026-04-21.md
-git commit -m "memory: R1 pruner default decision"
+git commit -m "memory: main pruner default investigation (R1 stays vanilla regardless)"
 ```
 
 ### Task 0.3: Verify PairGenerator identity across branches
@@ -632,6 +637,8 @@ public record AlgorithmProfile(
     Double pruningDistanceSavingsLogScale,   // nullable = leave default
     PostExtensionPruner.Mode prunerMode
 ) {
+    // R1 = vanilla ExMAS: no post-extension pruner, no inline distance-savings filter.
+    // This is fixed regardless of what main's default runner config was.
     public static final AlgorithmProfile R1 =
         new AlgorithmProfile("R1", ExMasConfigGroup.Algorithm.EXMAS, null, PostExtensionPruner.Mode.NONE);
     public static final AlgorithmProfile R2 =
@@ -640,8 +647,6 @@ public record AlgorithmProfile(
         new AlgorithmProfile("R3", ExMasConfigGroup.Algorithm.BAMAS, null, PostExtensionPruner.Mode.COVERAGE_TOPK);
 }
 ```
-
-(If Task 0.2 decided R1 needs `RATIO_THRESHOLD`, adjust `R1` constant.)
 
 **Commit:**
 
@@ -854,7 +859,11 @@ git commit -m "build: surefire tag groups (fast default, scenario-lyon + regress
 
 ## Phase 6 — Port regression test
 
-### Task 6.1: Generate golden CSV from `main`
+### Task 6.1: Generate golden CSV from `main` (with pruner disabled)
+
+**Purpose:** produce a "vanilla ExMAS" golden — `main`'s algorithm running without any post-extension pruning. Per Task 0.2, R1 is vanilla regardless of `main`'s opinionated defaults. The golden must reflect that.
+
+**Pre-work:** before the worktree run, edit a copy of `main`'s `ExMasKelheimE2ETest` or its config path to force `postExtensionPrunerMode=NONE` and `pruningDistanceSavingsLogScale=-1` (or whatever the equivalent knobs are on `main`, identified during Task 0.2). Do this in the worktree only — don't push to `main`.
 
 **Commands:**
 
@@ -864,7 +873,13 @@ cd matsim-libs
 # Spawn a worktree at main
 git worktree add /tmp/matsim-libs-main main
 
-# Build and run main's Kelheim E2E
+# Inside the worktree, override the test to force vanilla behaviour:
+# edit /tmp/matsim-libs-main/contribs/drt-demand-extraction/src/test/java/.../ExMasKelheimE2ETest.java
+# add to configureExMas(): exMasConfig.setPostExtensionPrunerMode(...NONE);
+#                         exMasConfig.setPruningDistanceSavingsLogScale(-1);
+# (exact setter names depend on what main exposes — Task 0.2 should have surfaced them)
+
+# Build and run main's Kelheim E2E with the vanilla override
 cd /tmp/matsim-libs-main/contribs/drt-demand-extraction
 mvn test -Dtest=ExMasKelheimE2ETest -Denforcer.skip=true
 
@@ -874,13 +889,14 @@ mkdir -p "$GOLDEN_DIR"
 cp test/output/exmas-kelheim-e2e-test/drt_demand/*.exmas_rides.csv "$GOLDEN_DIR/exmas_rides.csv"
 cp test/output/exmas-kelheim-e2e-test/drt_demand/*.drt_requests.csv "$GOLDEN_DIR/drt_requests.csv"
 
-# Record main's SHA into a metadata file
+# Record main's SHA + the vanilla override in the metadata file
 echo "main_sha=$(cd /tmp/matsim-libs-main && git rev-parse HEAD)" > "$GOLDEN_DIR/METADATA"
 echo "generated_at=$(date -Iseconds)" >> "$GOLDEN_DIR/METADATA"
+echo "vanilla_override: prunerMode=NONE, distanceSavingsLogScale=-1" >> "$GOLDEN_DIR/METADATA"
 
 # Clean up worktree
 cd /c/Users/VWAUCCY/dev/msf/projects/Dissertation/matsim-libs
-git worktree remove /tmp/matsim-libs-main
+git worktree remove --force /tmp/matsim-libs-main
 ```
 
 **Commit** (in the submodule):
@@ -969,6 +985,126 @@ mvn test -Djunit.groups=regression -Djunit.excludedGroups= -Denforcer.skip=true
 git add -u
 git commit -m "fix(exmas-port): <specific divergence> — now matches golden"
 ```
+
+---
+
+## Phase 6.5 — Cross-check against Python ExMAS reference
+
+**Purpose:** the Java `main` ExMAS we ported from is itself derived from Kucharski's original Python ExMAS (`github.com/RafalKucharski/ExMAS` — check the repo name when starting; maintainer may have moved it). If `main`'s Java deviated from the Python during its own porting, our `exmas/` inherits that deviation. Comparing our port to the Python ground truth catches semantic drift that the Kelheim golden can't see (because the golden measures "reconstructed == main", not "reconstructed == Kucharski's algorithm").
+
+**Scope:** code-level review, not a full runtime comparison. A full runtime comparison would require porting Kelheim to Python ExMAS's input format (travel-time matrix + request list) — significant work with limited incremental information. Code review catches algorithmic divergences much cheaper.
+
+A runtime comparison is a **stretch goal** — attempt only if the code review surfaces ambiguous behaviour that can't be decided from reading alone.
+
+### Task 6.5.1: Locate and read the Python ExMAS reference
+
+**Commands:**
+
+```bash
+# Clone to a scratch location outside the repo
+git clone https://github.com/RafalKucharski/ExMAS /tmp/exmas-python
+# If that URL is stale, search for "ExMAS Kucharski" on GitHub — the algorithm
+# is also embedded in the MaaSSim repo (github.com/RafalKucharski/MaaSSim)
+
+cd /tmp/exmas-python
+# Identify the core extension-loop module. Typical names:
+grep -rn "def extend\|def matching\|shareability" --include="*.py" | head -20
+```
+
+**Record** the key files in a review notes file (created in next task).
+
+No commit in this task — investigation only.
+
+### Task 6.5.2: Side-by-side code review
+
+**Files (create at Dissertation root):** `papers/paper1/analysis/exmas-python-port-review.md`
+
+Structure:
+
+```markdown
+# ExMAS Port Review — Python vs Java (main) vs our port
+
+**Date:** <date>
+**Python source:** github.com/RafalKucharski/ExMAS @ <sha>
+**main's Java:** matsim-libs/contribs/drt-demand-extraction @ main
+**Our port:** algorithm/exmas/ on feature/exmas-reference-fork
+
+## Phase 1: singles
+| Aspect | Python | Java main | Our port | Notes |
+|---|---|---|---|---|
+| Detour computation | … | … | … | |
+| Mode utility baseline | … | … | … | |
+
+## Phase 2: pairs
+…
+
+## Phase 3-4: extension loop
+| Aspect | Python | Java main | Our port | Notes |
+|---|---|---|---|---|
+| Enumeration strategy | … | … | … | |
+| Admissibility check timing | … | … | … | |
+| Best-ordering selection | … | … | … | |
+
+## Discrepancies
+1. …
+2. …
+
+## Decisions
+- Keep as-is: …
+- Fix in port: …
+- Runtime comparison needed for: …
+```
+
+Fill it out by reading the Python core alongside `algorithm/exmas/*`. Budget: 1 day of careful reading.
+
+**Commit:**
+
+```bash
+cd /c/Users/VWAUCCY/dev/msf/projects/Dissertation
+git add papers/paper1/analysis/exmas-python-port-review.md
+git commit -m "analysis: ExMAS Python vs Java port review notes"
+```
+
+### Task 6.5.3: Fix any substantive divergences in port
+
+If the review surfaces behavioural differences that matter (not cosmetic — things like "Python uses strict inequality, main uses ≤ which changes boundary admission"), fix in `matsim-libs/contribs/drt-demand-extraction/src/main/java/…/algorithm/exmas/*`.
+
+For each fix:
+1. Document in the review notes which divergence is being fixed.
+2. Re-run the port regression test (Task 6.4) to ensure we haven't broken main-equivalence.
+3. Note: fixing toward Python may now *break* main-equivalence. That's acceptable — we prefer Python-ExMAS-correct over main-equivalent. Update the regression test expectations accordingly, with a comment explaining why.
+
+**Commit** per fix:
+
+```bash
+cd matsim-libs
+git add -u
+git commit -m "fix(exmas-port): <divergence from Python> — now matches Kucharski semantics"
+```
+
+### Task 6.5.4: Document the final truth source
+
+**Files (modify):**
+- `matsim-libs/contribs/drt-demand-extraction/docs/plans/2026-04-21-exmas-reference-fork-design.md` — add note under §4: "Port faithfulness is measured against Python ExMAS (ground truth) via code review, and against `main`'s Java binary (one derivative of Python) via the golden regression. Where the two sources disagree, Python wins."
+- `papers/paper1/planning/drt-demand-extraction-skeleton.md` — update §1 to reference Python ExMAS as the formal reference, not just "`main` branch".
+
+**Commit:**
+
+```bash
+git add ...
+git commit -m "docs: Python ExMAS is the ground truth; main is a derivative"
+```
+
+### Stretch: runtime comparison (only if code review is inconclusive)
+
+If §6.5.2 surfaces a behavioural question that can't be decided from reading (e.g., "this loop's termination condition is ambiguous"), generate a tiny scenario (10-20 requests, hand-crafted), run through:
+- Python ExMAS directly
+- Our `algorithm/exmas/` via a unit test
+- `main`'s Java binary via a worktree test
+
+Compare outputs. Pick the canonical behaviour, implement in port, document in review notes.
+
+Budget: 1-2 days if triggered, zero if not.
 
 ---
 
@@ -1146,7 +1282,8 @@ No separate commit; merge is the commit.
 - [ ] `mvn test -Djunit.groups=regression -Djunit.excludedGroups= -Denforcer.skip=true` green — port regression passes.
 - [ ] `mvn test -Djunit.groups=scenario-lyon -Djunit.excludedGroups= -Denforcer.skip=true` (with Lyon env vars set) green — 3 Lyon-1% × R1/R2/R3 pass.
 - [ ] `compare_exmas_c1.ipynb` produces a complete HTML report when run against Bavaria CSVs.
+- [ ] `papers/paper1/analysis/exmas-python-port-review.md` committed, port aligned with Python ExMAS semantics where they diverge from `main`.
 - [ ] Design doc and memory entry committed; `CLAUDE.md` updated.
 - [ ] Branch merged into `feature/bnb-tightening-v1` cleanly.
 
-**Estimated total effort:** 3-5 working days, dominated by Phase 2 port adaptation and Phase 6 regression iteration.
+**Estimated total effort:** 4-6 working days, dominated by Phase 2 port adaptation, Phase 6 regression iteration, and Phase 6.5 Python cross-check.
