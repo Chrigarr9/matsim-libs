@@ -19,6 +19,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     }
 
     /**
+     * Stage-1 ride-generation algorithm. Selects the {@link
+     * org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithm} strategy
+     * bound by {@link org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithmModule}.
+     * Default is {@code BAMAS} so existing runners and tests keep their current
+     * behaviour; {@code EXMAS} opts into the frozen reference port under
+     * {@code algorithm/exmas/}.
+     */
+    public enum Algorithm { EXMAS, BAMAS }
+
+    /**
      * Filter mode for commute trips.
      * - ALL: Include all trips regardless of commute status
      * - COMMUTES_ONLY: Only include commute trips (home->work, work->home)
@@ -53,6 +63,9 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	// Scoring adapter selection: "auto" (default), "planCalcScore", "dmc", "eqasim"
 	private String scoringAdapter = "auto";
+
+	// Stage-1 algorithm (BAMAS = current; EXMAS = reference ported from main).
+	private Algorithm algorithm = Algorithm.BAMAS;
 
 	// Tour evaluation mode for budget calculation
 	public enum TourEvaluationMode { TRIP_INDEPENDENT, GREEDY_PREFIX }
@@ -358,6 +371,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter("scoringAdapter")
 	public void setScoringAdapter(String scoringAdapter) {
 		this.scoringAdapter = scoringAdapter;
+	}
+
+	@StringGetter("algorithm")
+	public Algorithm getAlgorithm() {
+		return algorithm;
+	}
+
+	@StringSetter("algorithm")
+	public void setAlgorithm(Algorithm algorithm) {
+		this.algorithm = algorithm;
 	}
 
 	@StringGetter("tourEvaluationMode")
