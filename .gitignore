@@ -18,4 +18,8 @@ matsim/src/main/java/Doxyfile
 # ignore output directories:
 output/
 .sdkmanrc
-.qodocontribs/drt-demand-extraction/hs_err_pid*.log
+.qodo
+contribs/drt-demand-extraction/hs_err_pid*.log
+
+# Worktrees
+.worktrees/
