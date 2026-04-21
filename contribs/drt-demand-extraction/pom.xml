@@ -64,7 +64,22 @@
 			<artifactId>junit-jupiter-api</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-params</artifactId>
+			<scope>test</scope>
+		</dependency>
 	</dependencies>
+
+	<properties>
+		<!-- JUnit 5 tag groups. Default: run everything except scenario-lyon and
+		     regression (which need extra setup). Opt in with:
+		         -Djunit.groups=scenario-lyon -Djunit.excludedGroups=
+		         -Djunit.groups=regression    -Djunit.excludedGroups=
+		     An empty <groups> value means "no group filter" (untagged tests run). -->
+		<junit.groups></junit.groups>
+		<junit.excludedGroups>scenario-lyon,regression</junit.excludedGroups>
+	</properties>
 
 	<build>
 		<plugins>
@@ -75,6 +90,14 @@
 					<excludes>
 						<exclude>**/legacy/**</exclude>
 					</excludes>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<groups>${junit.groups}</groups>
+					<excludedGroups>${junit.excludedGroups}</excludedGroups>
 				</configuration>
 			</plugin>
 		</plugins>
