@@ -66,7 +66,9 @@ Two implementations, each wraps its own engine stack. `ExMasAlgorithmModule` bin
 - `ReferenceSingleRideGenerator.java` (from main's `generation/SingleRideGenerator.java`).
 - `ReferencePairGenerator.java` (from main's `generation/PairGenerator.java`).
 
-Plus `ExMasReferenceAlgorithm.java` implementing the strategy interface and wiring these 4 files together.
+> **2026-04-21 — Phase 0.3 result:** `git diff main..feature/bnb-tightening-v1 -- …/generation/PairGenerator.java` is empty. **PairGenerator is byte-identical across branches and stays shared** (path `algorithm/generation/PairGenerator.java`). `ReferencePairGenerator` is dropped from the port. Phase 2's task list reflects this: `algorithm/exmas/` holds 3 files, not 4.
+
+Plus `ExMasReferenceAlgorithm.java` implementing the strategy interface and wiring these 3 files together.
 
 Flat layout (single directory). The reference is frozen — no need to mirror main's deeper sub-structure.
 
