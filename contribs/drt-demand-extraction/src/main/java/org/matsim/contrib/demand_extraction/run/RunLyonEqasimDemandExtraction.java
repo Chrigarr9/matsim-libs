@@ -58,9 +58,13 @@ import org.matsim.core.scenario.ScenarioUtils;
  *                --scenario-dir ../../../matsim_scenarios/eqasim-france/output_lyon_drt_10pct/lyon_drt_area \
  *                --prefix lyon_drt_area_ \
  *                --travel-times ../../../matsim_scenarios/eqasim-france/output_fullregion_10pct/travel_times.tsv \
- *                --output-dir ../../../outputs/lyon-eqasim-demand-extraction-10pct" \
+ *                --output-dir ../../../outputs/lyon-eqasim-demand-extraction-10pct \
+ *                --algorithm bamas" \
  *   -Denforcer.skip=true
  * </pre>
+ *
+ * <p>Use {@code --algorithm exmas} to opt into the frozen reference ExMAS port
+ * (under {@code algorithm/exmas/}) instead of the current BAMAS algorithm.
  */
 public class RunLyonEqasimDemandExtraction {
 
@@ -88,10 +92,12 @@ public class RunLyonEqasimDemandExtraction {
 		public final double maxDetourFactor;
 		public final double minDrtCostPerKm;
 		public final int pruningCoverageK;
+		public final ExMasConfigGroup.Algorithm algorithm;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
-				double minDrtCostPerKm, int pruningCoverageK) {
+				double minDrtCostPerKm, int pruningCoverageK,
+				ExMasConfigGroup.Algorithm algorithm) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -101,6 +107,7 @@ public class RunLyonEqasimDemandExtraction {
 			this.maxDetourFactor = maxDetourFactor;
 			this.minDrtCostPerKm = minDrtCostPerKm;
 			this.pruningCoverageK = pruningCoverageK;
+			this.algorithm = algorithm;
 		}
 	}
 
@@ -114,6 +121,7 @@ public class RunLyonEqasimDemandExtraction {
 		double maxDetourFactor = Double.NaN;
 		double minDrtCostPerKm = Double.NaN;
 		int pruningCoverageK = -1;
+		ExMasConfigGroup.Algorithm algorithm = ExMasConfigGroup.Algorithm.BAMAS;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -126,11 +134,12 @@ public class RunLyonEqasimDemandExtraction {
 				case "--max-detour-factor" -> maxDetourFactor = Double.parseDouble(args[++i]);
 				case "--min-drt-cost-per-km" -> minDrtCostPerKm = Double.parseDouble(args[++i]);
 				case "--pruning-coverage-k" -> pruningCoverageK = Integer.parseInt(args[++i]);
+				case "--algorithm" -> algorithm = ExMasConfigGroup.Algorithm.valueOf(args[++i].toUpperCase());
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
 		return new ParsedArgs(sample, scenarioDir, prefix, travelTimesPath, outputDir,
-				searchHorizon, maxDetourFactor, minDrtCostPerKm, pruningCoverageK);
+				searchHorizon, maxDetourFactor, minDrtCostPerKm, pruningCoverageK, algorithm);
 	}
 
 	public static void main(String[] args) throws Exception {
@@ -321,6 +330,8 @@ public class RunLyonEqasimDemandExtraction {
 
 	private static void configureExMas(Config config, ParsedArgs p) {
 		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
+		exMas.setAlgorithm(p.algorithm);
+		log.info("Stage-1 algorithm: {}", p.algorithm);
 		exMas.setDrtMode("drt");
 		exMas.setBaseModes(new HashSet<>(Set.of("car", "pt", "walk", "bike")));
 		exMas.setDrtRoutingMode(TransportMode.car);
