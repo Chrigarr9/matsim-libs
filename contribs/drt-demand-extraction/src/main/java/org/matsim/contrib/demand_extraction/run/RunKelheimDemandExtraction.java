@@ -127,6 +127,7 @@ public class RunKelheimDemandExtraction {
 		Path archiveDir = null;
 		String archiveLabel = null;
 		boolean preferOfflineInputs = false;
+		ExMasConfigGroup.Algorithm algorithmStrategy = ExMasConfigGroup.Algorithm.BAMAS;
 
 		for (int i = 0; i < args.length; i++) {
 			if ("--scenario-path".equals(args[i]) && i + 1 < args.length) {
@@ -147,6 +148,8 @@ public class RunKelheimDemandExtraction {
 				archiveLabel = args[i + 1];
 			} else if ("--prefer-offline".equals(args[i])) {
 				preferOfflineInputs = true;
+			} else if ("--algorithm".equals(args[i]) && i + 1 < args.length) {
+				algorithmStrategy = ExMasConfigGroup.Algorithm.valueOf(args[i + 1].toUpperCase());
 			}
 		}
 		
@@ -166,6 +169,7 @@ public class RunKelheimDemandExtraction {
 		log.info("Sample size: {}%", sampleSize);
 		log.info("Deterministic mode: {}", deterministic);
 		log.info("Prefer offline inputs: {}", preferOfflineInputs);
+		log.info("Algorithm: {}", algorithmStrategy);
 
 		// Create output directory
 		Path outputDir = Path.of(scenarioPath).resolve("output/kelheim-demand-extraction-" + sampleSize + "pct");
@@ -185,6 +189,7 @@ public class RunKelheimDemandExtraction {
 		
 		// Configure for demand extraction
 		configureForDemandExtraction(config, outputDir, sampleSize, algorithmProcessCount, heuristicsProcessCount, deterministic);
+		ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class).setAlgorithm(algorithmStrategy);
 		String runId = config.controller().getRunId();
 		
 		// Validate and prepare config
