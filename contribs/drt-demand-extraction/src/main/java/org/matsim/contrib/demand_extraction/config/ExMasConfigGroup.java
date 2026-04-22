@@ -61,6 +61,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     private double tripFilterCenterX = Double.NaN;
     private double tripFilterCenterY = Double.NaN;
 
+    // Trip-level exclusion zone: drop trips where BOTH origin AND destination fall
+    // inside the polygon defined by this shapefile. Intended to strip intra-urban
+    // demand from a rural-to-urban service (e.g., exclude pure intra-Métropole
+    // de Lyon trips). Null = disabled.
+    private String tripFilterExclusionShapefilePath = null;
+
 	// Scoring adapter selection: "auto" (default), "planCalcScore", "dmc", "eqasim"
 	private String scoringAdapter = "auto";
 
@@ -533,6 +539,20 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
     public boolean hasTripSpatialFilter() {
         return tripFilterRadiusKm > 0 && Double.isFinite(tripFilterCenterX) && Double.isFinite(tripFilterCenterY);
+    }
+
+    @StringGetter("tripFilterExclusionShapefilePath")
+    public String getTripFilterExclusionShapefilePath() {
+        return tripFilterExclusionShapefilePath;
+    }
+
+    @StringSetter("tripFilterExclusionShapefilePath")
+    public void setTripFilterExclusionShapefilePath(String tripFilterExclusionShapefilePath) {
+        this.tripFilterExclusionShapefilePath = tripFilterExclusionShapefilePath;
+    }
+
+    public boolean hasTripExclusionZone() {
+        return tripFilterExclusionShapefilePath != null && !tripFilterExclusionShapefilePath.isBlank();
     }
 
     public Set<String> getBaseModes() {

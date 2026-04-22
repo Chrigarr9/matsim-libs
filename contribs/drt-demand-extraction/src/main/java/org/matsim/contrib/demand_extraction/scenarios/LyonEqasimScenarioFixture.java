@@ -62,6 +62,12 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 	private static final double FILTER_CENTER_Y = 6526302.7;
 	private static final double TRIP_FILTER_RADIUS_KM = 40.0;
 
+	// Exclusion zone: drop trips whose O AND D both lie within the Métropole de Lyon.
+	// The service is designed for rural↔urban access, not intra-metropolitan rides.
+	// Shapefile = union of 58 communes with EPCI 200046977 (EPSG:2154).
+	// Path is relative to scenarioDir; ../../ navigates back to the eqasim-france root.
+	private static final String EXCLUSION_ZONE_SHAPEFILE = "../../data/cutter/metropole_lyon.shp";
+
 	// 15-minute bins matching RunExportTravelTimes
 	private static final int TRAVEL_TIME_BIN_SIZE = 900;
 	private static final int TRAVEL_TIME_END = 36 * 3600;
@@ -138,8 +144,11 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 				VspExperimentalConfigGroup.VspDefaultsCheckingLevel.info);
 
 		config.controller().setOutputDirectory(outputDir.toString());
+		// overwriteExistingFiles (not deleteDirectoryIfExists) because exec:java runs
+		// in Maven's JVM and log4j2 opens the MATSim logfile.log early; Windows won't
+		// allow deleting an open file, causing Guice injection to fail at startup.
 		config.controller().setOverwriteFileSetting(
-				OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
+				OutputDirectoryHierarchy.OverwriteFileSetting.overwriteExistingFiles);
 		config.controller().setRunId("lyon-drt-" + samplePct + "pct-eqasim-exmas");
 		config.controller().setLastIteration(0);
 		config.controller().setWriteEventsInterval(0);
@@ -246,10 +255,14 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 		exMas.setTripFilterCenterX(FILTER_CENTER_X);
 		exMas.setTripFilterCenterY(FILTER_CENTER_Y);
 
+		String exclusionShapefile = java.nio.file.Path.of(scenarioDir)
+				.resolve(EXCLUSION_ZONE_SHAPEFILE).normalize().toString();
+		exMas.setTripFilterExclusionShapefilePath(exclusionShapefile);
+
 		exMas.setScoringAdapter("eqasim");
 
-		log.info("Demand extraction: scoringAdapter=eqasim, tripFilter={}km around ({}, {})",
-				TRIP_FILTER_RADIUS_KM, FILTER_CENTER_X, FILTER_CENTER_Y);
+		log.info("Demand extraction: scoringAdapter=eqasim, tripFilter={}km around ({}, {}), exclusionZone={}",
+				TRIP_FILTER_RADIUS_KM, FILTER_CENTER_X, FILTER_CENTER_Y, exclusionShapefile);
 	}
 
 	@Override
