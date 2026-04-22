@@ -1,5 +1,6 @@
 package org.matsim.contrib.demand_extraction.upsampling;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.matsim.api.core.v01.Coord;
@@ -64,6 +65,8 @@ class RunPopulationUpsamplingTest {
         return csvPath.toString();
     }
 
+    // Requires VG250 GeoPackage at matsim_scenarios/bavaria/data/germany/ — not checked into git
+    @Disabled("Requires external VG250 GeoPackage data file")
     @Test
     void testEndToEndMerge() throws IOException {
         Coord kelheimCoord = new Coord(709000, 5418000);

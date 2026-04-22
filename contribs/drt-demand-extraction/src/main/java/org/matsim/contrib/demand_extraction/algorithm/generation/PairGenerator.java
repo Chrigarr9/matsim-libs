@@ -8,6 +8,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.network.Link;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
@@ -167,10 +170,28 @@ public final class PairGenerator {
 	/**
 	 * Generate all valid candidates for a single request index.
 	 */
+	@SuppressWarnings("unchecked")
 	private List<PairCandidate> generateCandidatesForRequest(TimeFilter filter, int i) {
 		List<PairCandidate> results = new ArrayList<>();
 		DrtRequest reqI = filter.getRequest(i);
 		int[] candidateIndices = filter.findCandidatesInHorizon(i, horizon);
+
+		// Batch precompute O→O segments: one SSSP from reqI.origin covers all candidates
+		Id<Link>[] candidateOrigins = new Id[candidateIndices.length];
+		double maxCandidateMaxTravelTime = 0;
+		Id<Link>[] candidateDestinations = new Id[candidateIndices.length];
+		for (int k = 0; k < candidateIndices.length; k++) {
+			DrtRequest reqK = filter.getRequest(candidateIndices[k]);
+			candidateOrigins[k] = reqK.originLinkId;
+			candidateDestinations[k] = reqK.destinationLinkId;
+			maxCandidateMaxTravelTime = Math.max(maxCandidateMaxTravelTime, reqK.getMaxTravelTime());
+		}
+		network.batchPrecompute(reqI.originLinkId, reqI.requestTime, candidateOrigins,
+			reqI.getMaxTravelTime());
+
+		// Batch precompute D→D segments: one SSSP from reqI.dest covers all FIFO D_i→D_j lookups
+		network.batchPrecompute(reqI.destinationLinkId, reqI.requestTime, candidateDestinations,
+			maxCandidateMaxTravelTime);
 
 		for (int j : candidateIndices) {
 			DrtRequest reqJ = filter.getRequest(j);
@@ -184,44 +205,42 @@ public final class PairGenerator {
 				continue;
 			}
 
-			// Beeline pre-filter: reject pairs where the Euclidean shared path
-			// already exceeds the max allowed distance (directDistance * maxDetourFactor).
-			// Since beeline <= network distance, this has zero false negatives.
-			double beeOO = beeline(reqI.originX, reqI.originY, reqJ.originX, reqJ.originY);
+			// O→O segment: cache hit from batch precompute
+			TravelSegment oo = network.getSegment(reqI.originLinkId, reqJ.originLinkId, reqI.requestTime);
+			if (!oo.isReachable()) continue;
+
+			// Reject if O→O alone exceeds reqI's detour budget
+			if (oo.getDistance() > reqI.directDistance * reqI.maxDetourFactor) continue;
+
+			// Additional temporal check with actual O→O travel time
+			if (reqI.getLatestDeparture() + oo.getTravelTime() < reqJ.getEarliestDeparture()) continue;
+			if (reqI.getEarliestDeparture() + oo.getTravelTime() > reqJ.getLatestDeparture()) continue;
+
+			// Beeline pre-filter for remaining legs (O→D, D→D)
 			double beeOD = beeline(reqJ.originX, reqJ.originY, reqI.destinationX, reqI.destinationY);
 			double beeDD = beeline(reqI.destinationX, reqI.destinationY, reqJ.destinationX, reqJ.destinationY);
 			double beeOJ = beeline(reqJ.originX, reqJ.originY, reqJ.destinationX, reqJ.destinationY);
 			double beeJD = beeline(reqJ.destinationX, reqJ.destinationY, reqI.destinationX, reqI.destinationY);
 
-			// FIFO: passenger i travels O_i->O_j->D_i, passenger j travels O_j->D_i->D_j
+			// FIFO: use actual O→O distance + beeline for remaining legs
 			boolean fifoFeasible =
-				(beeOO + beeOD) <= reqI.directDistance * reqI.maxDetourFactor &&
+				(oo.getDistance() + beeOD) <= reqI.directDistance * reqI.maxDetourFactor &&
 				(beeOD + beeDD) <= reqJ.directDistance * reqJ.maxDetourFactor;
 
-			// LIFO: passenger i travels O_i->O_j->D_j->D_i, passenger j rides directly (always passes)
+			// LIFO: use actual O→O distance + beeline for remaining legs
 			boolean lifoFeasible =
-				(beeOO + beeOJ + beeJD) <= reqI.directDistance * reqI.maxDetourFactor;
+				(oo.getDistance() + beeOJ + beeJD) <= reqI.directDistance * reqI.maxDetourFactor;
 
 			if (!fifoFeasible && !lifoFeasible) {
 				beelineRejected.incrementAndGet();
 				continue;
 			}
 
-			// Get origin-to-origin segment (routing call)
-			TravelSegment oo = network.getSegment(reqI.originLinkId, reqJ.originLinkId, reqI.requestTime);
-			if (!oo.isReachable()) continue;
-
-			// Additional temporal check with travel time
-			if (reqI.getLatestDeparture() + oo.getTravelTime() < reqJ.getEarliestDeparture()) continue;
-			if (reqI.getEarliestDeparture() + oo.getTravelTime() > reqJ.getLatestDeparture()) continue;
-
-			// Try FIFO (only if beeline check passed)
 			if (fifoFeasible) {
 				PairCandidate fifo = tryFifoCandidate(reqI, reqJ, oo);
 				if (fifo != null) results.add(fifo);
 			}
 
-			// Try LIFO (only if beeline check passed)
 			if (lifoFeasible) {
 				PairCandidate lifo = tryLifoCandidate(reqI, reqJ, oo);
 				if (lifo != null) results.add(lifo);

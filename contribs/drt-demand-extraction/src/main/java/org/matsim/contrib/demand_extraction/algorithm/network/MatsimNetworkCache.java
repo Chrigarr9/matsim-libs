@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -23,10 +24,14 @@ import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.core.population.PopulationUtils;
 import org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutility;
 import org.matsim.core.router.costcalculators.TravelDisutilityFactory;
+import org.matsim.core.router.speedy.LeastCostPathTree;
+import org.matsim.core.router.speedy.SpeedyGraph;
+import org.matsim.core.router.speedy.SpeedyGraphBuilder;
 import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.LeastCostPathCalculator.Path;
 import org.matsim.core.router.util.TravelDisutility;
 import org.matsim.core.router.util.TravelTime;
+import org.matsim.core.utils.misc.OptionalTime;
 import org.matsim.vehicles.Vehicle;
 import org.matsim.vehicles.VehicleType;
 import org.matsim.vehicles.VehicleUtils;
@@ -85,6 +90,14 @@ public class MatsimNetworkCache {
 	// Cache: (originLinkId, destLinkId, timeBin) -> TravelSegment
 	private final ConcurrentHashMap<CacheKey, TravelSegment> cache = new ConcurrentHashMap<>();
 
+
+	// SSSP tree for batch precomputation (one per thread, NOT thread-safe)
+	private final ThreadLocal<LeastCostPathTree> threadLocalTree;
+
+	// Batch precompute statistics
+	private final AtomicInteger batchTreesComputed = new AtomicInteger(0);
+	private final AtomicInteger batchTreesSkipped = new AtomicInteger(0);
+	private final AtomicLong batchSegmentsPopulated = new AtomicLong(0);
 
 	// Track routing failures for summary logging (thread-safe)
 	private final AtomicInteger routingFailures = new AtomicInteger(0);
@@ -165,6 +178,11 @@ public class MatsimNetworkCache {
 		this.dummyPerson = PopulationUtils.getFactory().createPerson(Id.createPersonId("exmas_dummy"));
 		VehicleType dummyType = VehicleUtils.createVehicleType(Id.create("car", VehicleType.class));
 		this.dummyVehicle = VehicleUtils.createVehicle(Id.createVehicleId("exmas_dummy_vehicle"), dummyType);
+
+		// Build SpeedyGraph eagerly — must happen before Id caches are reset at end of simulation
+		SpeedyGraph speedyGraph = SpeedyGraphBuilder.build(network);
+		this.threadLocalTree = ThreadLocal.withInitial(() ->
+			new LeastCostPathTree(speedyGraph, this.travelTime, this.travelDisutility));
 	}
 	
 	/**
@@ -202,6 +220,78 @@ public class MatsimNetworkCache {
 	 */
 	public boolean hasConnection(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
 		return getSegment(originLinkId, destLinkId, departureTime).isReachable();
+	}
+
+	/**
+	 * Batch-precompute travel segments from a single origin link to multiple target links
+	 * using a single-source shortest path tree (SSSP). One Dijkstra pass from the origin
+	 * populates the cache for all targets, replacing N individual point-to-point routing calls.
+	 *
+	 * @param fromLinkId source link
+	 * @param departureTime departure time (seconds since midnight)
+	 * @param toLinkIds target links to populate
+	 * @param maxTravelTimeSeconds early termination bound — Dijkstra stops exploring nodes
+	 *        beyond this travel time from the source
+	 */
+	@SuppressWarnings("unchecked")
+	public void batchPrecompute(Id<Link> fromLinkId, double departureTime, Id<Link>[] toLinkIds,
+	                            double maxTravelTimeSeconds) {
+		if (toLinkIds.length == 0) return;
+
+		Link fromLink = network.getLinks().get(fromLinkId);
+		if (fromLink == null) return;
+
+		int timeBin = (int)(departureTime / timeBinSize);
+		double canonicalDepartureTime = (timeBin + 0.5) * timeBinSize;
+
+		// Skip if tree was already computed for this (fromLink, timeBin)
+		CacheKey probe = new CacheKey(fromLinkId, toLinkIds[0], timeBin);
+		if (cache.containsKey(probe)) {
+			batchTreesSkipped.incrementAndGet();
+			return;
+		}
+
+		LeastCostPathTree tree = threadLocalTree.get();
+		LeastCostPathTree.StopCriterion stopCriterion =
+			new LeastCostPathTree.TravelTimeStopCriterion(maxTravelTimeSeconds);
+		tree.calculate(fromLink, canonicalDepartureTime, dummyPerson, dummyVehicle, stopCriterion);
+		batchTreesComputed.incrementAndGet();
+
+		for (Id<Link> toLinkId : toLinkIds) {
+			CacheKey key = new CacheKey(fromLinkId, toLinkId, timeBin);
+			if (cache.containsKey(key)) continue;
+
+			if (fromLinkId.equals(toLinkId)) {
+				cache.computeIfAbsent(key, k -> computeSegment(fromLinkId, toLinkId, canonicalDepartureTime));
+				batchSegmentsPopulated.incrementAndGet();
+				continue;
+			}
+
+			Link toLink = network.getLinks().get(toLinkId);
+			if (toLink == null) {
+				cache.put(key, TravelSegment.unreachable());
+				batchSegmentsPopulated.incrementAndGet();
+				continue;
+			}
+
+			int toNodeIdx = toLink.getFromNode().getId().index();
+			OptionalTime time = tree.getTime(toNodeIdx);
+
+			if (time.isDefined()) {
+				double tt = time.seconds() - canonicalDepartureTime;
+				double dist = tree.getDistance(toNodeIdx);
+				double utility = -tree.getCost(toNodeIdx);
+				if (quantizeDeterministicSegments) {
+					tt = quantizeSecondsToTenth(tt);
+					dist = quantizeMetersToCentimeter(dist);
+					utility = quantizeUtilityTo1e4(utility);
+				}
+				cache.put(key, new TravelSegment(tt, dist, utility));
+			} else {
+				cache.put(key, TravelSegment.unreachable());
+			}
+			batchSegmentsPopulated.incrementAndGet();
+		}
 	}
 
 	/**
@@ -397,7 +487,9 @@ public class MatsimNetworkCache {
 		log.info(String.format("  Successful routes: %,d (%.1f%%)", total - failures, successRate));
 		log.info(String.format("  Failed routes: %,d (%.1f%%)", failures, failureRate));
 		log.info(String.format("  Cache size: %,d entries", cache.size()));
-		
+		log.info(String.format("  Batch precompute: %,d trees computed, %,d skipped, %,d segments populated",
+				batchTreesComputed.get(), batchTreesSkipped.get(), batchSegmentsPopulated.get()));
+
 		if (failureRate > 10.0) {
 			log.warn(String.format("High routing failure rate (%.1f%%). This may indicate network connectivity issues.", failureRate));
 			log.warn("Consider running NetworkUtils.cleanNetwork() or checking network mode assignments.");
@@ -595,6 +687,7 @@ public class MatsimNetworkCache {
 		this.network = null;
 		this.routerProvider = null;
 		this.threadLocalRouter = null;
+		this.threadLocalTree = null;
 		this.useSharedDeterministicRouter = false;
 		this.quantizeDeterministicSegments = false;
 		this.sharedRouter = null;
@@ -603,6 +696,32 @@ public class MatsimNetworkCache {
 		this.timeBinSize = Integer.MAX_VALUE; // any departure time → bin 0
 		this.dummyPerson = null;
 		this.dummyVehicle = null;
+	}
+
+	/**
+	 * Test constructor with real routing capability.
+	 * Bypasses Guice injection, uses provided components directly.
+	 */
+	MatsimNetworkCache(Network network, TravelTime travelTime, TravelDisutility travelDisutility, int timeBinSize) {
+		this.network = network;
+		this.travelTime = travelTime;
+		this.travelDisutility = travelDisutility;
+		this.timeBinSize = timeBinSize;
+		this.useSharedDeterministicRouter = false;
+		this.quantizeDeterministicSegments = false;
+		this.sharedRouter = null;
+		this.routerProvider = null;
+		this.routerLock.getClass(); // suppress unused warning
+
+		this.dummyPerson = PopulationUtils.getFactory().createPerson(Id.createPersonId("test_dummy"));
+		VehicleType dummyType = VehicleUtils.createVehicleType(Id.create("car", VehicleType.class));
+		this.dummyVehicle = VehicleUtils.createVehicle(Id.createVehicleId("test_dummy_vehicle"), dummyType);
+
+		SpeedyGraph speedyGraph = SpeedyGraphBuilder.build(network);
+		this.threadLocalRouter = ThreadLocal.withInitial(() ->
+			new org.matsim.core.router.DijkstraFactory().createPathCalculator(network, travelDisutility, travelTime));
+		this.threadLocalTree = ThreadLocal.withInitial(() ->
+			new LeastCostPathTree(speedyGraph, travelTime, travelDisutility));
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────
