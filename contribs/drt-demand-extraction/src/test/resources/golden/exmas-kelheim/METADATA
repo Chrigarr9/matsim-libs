@@ -1,7 +1,7 @@
 Golden CSVs for ExMasReferencePortRegressionTest.
 
 source_branch=feature/exmas-reference-fork
-source_sha=3b174cb0261d25a4daa04ef15d541e46efef79b4
+source_sha=386fbf4ec3e5d5b01cc20b24e0030e0ebd3cbb74
 generated_at=2026-04-22T14:08:41+02:00
 generator=ExMasAlgorithmE2ETest (kelheim + AlgorithmProfile.R1)
 java=openjdk version "25.0.2" 2026-01-20 LTS
