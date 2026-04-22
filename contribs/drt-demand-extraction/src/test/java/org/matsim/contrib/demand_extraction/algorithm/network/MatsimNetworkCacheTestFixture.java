@@ -2,7 +2,10 @@ package org.matsim.contrib.demand_extraction.algorithm.network;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
+import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
+import org.matsim.core.router.util.TravelDisutility;
+import org.matsim.core.router.util.TravelTime;
 
 /**
  * Test-only bridge that exposes the package-private
@@ -23,5 +26,10 @@ public final class MatsimNetworkCacheTestFixture {
     /** Pre-populate a single origin→destination segment in the cache at time-bin 0. */
     public static void put(MatsimNetworkCache cache, Id<Link> origin, Id<Link> dest, TravelSegment seg) {
         cache.putForTesting(origin, dest, seg);
+    }
+
+    /** Build a MatsimNetworkCache with real routing capability for integration tests. */
+    public static MatsimNetworkCache createWithRouting(Network network, TravelTime tt, TravelDisutility td, int timeBinSize) {
+        return new MatsimNetworkCache(network, tt, td, timeBinSize);
     }
 }

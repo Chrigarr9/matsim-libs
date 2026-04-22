@@ -1,0 +1,170 @@
+package org.matsim.contrib.demand_extraction.algorithm.network;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Set;
+
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.matsim.api.core.v01.Coord;
+import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.TransportMode;
+import org.matsim.api.core.v01.network.Link;
+import org.matsim.api.core.v01.network.Network;
+import org.matsim.api.core.v01.network.NetworkFactory;
+import org.matsim.api.core.v01.network.Node;
+import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
+import org.matsim.core.network.NetworkUtils;
+import org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutility;
+import org.matsim.core.trafficmonitoring.FreeSpeedTravelTime;
+
+/**
+ * Tests that batchPrecompute() produces identical results to individual getSegment() calls.
+ * Uses a programmatically-built 5x5 grid network.
+ */
+public class MatsimNetworkCacheBatchTest {
+
+	private static MatsimNetworkCache cache;
+	private static List<Id<Link>> linkIds;
+
+	@BeforeAll
+	static void setUp() {
+		Network network = buildGridNetwork(5, 5, 200.0, 15.0);
+		var tt = new FreeSpeedTravelTime();
+		var td = new OnlyTimeDependentTravelDisutility(tt);
+		cache = MatsimNetworkCacheTestFixture.createWithRouting(network, tt, td, 900);
+
+		linkIds = new ArrayList<>(network.getLinks().keySet());
+		linkIds.sort(Comparator.comparing(Id::toString));
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	void batchPrecomputeMatchesPointToPoint() {
+		cache.clearCache();
+		assertTrue(linkIds.size() >= 6, "Need at least 6 links, got " + linkIds.size());
+
+		Id<Link> origin = linkIds.get(0);
+		Id<Link>[] targets = new Id[] {
+			linkIds.get(1),
+			linkIds.get(linkIds.size() / 4),
+			linkIds.get(linkIds.size() / 2),
+			linkIds.get(3 * linkIds.size() / 4),
+			linkIds.get(linkIds.size() - 1),
+		};
+
+		double departureTime = 8 * 3600;
+
+		// Step 1: compute each target individually (point-to-point)
+		TravelSegment[] pointToPoint = new TravelSegment[targets.length];
+		for (int i = 0; i < targets.length; i++) {
+			pointToPoint[i] = cache.getSegment(origin, targets[i], departureTime);
+			assertTrue(pointToPoint[i].isReachable(), "Point-to-point for " + targets[i] + " should be reachable");
+		}
+
+		// Step 2: clear cache and use batch precompute
+		cache.clearCache();
+		double maxTT = 600;
+		cache.batchPrecompute(origin, departureTime, targets, maxTT);
+
+		// Step 3: verify each target matches exactly
+		for (int i = 0; i < targets.length; i++) {
+			TravelSegment batch = cache.getSegment(origin, targets[i], departureTime);
+			assertTrue(batch.isReachable(), "Batch for " + targets[i] + " should be reachable");
+			assertEquals(pointToPoint[i].getTravelTime(), batch.getTravelTime(), 1e-9,
+					"Travel time mismatch for " + targets[i]);
+			assertEquals(pointToPoint[i].getDistance(), batch.getDistance(), 1e-9,
+					"Distance mismatch for " + targets[i]);
+			assertEquals(pointToPoint[i].getNetworkUtility(), batch.getNetworkUtility(), 1e-9,
+					"Network utility mismatch for " + targets[i]);
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	void batchPrecomputeStopCriterionMarksDistantNodesUnreachable() {
+		Id<Link> origin = linkIds.get(0);
+		Id<Link> nearby = linkIds.get(1);
+		Id<Link> far = linkIds.get(linkIds.size() - 1);
+
+		double departureTime = 8 * 3600;
+		cache.clearCache();
+
+		// Get actual travel time to nearby target
+		TravelSegment nearbyPtp = cache.getSegment(origin, nearby, departureTime);
+		assertTrue(nearbyPtp.isReachable(), "Nearby should be reachable via point-to-point");
+		cache.clearCache();
+
+		// Tight bound: covers nearby but not far target
+		double tightMaxTT = nearbyPtp.getTravelTime() + 5;
+		Id<Link>[] targets = new Id[] { nearby, far };
+
+		cache.batchPrecompute(origin, departureTime, targets, tightMaxTT);
+
+		TravelSegment nearbyBatch = cache.getSegment(origin, nearby, departureTime);
+		assertTrue(nearbyBatch.isReachable(), "Nearby should be reachable with tight bound");
+		assertEquals(nearbyPtp.getTravelTime(), nearbyBatch.getTravelTime(), 1e-9);
+
+		TravelSegment farBatch = cache.getSegment(origin, far, departureTime);
+		assertFalse(farBatch.isReachable(), "Far target should be unreachable with tight bound");
+	}
+
+	/**
+	 * Build a grid network with bidirectional links.
+	 * Nodes at (col*spacing, row*spacing), links connect adjacent nodes horizontally and vertically.
+	 */
+	private static Network buildGridNetwork(int rows, int cols, double spacing, double freespeed) {
+		Network network = NetworkUtils.createNetwork();
+		NetworkFactory factory = network.getFactory();
+
+		// Create nodes
+		Node[][] nodes = new Node[rows][cols];
+		for (int r = 0; r < rows; r++) {
+			for (int c = 0; c < cols; c++) {
+				String nodeId = r + "_" + c;
+				Node node = factory.createNode(Id.createNodeId(nodeId), new Coord(c * spacing, r * spacing));
+				network.addNode(node);
+				nodes[r][c] = node;
+			}
+		}
+
+		// Create bidirectional links
+		for (int r = 0; r < rows; r++) {
+			for (int c = 0; c < cols; c++) {
+				if (c + 1 < cols) {
+					addBidirectionalLink(network, factory, nodes[r][c], nodes[r][c + 1], spacing, freespeed);
+				}
+				if (r + 1 < rows) {
+					addBidirectionalLink(network, factory, nodes[r][c], nodes[r + 1][c], spacing, freespeed);
+				}
+			}
+		}
+
+		return network;
+	}
+
+	private static void addBidirectionalLink(Network network, NetworkFactory factory,
+	                                          Node from, Node to, double length, double freespeed) {
+		String fwd = from.getId() + "-" + to.getId();
+		String rev = to.getId() + "-" + from.getId();
+
+		Link linkFwd = factory.createLink(Id.createLinkId(fwd), from, to);
+		linkFwd.setLength(length);
+		linkFwd.setFreespeed(freespeed);
+		linkFwd.setCapacity(1000);
+		linkFwd.setNumberOfLanes(1);
+		linkFwd.setAllowedModes(Set.of(TransportMode.car));
+		network.addLink(linkFwd);
+
+		Link linkRev = factory.createLink(Id.createLinkId(rev), to, from);
+		linkRev.setLength(length);
+		linkRev.setFreespeed(freespeed);
+		linkRev.setCapacity(1000);
+		linkRev.setNumberOfLanes(1);
+		linkRev.setAllowedModes(Set.of(TransportMode.car));
+		network.addLink(linkRev);
+	}
+}

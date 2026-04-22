@@ -235,10 +235,10 @@ public class ExMasDemandExtractionE2ETest {
 					System.err.println("Line: " + line);
 					System.err.println("Fields: " + java.util.Arrays.toString(parts));
 				}
-				Assertions.assertEquals(28, parts.length, "Each request should have 28 fields (includes activity types + PT accessibility + maxCostPerKm)");
+				Assertions.assertEquals(29, parts.length, "Each request should have 29 fields (includes isEducation, activity types, PT accessibility, maxCostPerKm)");
 
 				String personId = parts[1];
-				double budget = Double.parseDouble(parts[5]);
+				double budget = Double.parseDouble(parts[6]);
 				personIds.add(personId);
 
 				// Budget can be positive (DRT better), negative (DRT worse), or zero (equal)
@@ -277,13 +277,7 @@ public class ExMasDemandExtractionE2ETest {
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
 				// Updated to 33 columns (with HyperPool stop-based pooling fields)
-				// rideIndex,degree,kind,variant,requestIndices,personIds,groupIds,requestTimes,isCommutes,
-				// originsOrdered,destinationsOrdered,passengerTravelTimes,passengerDistances,delays,detours,
-				// remainingBudgets,maxCosts,shapleyValues,successors,startTime,endTime,rideTravelTime,rideDistance,
-				// pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty,
-				// dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty,
-				// accessWalkDistances,egressWalkDistances
-				Assertions.assertEquals(34, parts.length, "Each ride should have 34 fields (with HyperPool stop fields)");
+				Assertions.assertEquals(35, parts.length, "Each ride should have 35 fields (with HyperPool stop fields)");
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();
@@ -292,12 +286,10 @@ public class ExMasDemandExtractionE2ETest {
 
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
 
-				// rideTravelTime is at index 20
-				double duration = Double.parseDouble(parts[20]);
+				double duration = Double.parseDouble(parts[23]); // rideTravelTime
 				Assertions.assertTrue(duration >= 0, "Duration should be non-negative");
 
-				// rideDistance is at index 21
-				double distance = Double.parseDouble(parts[21]);
+				double distance = Double.parseDouble(parts[24]); // rideDistance
 				Assertions.assertTrue(distance >= 0, "Distance should be non-negative");
 
 				rideCount++;
