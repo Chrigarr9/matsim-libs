@@ -182,32 +182,34 @@ public final class ReferenceRideExtender {
 							continue;
 						}
 
-						int[] pairRides = getPairRides(base.getRequestIndices(), addedReq);
-						if (pairRides == null) {
+						List<int[]> allPairRideCombinations = getAllPairRideCombinations(base.getRequestIndices(), addedReq);
+						if (allPairRideCombinations == null) {
 							if (stats != null) stats.missingPairRidesSkipped.increment();
 							continue;
 						}
 
-						Ride ext = tryExtend(base, addedRequest, pairRides, 0);
-						if (ext == null) {
-							if (stats != null) stats.tryExtendFailed.increment();
-							continue;
-						}
+						for (int[] pairRides : allPairRideCombinations) {
+							Ride ext = tryExtend(base, addedRequest, pairRides, 0);
+							if (ext == null) {
+								if (stats != null) stats.tryExtendFailed.increment();
+								continue;
+							}
 
-						Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
-						if (validated == null) {
-							if (stats != null) stats.budgetValidationFailed.increment();
-							continue;
-						}
+							Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
+							if (validated == null) {
+								if (stats != null) stats.budgetValidationFailed.increment();
+								continue;
+							}
 
-						if (exMasConfig != null && exMasConfig.getPruningDistanceSavingsLogScale() >= 0
-								&& !passesDistanceSavingsPruning(validated)) {
-							if (stats != null) stats.distanceSavingsPrunedEarly.increment();
-							continue;
-						}
+							if (exMasConfig != null && exMasConfig.getPruningDistanceSavingsLogScale() >= 0
+									&& !passesDistanceSavingsPruning(validated)) {
+								if (stats != null) stats.distanceSavingsPrunedEarly.increment();
+								continue;
+							}
 
-						variants.add(new ExtensionCandidate(base.getIndex(), addedReq, validated));
-						if (stats != null) stats.candidatesAdded.increment();
+							variants.add(new ExtensionCandidate(base.getIndex(), addedReq, validated));
+							if (stats != null) stats.candidatesAdded.increment();
+						}
 					}
 				}
 
@@ -388,8 +390,8 @@ public final class ReferenceRideExtender {
 				continue;
 			}
 
-			int[] pairRides = getPairRides(ride.getRequestIndices(), candidateReq);
-			if (pairRides == null) {
+			List<int[]> allPairRideCombinations = getAllPairRideCombinations(ride.getRequestIndices(), candidateReq);
+			if (allPairRideCombinations == null) {
 				if (stats != null) {
 					stats.missingPairRidesSkipped.increment();
 				}
@@ -422,34 +424,35 @@ public final class ReferenceRideExtender {
 				}
 			}
 
-			// Use temp index (will be reassigned later)
-			Ride ext = tryExtend(ride, newRequest, pairRides, 0);
-			if (ext == null) {
-				if (stats != null) {
-					stats.tryExtendFailed.increment();
+			for (int[] pairRides : allPairRideCombinations) {
+				Ride ext = tryExtend(ride, newRequest, pairRides, 0);
+				if (ext == null) {
+					if (stats != null) {
+						stats.tryExtendFailed.increment();
+					}
+					continue;
 				}
-				continue;
-			}
 
-			Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
-			if (validated == null) {
-				if (stats != null) {
-					stats.budgetValidationFailed.increment();
+				Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
+				if (validated == null) {
+					if (stats != null) {
+						stats.budgetValidationFailed.increment();
+					}
+					continue;
 				}
-				continue;
-			}
 
-			// Early pruning: drop candidates that don't meet required distance savings
-			if (exMasConfig != null && exMasConfig.getPruningDistanceSavingsLogScale() >= 0
-					&& !passesDistanceSavingsPruning(validated)) {
-				if (stats != null) {
-					stats.distanceSavingsPrunedEarly.increment();
+				// Early pruning: drop candidates that don't meet required distance savings
+				if (exMasConfig != null && exMasConfig.getPruningDistanceSavingsLogScale() >= 0
+						&& !passesDistanceSavingsPruning(validated)) {
+					if (stats != null) {
+						stats.distanceSavingsPrunedEarly.increment();
+					}
+					continue;
 				}
-				continue;
-			}
-			results.add(new ExtensionCandidate(ride.getIndex(), candidateReq, validated));
-			if (stats != null) {
-				stats.candidatesAdded.increment();
+				results.add(new ExtensionCandidate(ride.getIndex(), candidateReq, validated));
+				if (stats != null) {
+					stats.candidatesAdded.increment();
+				}
 			}
 		}
 
@@ -628,14 +631,39 @@ public final class ReferenceRideExtender {
 				.build();
 	}
 
-	private int[] getPairRides(int[] requests, int candidate) {
-		int[] pairRides = new int[requests.length];
-		for (int i = 0; i < requests.length; i++) {
-			IntList edges = graph.getEdges(requests[i], candidate);
+	/**
+	 * Returns all Cartesian-product combinations of pair rides for the given candidate.
+	 * Each existing passenger may have 0, 1, or 2 edges to the candidate (FIFO2 and/or LIFO2).
+	 * Returns null if any passenger has no edge to the candidate (extension not supported).
+	 * Implements paper Algorithm 2: "foreach E(q,r) ∈ E(q,r) do" — iterate ALL 2^n combinations.
+	 */
+	private List<int[]> getAllPairRideCombinations(int[] requests, int candidate) {
+		List<IntList> edgesPerPassenger = new ArrayList<>(requests.length);
+		for (int req : requests) {
+			IntList edges = graph.getEdges(req, candidate);
 			if (edges.isEmpty()) return null;
-			pairRides[i] = edges.getInt(0);
+			edgesPerPassenger.add(edges);
 		}
-		return pairRides;
+		return cartesianProduct(edgesPerPassenger);
+	}
+
+	/** Odometer Cartesian product of per-passenger edge lists. Package-private for testing. */
+	static List<int[]> cartesianProduct(List<IntList> lists) {
+		List<int[]> result = new ArrayList<>();
+		int n = lists.size();
+		int[] indices = new int[n];
+		outer:
+		while (true) {
+			int[] combo = new int[n];
+			for (int i = 0; i < n; i++) combo[i] = lists.get(i).getInt(indices[i]);
+			result.add(combo);
+			for (int pos = n - 1; pos >= 0; pos--) {
+				if (++indices[pos] < lists.get(pos).size()) break;
+				indices[pos] = 0;
+				if (pos == 0) break outer;
+			}
+		}
+		return result;
 	}
 
 	private Ride tryExtend(Ride base, DrtRequest newRequest, int[] pairRides, int index) {

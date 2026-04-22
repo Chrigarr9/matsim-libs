@@ -1,23 +1,22 @@
 Golden CSVs for ExMasReferencePortRegressionTest.
 
-source_branch=main
-source_sha=54d611e854d1e220ba147c212b3819d13739cdae
-generated_at=2026-04-21
-generator=ExMasKelheimE2ETest (matsim-libs/contribs/drt-demand-extraction)
-generator_invocation=mvn test -Dtest=ExMasKelheimE2ETest -Denforcer.skip=true
-java=jdk-25.0.2+10 (compiles for Java 21 release per parent pom)
+source_branch=feature/exmas-reference-fork
+source_sha=3b174cb0261d25a4daa04ef15d541e46efef79b4
+generated_at=2026-04-22T14:08:41+02:00
+generator=ExMasAlgorithmE2ETest (kelheim + AlgorithmProfile.R1)
+java=openjdk version "25.0.2" 2026-01-20 LTS
 scenario=matsim-examples kelheim-mini (1% sample)
 
-Vanilla ExMAS configuration:
-  Per .project-memory/exmas-reference-pruner-default-2026-04-21.md, main's
-  default PostExtensionPruner knobs are:
-    - postExtensionMaxPerSet=0       (≤0 ⇒ disabled)
-    - postExtensionKeepTopFraction=1.0 (≥1.0 ⇒ disabled)
-  No pruner is instantiated. main's stock test is therefore "vanilla ExMAS"
-  by default — no override is needed when generating this golden.
+R1 configuration (paper Algorithm 2, full 2^n enumeration):
+  - Full Cartesian product of FIFO/LIFO edges per candidate (fix 2026-04-22)
+  - No pruning (all PruningMode gates off)
+  - MATSim scoring model (replaces Python WtS formula)
 
-Counts (incl header row):
-  exmas_rides.csv:    835 lines = 834 rides
-  drt_requests.csv:   247 lines = 246 requests
+Note: this golden no longer matches main binary (main still takes list(product(*E))[0]).
+  The regression test guards future drift in the corrected R1, not against main parity.
 
-Regenerate with: scripts/regenerate_exmas_reference_golden.sh
+Counts:
+  exmas_rides.csv:    952 rides
+  drt_requests.csv:   246 requests
+
+Regenerate with: scripts/regenerate_exmas_reference_golden.sh [--force]
