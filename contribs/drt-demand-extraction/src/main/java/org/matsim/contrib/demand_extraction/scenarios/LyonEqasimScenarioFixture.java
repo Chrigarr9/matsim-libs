@@ -65,7 +65,7 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 	// Exclusion zone: drop trips whose O AND D both lie within the Métropole de Lyon.
 	// The service is designed for rural↔urban access, not intra-metropolitan rides.
 	// Shapefile = union of 58 communes with EPCI 200046977 (EPSG:2154).
-	// Path is relative to scenarioDir; ../../ navigates back to the eqasim-france root.
+	// Path is relative to scenarioDir (e.g. output_lyon_drt_1pct/lyon_drt_area/); ../../ navigates to eqasim-france/.
 	private static final String EXCLUSION_ZONE_SHAPEFILE = "../../data/cutter/metropole_lyon.shp";
 
 	// 15-minute bins matching RunExportTravelTimes
@@ -214,7 +214,7 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 		exMas.setMinDrtAccessEgressDistance(100.0);
 
 		exMas.setSearchHorizon(3600.0);
-		exMas.setMaxDetourFactor(1.5);
+		exMas.setMaxDetourFactor(1.3);
 		exMas.setMaxAbsoluteDetour(3600);
 		exMas.setMaxPoolingDegree(16);
 

@@ -90,6 +90,11 @@ public class MatsimNetworkCache {
 	// Cache: (originLinkId, destLinkId, timeBin) -> TravelSegment
 	private final ConcurrentHashMap<CacheKey, TravelSegment> cache = new ConcurrentHashMap<>();
 
+	// Tracks (originLinkId, timeBin) pairs for which SSSP was actually completed.
+	// batchPrecompute skips only when the SAME origin+timeBin was already SSSP'd — not
+	// when an individual getSegment call happened to populate one destination of that origin.
+	// Using ConcurrentHashMap as a set (value = Boolean.TRUE).
+	private final ConcurrentHashMap<SsspKey, Boolean> ssspCompleted = new ConcurrentHashMap<>();
 
 	// SSSP tree for batch precomputation (one per thread, NOT thread-safe)
 	private final ThreadLocal<LeastCostPathTree> threadLocalTree;
@@ -244,9 +249,15 @@ public class MatsimNetworkCache {
 		int timeBin = (int)(departureTime / timeBinSize);
 		double canonicalDepartureTime = (timeBin + 0.5) * timeBinSize;
 
-		// Skip if tree was already computed for this (fromLink, timeBin)
-		CacheKey probe = new CacheKey(fromLinkId, toLinkIds[0], timeBin);
-		if (cache.containsKey(probe)) {
+		// Skip only when a full SSSP was already completed for this (fromLink, timeBin).
+		// Do NOT use the main segment cache as a proxy: individual getSegment calls can
+		// populate (fromLink, someDestination, timeBin) even though no SSSP was run,
+		// causing false-positive skips that leave other destinations un-precomputed and
+		// routed by the individual LeastCostPathCalculator instead of the SSSP tree.
+		// Different implementations (SpeedyALT vs LeastCostPathTree) give slightly
+		// different travel times for some segments, flipping borderline pair feasibility.
+		SsspKey ssspKey = new SsspKey(fromLinkId, timeBin);
+		if (ssspCompleted.containsKey(ssspKey)) {
 			batchTreesSkipped.incrementAndGet();
 			return;
 		}
@@ -255,6 +266,7 @@ public class MatsimNetworkCache {
 		LeastCostPathTree.StopCriterion stopCriterion =
 			new LeastCostPathTree.TravelTimeStopCriterion(maxTravelTimeSeconds);
 		tree.calculate(fromLink, canonicalDepartureTime, dummyPerson, dummyVehicle, stopCriterion);
+		ssspCompleted.put(ssspKey, Boolean.TRUE);
 		batchTreesComputed.incrementAndGet();
 
 		for (Id<Link> toLinkId : toLinkIds) {
@@ -725,6 +737,30 @@ public class MatsimNetworkCache {
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────
+
+	/** Key for the ssspCompleted set: origin link + time bin. */
+	private static class SsspKey {
+		private final Id<Link> origin;
+		private final int timeBin;
+
+		SsspKey(Id<Link> origin, int timeBin) {
+			this.origin = origin;
+			this.timeBin = timeBin;
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			if (this == obj) return true;
+			if (!(obj instanceof SsspKey)) return false;
+			SsspKey other = (SsspKey) obj;
+			return timeBin == other.timeBin && origin.equals(other.origin);
+		}
+
+		@Override
+		public int hashCode() {
+			return 31 * origin.hashCode() + timeBin;
+		}
+	}
 
 	/**
 	 * Cache key for link-to-link travel at specific time bin.
