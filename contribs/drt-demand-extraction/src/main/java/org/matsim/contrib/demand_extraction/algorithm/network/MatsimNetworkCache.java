@@ -104,6 +104,11 @@ public class MatsimNetworkCache {
 	private final AtomicInteger batchTreesSkipped = new AtomicInteger(0);
 	private final AtomicLong batchSegmentsPopulated = new AtomicLong(0);
 
+	// getSegment call statistics
+	// cacheGetAttempts counts every call; totalRoutingAttempts (below) counts only cache misses
+	// (calls that fell through to computeSegment / SpeedyALT). The difference is cache hits.
+	private final AtomicLong cacheGetAttempts = new AtomicLong(0);
+
 	// Track routing failures for summary logging (thread-safe)
 	private final AtomicInteger routingFailures = new AtomicInteger(0);
 	private final AtomicInteger totalRoutingAttempts = new AtomicInteger(0);
@@ -206,11 +211,13 @@ public class MatsimNetworkCache {
 	 * @return travel segment with metrics, or infinity segment if unreachable
 	 */
 	public TravelSegment getSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
+		cacheGetAttempts.incrementAndGet();
+
 		// Calculate time bin
 		int timeBin = (int) (departureTime / timeBinSize);
 		// Canonical departure time for this bin: midpoint
 		double canonicalDepartureTime = (timeBin + 0.5) * timeBinSize;
-		
+
 		CacheKey key = new CacheKey(originLinkId, destLinkId, timeBin);
 
 		// Use computeIfAbsent for atomic cache operations
@@ -483,28 +490,42 @@ public class MatsimNetworkCache {
 	 * Call this after demand extraction to get an overview of routing success/failure rates.
 	 */
 	public void logRoutingStatistics() {
-		int total = totalRoutingAttempts.get();
-		int failures = routingFailures.get();
-		
-		if (total == 0) {
-			log.info("Network cache: No routing attempts made");
+		long gets = cacheGetAttempts.get();
+		long speedyAlt = totalRoutingAttempts.get();
+		long failures = routingFailures.get();
+		long hits = gets - speedyAlt;
+		int trees = batchTreesComputed.get();
+		int treesSkipped = batchTreesSkipped.get();
+		long ssspSegs = batchSegmentsPopulated.get();
+		long cacheSize = cache.size();
+
+		if (gets == 0 && trees == 0) {
+			log.info("Network cache: No routing activity");
 			return;
 		}
-		
-		double failureRate = (100.0 * failures) / total;
-		double successRate = 100.0 - failureRate;
-		
-		log.info(String.format("Network cache statistics:"));
-		log.info(String.format("  Total routing attempts: %,d", total));
-		log.info(String.format("  Successful routes: %,d (%.1f%%)", total - failures, successRate));
-		log.info(String.format("  Failed routes: %,d (%.1f%%)", failures, failureRate));
-		log.info(String.format("  Cache size: %,d entries", cache.size()));
-		log.info(String.format("  Batch precompute: %,d trees computed, %,d skipped, %,d segments populated",
-				batchTreesComputed.get(), batchTreesSkipped.get(), batchSegmentsPopulated.get()));
 
-		if (failureRate > 10.0) {
-			log.warn(String.format("High routing failure rate (%.1f%%). This may indicate network connectivity issues.", failureRate));
-			log.warn("Consider running NetworkUtils.cleanNetwork() or checking network mode assignments.");
+		log.info("Network cache statistics:");
+		log.info("  getSegment calls:  {}", String.format("%,d", gets));
+		if (gets > 0) {
+			log.info("    cache hits:      {}  ({}%)",
+					String.format("%,d", hits), String.format("%.1f", 100.0 * hits / gets));
+			log.info("    SpeedyALT:       {}  ({}%)  [{} failures]",
+					String.format("%,d", speedyAlt), String.format("%.1f", 100.0 * speedyAlt / gets),
+					String.format("%,d", failures));
+		}
+		log.info("  batchPrecompute:   {} trees  ({} skipped)  -> {} segments cached",
+				String.format("%,d", trees), String.format("%,d", treesSkipped),
+				String.format("%,d", ssspSegs));
+		log.info("  Cache total size:  {} entries", String.format("%,d", cacheSize));
+		if (gets > 0 && ssspSegs > 0) {
+			log.info("  SSSP segment reuse estimate: {} SSSP entries / {} hits  " +
+					"(upper bound; same entry may be hit many times)",
+					String.format("%,d", ssspSegs), String.format("%,d", hits));
+		}
+
+		if (speedyAlt > 0 && (100.0 * failures / speedyAlt) > 10.0) {
+			log.warn("High SpeedyALT failure rate ({}%). Check network connectivity.",
+					String.format("%.1f", 100.0 * failures / speedyAlt));
 		}
 	}
 	
@@ -513,6 +534,7 @@ public class MatsimNetworkCache {
 	 * Useful when reusing the cache across multiple iterations.
 	 */
 	public void resetStatistics() {
+		cacheGetAttempts.set(0);
 		totalRoutingAttempts.set(0);
 		routingFailures.set(0);
 	}

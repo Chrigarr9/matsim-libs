@@ -165,6 +165,9 @@ public class DemandExtractionListener implements ShutdownListener {
 			}
 		}
 
+		// Network cache statistics (cache hit rate, SSSP vs SpeedyALT breakdown)
+		networkCache.logRoutingStatistics();
+
 		// Final summary
 		long overallElapsed = System.currentTimeMillis() - overallStartTime;
 		double overallSeconds = overallElapsed / 1000.0;
