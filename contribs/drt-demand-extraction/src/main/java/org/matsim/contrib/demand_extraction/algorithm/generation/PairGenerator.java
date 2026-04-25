@@ -86,6 +86,14 @@ public final class PairGenerator {
 		AtomicInteger processedRequests = new AtomicInteger(0);
 		int total = filter.size();
 
+		// Global SSSP bound — see batchPrecompute call below for rationale.
+		double globalMaxTravelTime = 0;
+		for (DrtRequest r : requests) {
+			if (r.getMaxTravelTime() > globalMaxTravelTime) globalMaxTravelTime = r.getMaxTravelTime();
+		}
+		final double ssspBound = globalMaxTravelTime;
+		log.info("  SSSP stop-criterion bound: {}s (global max maxTravelTime)", String.format("%.1f", ssspBound));
+
 		// Phase 1: Parallel collection of candidates (without indices)
 		java.util.stream.IntStream requestStream = IntStream.range(0, total);
 		if (useParallel) {
@@ -104,7 +112,7 @@ public final class PairGenerator {
 						log.info("  Pair generation progress: {}/{} ({}%), ETA {}",
 								processed, total, String.format("%.1f", percent), formatDuration(remainingSeconds));
 					}
-					return generateCandidatesForRequest(filter, i);
+					return generateCandidatesForRequest(filter, i, ssspBound);
 				})
 				.flatMap(List::stream)
 				.collect(Collectors.toList());
@@ -171,27 +179,28 @@ public final class PairGenerator {
 	 * Generate all valid candidates for a single request index.
 	 */
 	@SuppressWarnings("unchecked")
-	private List<PairCandidate> generateCandidatesForRequest(TimeFilter filter, int i) {
+	private List<PairCandidate> generateCandidatesForRequest(TimeFilter filter, int i, double ssspBound) {
 		List<PairCandidate> results = new ArrayList<>();
 		DrtRequest reqI = filter.getRequest(i);
 		int[] candidateIndices = filter.findCandidatesInHorizon(i, horizon);
 
 		// Batch precompute O→O segments: one SSSP from reqI.origin covers all candidates
 		Id<Link>[] candidateOrigins = new Id[candidateIndices.length];
-		double maxCandidateMaxTravelTime = 0;
 		Id<Link>[] candidateDestinations = new Id[candidateIndices.length];
 		for (int k = 0; k < candidateIndices.length; k++) {
 			DrtRequest reqK = filter.getRequest(candidateIndices[k]);
 			candidateOrigins[k] = reqK.originLinkId;
 			candidateDestinations[k] = reqK.destinationLinkId;
-			maxCandidateMaxTravelTime = Math.max(maxCandidateMaxTravelTime, reqK.getMaxTravelTime());
 		}
-		network.batchPrecompute(reqI.originLinkId, reqI.requestTime, candidateOrigins,
-			reqI.getMaxTravelTime());
+		// SSSP bound = global max maxTravelTime across all requests. Per-request or per-origin
+		// bounds are unsafe: the cache key (origin, dest, timeBin) is anonymous, so a downstream
+		// d≥3 lookup can need a segment beyond any single-request bound but within the bound of
+		// some other passenger that ends up traversing it. Global-max guarantees that any segment
+		// reachable on the network appears in the cache, eliminating false-unreachable misses.
+		network.batchPrecompute(reqI.originLinkId, reqI.requestTime, candidateOrigins, ssspBound);
 
 		// Batch precompute D→D segments: one SSSP from reqI.dest covers all FIFO D_i→D_j lookups
-		network.batchPrecompute(reqI.destinationLinkId, reqI.requestTime, candidateDestinations,
-			maxCandidateMaxTravelTime);
+		network.batchPrecompute(reqI.destinationLinkId, reqI.requestTime, candidateDestinations, ssspBound);
 
 		for (int j : candidateIndices) {
 			DrtRequest reqJ = filter.getRequest(j);

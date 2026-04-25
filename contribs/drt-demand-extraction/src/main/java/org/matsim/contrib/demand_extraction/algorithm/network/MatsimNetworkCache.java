@@ -306,10 +306,12 @@ public class MatsimNetworkCache {
 					utility = quantizeUtilityTo1e4(utility);
 				}
 				cache.put(key, new TravelSegment(tt, dist, utility));
-			} else {
-				cache.put(key, TravelSegment.unreachable());
+				batchSegmentsPopulated.incrementAndGet();
 			}
-			batchSegmentsPopulated.incrementAndGet();
+			// else: SSSP stop-criterion didn't reach this node within the bound — leave the
+			// key absent so a later point-to-point getSegment computes the true path on demand.
+			// Caching unreachable here would be a false negative (path exists, just beyond bound)
+			// and silently breaks downstream extenders that need the segment at higher degree.
 		}
 	}
 
