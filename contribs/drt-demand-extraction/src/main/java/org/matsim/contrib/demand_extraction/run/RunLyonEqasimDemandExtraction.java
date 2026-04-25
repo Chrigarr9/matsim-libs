@@ -52,11 +52,25 @@ public class RunLyonEqasimDemandExtraction {
 		public final ExMasConfigGroup.Algorithm algorithm;
 		/** Paper 1 profile (R1/R2/R3). When set, overrides algorithm + all pruning knobs. */
 		public final AlgorithmProfile profile;
+		/** Override trip-filter radius (km). NaN = keep fixture default. */
+		public final double tripFilterRadiusKm;
+		/** When true, clears the exclusion-zone shapefile path set by the fixture. */
+		public final boolean noExclusionZone;
+		/** When true, disables predecessor/successor export. */
+		public final boolean noPredecessors;
+		/** When true, disables Shapley-value calculation. */
+		public final boolean noShapley;
+		/** When true, forces all cache-miss routing through a single shared locked router
+		 *  (OnlyTimeDependentTravelDisutility). Eliminates thread-local SpeedyALT variation
+		 *  for uncovered segments, making parallel runs byte-identical. */
+		public final boolean deterministicRouting;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
 				double minDrtCostPerKm, int pruningCoverageK,
-				ExMasConfigGroup.Algorithm algorithm, AlgorithmProfile profile) {
+				ExMasConfigGroup.Algorithm algorithm, AlgorithmProfile profile,
+				double tripFilterRadiusKm, boolean noExclusionZone,
+				boolean noPredecessors, boolean noShapley, boolean deterministicRouting) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -68,6 +82,11 @@ public class RunLyonEqasimDemandExtraction {
 			this.pruningCoverageK = pruningCoverageK;
 			this.algorithm = algorithm;
 			this.profile = profile;
+			this.tripFilterRadiusKm = tripFilterRadiusKm;
+			this.noExclusionZone = noExclusionZone;
+			this.noPredecessors = noPredecessors;
+			this.noShapley = noShapley;
+			this.deterministicRouting = deterministicRouting;
 		}
 	}
 
@@ -83,6 +102,11 @@ public class RunLyonEqasimDemandExtraction {
 		int pruningCoverageK = -1;
 		ExMasConfigGroup.Algorithm algorithm = ExMasConfigGroup.Algorithm.BAMAS;
 		AlgorithmProfile profile = null;
+		double tripFilterRadiusKm = Double.NaN;
+		boolean noExclusionZone = false;
+		boolean noPredecessors = false;
+		boolean noShapley = false;
+		boolean deterministicRouting = false;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -96,6 +120,11 @@ public class RunLyonEqasimDemandExtraction {
 				case "--min-drt-cost-per-km" -> minDrtCostPerKm = Double.parseDouble(args[++i]);
 				case "--pruning-coverage-k" -> pruningCoverageK = Integer.parseInt(args[++i]);
 				case "--algorithm" -> algorithm = ExMasConfigGroup.Algorithm.valueOf(args[++i].toUpperCase());
+				case "--trip-filter-radius-km" -> tripFilterRadiusKm = Double.parseDouble(args[++i]);
+				case "--no-exclusion-zone" -> noExclusionZone = true;
+				case "--no-predecessors" -> noPredecessors = true;
+				case "--no-shapley" -> noShapley = true;
+				case "--deterministic-routing" -> deterministicRouting = true;
 				case "--profile" -> profile = switch (args[++i].toUpperCase()) {
 					case "R1" -> AlgorithmProfile.R1;
 					case "R2" -> AlgorithmProfile.R2;
@@ -106,7 +135,8 @@ public class RunLyonEqasimDemandExtraction {
 			}
 		}
 		return new ParsedArgs(sample, scenarioDir, prefix, travelTimesPath, outputDir,
-				searchHorizon, maxDetourFactor, minDrtCostPerKm, pruningCoverageK, algorithm, profile);
+				searchHorizon, maxDetourFactor, minDrtCostPerKm, pruningCoverageK, algorithm, profile,
+				tripFilterRadiusKm, noExclusionZone, noPredecessors, noShapley, deterministicRouting);
 	}
 
 	public static void main(String[] args) throws Exception {
@@ -117,7 +147,9 @@ public class RunLyonEqasimDemandExtraction {
 					+ "--travel-times <path> [--output-dir <path>] "
 					+ "[--profile r1|r2|r3] [--algorithm bamas|exmas] "
 					+ "[--search-horizon <s>] [--max-detour-factor <f>] "
-					+ "[--min-drt-cost-per-km <eur>] [--pruning-coverage-k <int>]");
+					+ "[--min-drt-cost-per-km <eur>] [--pruning-coverage-k <int>] "
+					+ "[--trip-filter-radius-km <km>] [--no-exclusion-zone] "
+					+ "[--no-predecessors] [--no-shapley] [--deterministic-routing]");
 			System.exit(1);
 		}
 
@@ -165,6 +197,26 @@ public class RunLyonEqasimDemandExtraction {
 		if (p.pruningCoverageK > 0) {
 			log.info("  Override: pruningCoverageK = {}", p.pruningCoverageK);
 			exMas.setPruningCoverageK(p.pruningCoverageK);
+		}
+		if (!Double.isNaN(p.tripFilterRadiusKm)) {
+			log.info("  Override: tripFilterRadiusKm = {}", p.tripFilterRadiusKm);
+			exMas.setTripFilterRadiusKm(p.tripFilterRadiusKm);
+		}
+		if (p.noExclusionZone) {
+			log.info("  Override: exclusion zone disabled");
+			exMas.setTripFilterExclusionShapefilePath(null);
+		}
+		if (p.noPredecessors) {
+			log.info("  Override: predecessors disabled");
+			exMas.setCalcPredecessors(false);
+		}
+		if (p.noShapley) {
+			log.info("  Override: Shapley disabled");
+			exMas.setCalcShapleyValues(false);
+		}
+		if (p.deterministicRouting) {
+			log.info("  Override: deterministic routing enabled (shared locked router, time-only disutility)");
+			exMas.setUseDeterministicNetworkRouting(true);
 		}
 	}
 }
