@@ -277,6 +277,10 @@ public final class ExMasReferenceEngine {
 		for (Ride ride : pairRides) {
 			if (ride.getDegree() != 2) continue;
 
+			// Edge direction = pickup order from PairGenerator (requests[0] = pickup-first).
+			// Downstream extension relies on this: getEdges(baseReq, candidate) returns only pair
+			// rides where baseReq is pickup-first, which is the only compatible orientation when
+			// extending with candidate as pickup-last.
 			int reqI = ride.getRequestIndices()[0];
 			int reqJ = ride.getRequestIndices()[1];
 			byte kind = ride.getKind() == RideKind.FIFO ? ShareabilityGraph.KIND_FIFO : ShareabilityGraph.KIND_LIFO;

@@ -48,12 +48,6 @@ public final class ReferenceRideExtender {
 	private final ExMasConfigGroup exMasConfig;
 	private static final double EPSILON = 1e-9;
 
-	private final java.util.concurrent.atomic.AtomicLong beelineExtensionRejected = new java.util.concurrent.atomic.AtomicLong();
-
-	private static double beeline(double x1, double y1, double x2, double y2) {
-		double dx = x2 - x1, dy = y2 - y1;
-		return Math.sqrt(dx * dx + dy * dy);
-	}
 
 	public ReferenceRideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 			List<DrtRequest> requests, List<Ride> rides, ExMasConfigGroup exMasConfig) {
@@ -92,7 +86,6 @@ public final class ReferenceRideExtender {
 		log.info("Extending {} rides from degree {} to {} [per-request-set]...",
 				ridesToExtend.size(), targetDegree - 1, targetDegree);
 		long startTime = System.currentTimeMillis();
-		beelineExtensionRejected.set(0);
 
 		// Build lookup: requestIndicesKey -> list of base rides with those indices
 		Map<String, List<Ride>> baseRidesByRequestSet = new HashMap<>();
@@ -176,12 +169,10 @@ public final class ReferenceRideExtender {
 							continue;
 						}
 
-						// Beeline pre-filter
-						if (!passesExtensionBeelineFilter(base, addedRequest)) {
-							beelineExtensionRejected.incrementAndGet();
-							continue;
-						}
-
+						// PORT-NOTE: vanilla ExMAS does not pre-filter extensions by beeline distance.
+						// Per-pair feasibility was already validated in PairGenerator; applying a second,
+						// stricter filter here caused Frame-2-style false rejections (R1 missed valid
+						// triples whose only valid extension frame was silently skipped here).
 						List<int[]> allPairRideCombinations = getAllPairRideCombinations(base.getRequestIndices(), addedReq);
 						if (allPairRideCombinations == null) {
 							if (stats != null) stats.missingPairRidesSkipped.increment();
@@ -224,10 +215,6 @@ public final class ReferenceRideExtender {
 			}
 		}
 
-		if (beelineExtensionRejected.get() > 0) {
-			log.info("  Beeline extension pre-filter rejected {} candidates before routing",
-					beelineExtensionRejected.get());
-		}
 		stats.logSummary(allExtended.size());
 
 		long elapsed = System.currentTimeMillis() - startTime;
@@ -398,31 +385,8 @@ public final class ReferenceRideExtender {
 				continue;
 			}
 
-			// Beeline pre-filter: skip if new passenger is too far from existing stops
-			{
-				double maxDist = newRequest.directDistance * newRequest.maxDetourFactor;
-				double oX = newRequest.originX, oY = newRequest.originY;
-				double dX = newRequest.destinationX, dY = newRequest.destinationY;
-				boolean originReachable = false;
-				boolean destReachable = false;
-				for (DrtRequest existing : ride.getRequests()) {
-					if (!originReachable) {
-						double beeToO = beeline(oX, oY, existing.originX, existing.originY);
-						double beeToD = beeline(oX, oY, existing.destinationX, existing.destinationY);
-						if (Math.min(beeToO, beeToD) <= maxDist) originReachable = true;
-					}
-					if (!destReachable) {
-						double beeToO = beeline(dX, dY, existing.originX, existing.originY);
-						double beeToD = beeline(dX, dY, existing.destinationX, existing.destinationY);
-						if (Math.min(beeToO, beeToD) <= maxDist) destReachable = true;
-					}
-					if (originReachable && destReachable) break;
-				}
-				if (!originReachable || !destReachable) {
-					beelineExtensionRejected.incrementAndGet();
-					continue;
-				}
-			}
+			// PORT-NOTE: vanilla ExMAS does not pre-filter extensions by beeline distance. See
+			// parallel comment in extendRides for rationale.
 
 			for (int[] pairRides : allPairRideCombinations) {
 				Ride ext = tryExtend(ride, newRequest, pairRides, 0);
@@ -486,35 +450,6 @@ public final class ReferenceRideExtender {
 		result[existing.length] = newReq;
 		Arrays.sort(result);
 		return result;
-	}
-
-	/**
-	 * Beeline pre-filter for extensions: check if new passenger's origin and destination
-	 * are each within reach of at least one existing stop in the ride.
-	 */
-	private boolean passesExtensionBeelineFilter(Ride base, DrtRequest newRequest) {
-		double maxDist = newRequest.directDistance * newRequest.maxDetourFactor;
-		double oX = newRequest.originX, oY = newRequest.originY;
-		double dX = newRequest.destinationX, dY = newRequest.destinationY;
-
-		boolean originReachable = false;
-		boolean destReachable = false;
-		for (DrtRequest existing : base.getRequests()) {
-			if (!originReachable) {
-				double beeO = Math.min(
-					beeline(oX, oY, existing.originX, existing.originY),
-					beeline(oX, oY, existing.destinationX, existing.destinationY));
-				if (beeO <= maxDist) originReachable = true;
-			}
-			if (!destReachable) {
-				double beeD = Math.min(
-					beeline(dX, dY, existing.originX, existing.originY),
-					beeline(dX, dY, existing.destinationX, existing.destinationY));
-				if (beeD <= maxDist) destReachable = true;
-			}
-			if (originReachable && destReachable) return true;
-		}
-		return false;
 	}
 
 	/**
@@ -640,6 +575,9 @@ public final class ReferenceRideExtender {
 	private List<int[]> getAllPairRideCombinations(int[] requests, int candidate) {
 		List<IntList> edgesPerPassenger = new ArrayList<>(requests.length);
 		for (int req : requests) {
+			// Edges are stored in pickup order (source = pickup-first). The extension frame
+			// assumes candidate is pickup-last, so only edges where req is pickup-first
+			// (i.e. req → candidate) are compatible; look them up directly.
 			IntList edges = graph.getEdges(req, candidate);
 			if (edges.isEmpty()) return null;
 			edgesPerPassenger.add(edges);
@@ -721,12 +659,14 @@ public final class ReferenceRideExtender {
 		double[] connUtil = new double[seqLen - 1];
 
 		double startTime = requests[0].getRequestTime();
+		double currentTime = startTime;
 		for (int i = 0; i < seqLen - 1; i++) {
-			TravelSegment seg = network.getSegment(sequence[i], sequence[i + 1], startTime);
+			TravelSegment seg = network.getSegment(sequence[i], sequence[i + 1], currentTime);
 			if (!seg.isReachable()) return null;
 			connTT[i] = seg.getTravelTime();
 			connDist[i] = seg.getDistance();
 			connUtil[i] = seg.getNetworkUtility();
+			currentTime += connTT[i];
 		}
 
 		// Calculate passenger metrics
