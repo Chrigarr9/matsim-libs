@@ -6,6 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -111,6 +115,75 @@ class RoutingDeterminismTest {
 				compared, unreachable, N_OD_PAIRS - compared - unreachable);
 		assertTrue(compared > N_OD_PAIRS / 2,
 				"compared only " + compared + " OD pairs; sample size suspiciously low");
+	}
+
+	@Test
+	void parallelSpeedyAltMatchesSequentialUnderTimeDistanceDisutility() throws Exception {
+		Network network = loadLyonNetwork();
+		TravelTime tt = new FreeSpeedTravelTime();
+		TravelDisutility td = new TimeDistanceTravelDisutility(tt, TIME_COEF, DIST_COEF);
+		SpeedyALTFactory factory = new SpeedyALTFactory();
+
+		List<Id<Link>> linkIds = new ArrayList<>(network.getLinks().keySet());
+		Random rng = new Random(SEED);
+		final int n = 1000;
+		List<Link[]> ods = new ArrayList<>(n);
+		for (int i = 0; i < n; i++) {
+			Link a = network.getLinks().get(linkIds.get(rng.nextInt(linkIds.size())));
+			Link b = network.getLinks().get(linkIds.get(rng.nextInt(linkIds.size())));
+			if (a != b) ods.add(new Link[] { a, b });
+		}
+
+		// Sequential reference run.
+		LeastCostPathCalculator seqAlt = factory.createPathCalculator(network, td, tt);
+		double[] seqCost = new double[ods.size()];
+		double[] seqTime = new double[ods.size()];
+		double[] seqDist = new double[ods.size()];
+		for (int i = 0; i < ods.size(); i++) {
+			Path p = seqAlt.calcLeastCostPath(ods.get(i)[0], ods.get(i)[1], 0.0, null, null);
+			seqCost[i] = p == null ? Double.NaN : p.travelCost;
+			seqTime[i] = p == null ? Double.NaN : p.travelTime;
+			double d = 0.0;
+			if (p != null) for (Link l : p.links) d += l.getLength();
+			seqDist[i] = p == null ? Double.NaN : d;
+		}
+
+		// Parallel run with thread-local SpeedyALT instances (production pattern).
+		int threads = 8;
+		ExecutorService pool = Executors.newFixedThreadPool(threads);
+		ThreadLocal<LeastCostPathCalculator> tlAlt =
+				ThreadLocal.withInitial(() -> factory.createPathCalculator(network, td, tt));
+		double[] parCost = new double[ods.size()];
+		double[] parTime = new double[ods.size()];
+		double[] parDist = new double[ods.size()];
+		List<Future<?>> futures = new ArrayList<>(ods.size());
+		for (int i = 0; i < ods.size(); i++) {
+			final int idx = i;
+			futures.add(pool.submit(() -> {
+				Path p = tlAlt.get().calcLeastCostPath(ods.get(idx)[0], ods.get(idx)[1], 0.0, null, null);
+				parCost[idx] = p == null ? Double.NaN : p.travelCost;
+				parTime[idx] = p == null ? Double.NaN : p.travelTime;
+				double d = 0.0;
+				if (p != null) for (Link l : p.links) d += l.getLength();
+				parDist[idx] = p == null ? Double.NaN : d;
+			}));
+		}
+		for (Future<?> f : futures) f.get();
+		pool.shutdown();
+		assertTrue(pool.awaitTermination(60, TimeUnit.SECONDS), "thread pool did not shut down");
+
+		// Byte-identical comparison: NaN must equal NaN (both unreachable for the same OD).
+		for (int i = 0; i < ods.size(); i++) {
+			if (Double.isNaN(seqCost[i]) || Double.isNaN(parCost[i])) {
+				assertTrue(Double.isNaN(seqCost[i]) && Double.isNaN(parCost[i]),
+						"reachability differs at OD #" + i);
+				continue;
+			}
+			assertEquals(seqCost[i], parCost[i], 0.0, "cost differs at OD #" + i);
+			assertEquals(seqTime[i], parTime[i], 0.0, "travel time differs at OD #" + i);
+			assertEquals(seqDist[i], parDist[i], 0.0, "distance differs at OD #" + i);
+		}
+		log.info("Parallel ({} threads) vs sequential SpeedyALT byte-identical on {} OD pairs", threads, ods.size());
 	}
 
 	private static Network loadLyonNetwork() throws Exception {
