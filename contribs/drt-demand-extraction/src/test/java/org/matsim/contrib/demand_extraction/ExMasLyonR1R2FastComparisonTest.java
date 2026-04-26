@@ -99,12 +99,13 @@ class ExMasLyonR1R2FastComparisonTest {
 		log.info("Loaded network: {} links, {} nodes",
 				network.getLinks().size(), network.getNodes().size());
 
-		// ── 2. Routing — FreeSpeedTravelTime + Dijkstra via test constructor ────
-		// Deterministic: no SpeedyALT cross-instance variation;
-		// shared cache between R1 and R2 eliminates any residual cross-run drift.
+		// ── 2. Routing — FreeSpeedTravelTime + SpeedyALT via test constructor ────
+		// Mirrors the production routing combination (SpeedyALT cache-miss + LeastCostPathTree
+		// batch SSSP). Determinism is verified by RoutingDeterminismTest: parallel SpeedyALT
+		// is byte-identical to sequential under OnlyTimeDependent on Lyon (1000 OD pairs, 8 threads).
 		TravelTime tt = new FreeSpeedTravelTime();
 		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
-		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture.createWithRouting(network, tt, td, 900);
+		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture.createWithSpeedyAltRouting(network, tt, td, 900);
 
 		// ── 3. Requests from CSV (bypasses the ~20-min mode-routing-cache phase) ─
 		List<DrtRequest> requests = loadRequestsFromCsv(requestsCsv, network);
@@ -121,9 +122,9 @@ class ExMasLyonR1R2FastComparisonTest {
 		// avoids needing a scoring context that is absent from CSV-loaded requests.
 		BudgetValidator validator = new PassthroughBudgetValidator(exMasConfig, config);
 
-		// ── 6. R1: ExMAS reference, single-threaded ──────────────────────────────
+		// ── 6. R1: ExMAS reference, parallel ─────────────────────────────────────
 		AlgorithmProfile.R1.apply(config);
-		exMasConfig.setAlgorithmProcessCount(1);
+		exMasConfig.setAlgorithmProcessCount(-1); // -1 = all cores; parallel SpeedyALT is byte-deterministic
 		log.info("R1 config: algorithm={}, processCount={}",
 				exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount());
 
@@ -137,11 +138,11 @@ class ExMasLyonR1R2FastComparisonTest {
 		Path r1Csv = outputDir.resolve("r1_rides.csv");
 		ExMasCsvWriter.writeRides(r1Csv.toString(), r1Rides);
 
-		// ── 7. R2: BAMAS no-pruning, single-threaded ─────────────────────────────
+		// ── 7. R2: BAMAS no-pruning, parallel ────────────────────────────────────
 		// Shares the warmed-up routing cache from R1 — identical routing for any
-		// segment already computed; new segments use the same Dijkstra instance.
+		// segment already computed; new segments use thread-local SpeedyALT instances.
 		AlgorithmProfile.R2.apply(config);
-		exMasConfig.setAlgorithmProcessCount(1);
+		exMasConfig.setAlgorithmProcessCount(-1);
 		log.info("R2 config: algorithm={}, processCount={}",
 				exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount());
 
@@ -156,7 +157,7 @@ class ExMasLyonR1R2FastComparisonTest {
 		ExMasCsvWriter.writeRides(r2Csv.toString(), r2Rides);
 
 		// ── 8. Compare canonical ride sets ───────────────────────────────────────
-		// relTol=1e-9: with identical Dijkstra routing and a shared cache, distances
+		// relTol=1e-9: with identical SpeedyALT routing and a shared cache, distances
 		// for the same canonical set must be bit-identical between R1 and R2.
 		GoldenAsserter.assertEquivalent(r1Csv, r2Csv, 1e-9);
 	}
