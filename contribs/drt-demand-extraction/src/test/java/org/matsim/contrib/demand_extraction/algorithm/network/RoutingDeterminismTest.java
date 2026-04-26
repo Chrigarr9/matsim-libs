@@ -121,7 +121,25 @@ class RoutingDeterminismTest {
 	void parallelSpeedyAltMatchesSequentialUnderTimeDistanceDisutility() throws Exception {
 		Network network = loadLyonNetwork();
 		TravelTime tt = new FreeSpeedTravelTime();
-		TravelDisutility td = new TimeDistanceTravelDisutility(tt, TIME_COEF, DIST_COEF);
+		assertParallelMatchesSequential(network, tt,
+				new TimeDistanceTravelDisutility(tt, TIME_COEF, DIST_COEF), "TimeDistance");
+	}
+
+	@Test
+	void parallelSpeedyAltMatchesSequentialUnderOnlyTimeDependentDisutility() throws Exception {
+		// Belt-and-braces check for option 1 of the routing-determinism plan: keep the
+		// existing OnlyTimeDependent disutility but enable parallel SpeedyALT in the
+		// fast comparison test. This proves parallel ↔ sequential is byte-identical
+		// even without the TimeDistance fix.
+		Network network = loadLyonNetwork();
+		TravelTime tt = new FreeSpeedTravelTime();
+		assertParallelMatchesSequential(network, tt,
+				new org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutility(tt),
+				"OnlyTimeDependent");
+	}
+
+	private void assertParallelMatchesSequential(Network network, TravelTime tt,
+			TravelDisutility td, String disutilityLabel) throws Exception {
 		SpeedyALTFactory factory = new SpeedyALTFactory();
 
 		List<Id<Link>> linkIds = new ArrayList<>(network.getLinks().keySet());
@@ -183,7 +201,8 @@ class RoutingDeterminismTest {
 			assertEquals(seqTime[i], parTime[i], 0.0, "travel time differs at OD #" + i);
 			assertEquals(seqDist[i], parDist[i], 0.0, "distance differs at OD #" + i);
 		}
-		log.info("Parallel ({} threads) vs sequential SpeedyALT byte-identical on {} OD pairs", threads, ods.size());
+		log.info("[{}] Parallel ({} threads) vs sequential SpeedyALT byte-identical on {} OD pairs",
+				disutilityLabel, threads, ods.size());
 	}
 
 	private static Network loadLyonNetwork() throws Exception {
