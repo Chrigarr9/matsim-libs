@@ -25,6 +25,7 @@ import org.matsim.core.population.PopulationUtils;
 import org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutility;
 import org.matsim.core.router.costcalculators.TravelDisutilityFactory;
 import org.matsim.core.router.speedy.LeastCostPathTree;
+import org.matsim.core.router.speedy.SpeedyALTFactory;
 import org.matsim.core.router.speedy.SpeedyGraph;
 import org.matsim.core.router.speedy.SpeedyGraphBuilder;
 import org.matsim.core.router.util.LeastCostPathCalculator;
@@ -737,8 +738,19 @@ public class MatsimNetworkCache {
 	/**
 	 * Test constructor with real routing capability.
 	 * Bypasses Guice injection, uses provided components directly.
+	 * Defaults to Dijkstra for cache-miss point-to-point routing.
 	 */
 	MatsimNetworkCache(Network network, TravelTime travelTime, TravelDisutility travelDisutility, int timeBinSize) {
+		this(network, travelTime, travelDisutility, timeBinSize, /* useSpeedyAlt= */ false);
+	}
+
+	/**
+	 * Test constructor with selectable cache-miss router.
+	 * When {@code useSpeedyAlt=true}, mirrors the production routing combination
+	 * (SpeedyALT for point-to-point cache miss + LeastCostPathTree for batch SSSP).
+	 */
+	MatsimNetworkCache(Network network, TravelTime travelTime, TravelDisutility travelDisutility,
+			int timeBinSize, boolean useSpeedyAlt) {
 		this.network = network;
 		this.travelTime = travelTime;
 		this.travelDisutility = travelDisutility;
@@ -754,8 +766,14 @@ public class MatsimNetworkCache {
 		this.dummyVehicle = VehicleUtils.createVehicle(Id.createVehicleId("test_dummy_vehicle"), dummyType);
 
 		SpeedyGraph speedyGraph = SpeedyGraphBuilder.build(network);
-		this.threadLocalRouter = ThreadLocal.withInitial(() ->
-			new org.matsim.core.router.DijkstraFactory().createPathCalculator(network, travelDisutility, travelTime));
+		if (useSpeedyAlt) {
+			SpeedyALTFactory altFactory = new SpeedyALTFactory();
+			this.threadLocalRouter = ThreadLocal.withInitial(() ->
+				altFactory.createPathCalculator(network, travelDisutility, travelTime));
+		} else {
+			this.threadLocalRouter = ThreadLocal.withInitial(() ->
+				new org.matsim.core.router.DijkstraFactory().createPathCalculator(network, travelDisutility, travelTime));
+		}
 		this.threadLocalTree = ThreadLocal.withInitial(() ->
 			new LeastCostPathTree(speedyGraph, travelTime, travelDisutility));
 	}

@@ -28,8 +28,16 @@ public final class MatsimNetworkCacheTestFixture {
         cache.putForTesting(origin, dest, seg);
     }
 
-    /** Build a MatsimNetworkCache with real routing capability for integration tests. */
+    /** Build a MatsimNetworkCache with real routing capability for integration tests.
+     *  Uses Dijkstra for cache-miss point-to-point routing. */
     public static MatsimNetworkCache createWithRouting(Network network, TravelTime tt, TravelDisutility td, int timeBinSize) {
         return new MatsimNetworkCache(network, tt, td, timeBinSize);
+    }
+
+    /** Build a MatsimNetworkCache that mirrors the production routing path:
+     *  SpeedyALT (A* with landmarks) for cache-miss point-to-point + LeastCostPathTree for batch SSSP.
+     *  Use this when a test needs to exercise the same routing combination eqasim runs in production. */
+    public static MatsimNetworkCache createWithSpeedyAltRouting(Network network, TravelTime tt, TravelDisutility td, int timeBinSize) {
+        return new MatsimNetworkCache(network, tt, td, timeBinSize, /* useSpeedyAlt= */ true);
     }
 }
