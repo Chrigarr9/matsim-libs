@@ -38,9 +38,9 @@ MATSim contrib module that extracts DRT demand from MATSim population plans and 
 Two stage-1 algorithms co-exist, selected by `--algorithm=exmas|bamas` (default `bamas`):
 
 - **`algorithm/exmas/`** — reference ExMAS, ported from `main` branch, **frozen**. Used by Paper 1 R1 (vanilla ExMAS baseline). Verified equivalent to `main`'s binary on Kelheim by `ExMasReferencePortRegressionTest`.
-- **`algorithm/bamas/`** — Budget-Aware Matching of Autonomous Shared-rides (the active algorithm). Used by Paper 1 R2 (BAMAS no-pruning) and R3 (BAMAS production defaults).
+- **`algorithm/bamas/`** — Budget-Aware Matching of Autonomous Shared-rides (the active algorithm). Used by Paper 1 R2 (BAMAS no-pruning), R3 (BAMAS heuristic-only distance-gate ablation), and R4 (BAMAS production defaults: distance gate + post-extension COVERAGE_TOPK).
 
-Paper 1 R1/R2/R3 profiles live in `org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile`. Per-scenario setup is in `scenarios/{Kelheim,LyonEqasim}ScenarioFixture` so runners and tests share the same configuration.
+Paper 1 R1/R2/R3/R4 profiles live in `org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile` and form a strict-subset progression R2 ⊂ R3 ⊂ R4 by enabled gates. Per-scenario setup is in `scenarios/{Kelheim,LyonEqasim}ScenarioFixture` so runners and tests share the same configuration.
 
 See `docs/plans/2026-04-21-exmas-reference-fork-design.md` for the architecture.
 
@@ -55,8 +55,8 @@ mvn clean install
 mvn test                                                              # default (Kelheim cells, all unit tests)
 mvn test -Djunit.groups=scenario-lyon -Djunit.excludedGroups=         # Lyon cells (needs LYON_* env vars below)
 mvn test -Djunit.groups=regression    -Djunit.excludedGroups=         # ExMAS port regression vs main golden
-mvn test -Dtest=ExMasAlgorithmE2ETest                                  # Parameterised matrix (R1/R2/R3 × Kelheim)
-mvn test -Dtest=ExMasKelheimE2ETest                                    # Kelheim (R3 default)
+mvn test -Dtest=ExMasAlgorithmE2ETest                                  # Parameterised matrix (R1/R2/R4 × Kelheim)
+mvn test -Dtest=ExMasKelheimE2ETest                                    # Kelheim (R4 production default)
 mvn test -Dtest=ExMasKelheimHyperPoolE2ETest                           # Kelheim HyperPool
 mvn clean install -DskipTests                                          # Build without tests
 

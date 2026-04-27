@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Lyon 100% R3 tractability probe — Block 1 of papers/paper1/planning/simulation-flow.md.
+# Lyon 100% R4 tractability probe — Block 1 of papers/paper1/planning/simulation-flow.md.
 #
 # Goal: find out whether a full end-to-end demand extraction at 100% Lyon is
 # tractable on this hardware, so the Block 3 MIP branch (A vs B) can be chosen.
-# This is *not* a comparison run — only R3 (BAMAS, full production pruning) is
+# This is *not* a comparison run — only R4 (BAMAS, full production pruning) is
 # executed. Predecessor/successor and Shapley exports are disabled because they
 # are downstream-MIP plumbing that does not affect the tractability question and
 # would otherwise dominate runtime at 100% scale.
+#
+# (Pre-2026-04-28 this script used --profile r3; the AlgorithmProfile R3↔R4
+# labels were swapped on 2026-04-28 so the production profile is now r4.)
 #
 # Settings (per user spec, 2026-04-26):
 #   --sample 100                          full Lyon DRT-area population
@@ -14,7 +17,7 @@
 #   --no-exclusion-zone                   no Métropole de Lyon exclusion polygon
 #   --no-predecessors                     skip predecessor/successor calculation
 #   --no-shapley                          skip Shapley value calculation
-#   --profile r3                          BAMAS production-default pruning
+#   --profile r4                          BAMAS production-default pruning
 #
 # Travel-time matrix: per simulation-flow.md §2 ("single travel-time matrix
 # computed from Lyon 10% base sim, reused at every scale") we point at the
@@ -39,7 +42,7 @@ LOG="${PLANNING_DIR}/lyon100pct-tractability.log"
 
 mkdir -p "${OUTPUT_DIR}"
 
-echo "[$(date -Iseconds)] === Lyon 100% tractability probe (R3, 20 km, no exclusion) ===" | tee "${LOG}"
+echo "[$(date -Iseconds)] === Lyon 100% tractability probe (R4, 20 km, no exclusion) ===" | tee "${LOG}"
 echo "  scenario:     ${SCENARIO_DIR}"      | tee -a "${LOG}"
 echo "  travel-times: ${TRAVEL_TIMES}"      | tee -a "${LOG}"
 echo "  output-dir:   ${OUTPUT_DIR}"        | tee -a "${LOG}"
@@ -51,7 +54,7 @@ mvn -o exec:java \
                --prefix lyon_drt_area_ \
                --travel-times ${TRAVEL_TIMES} \
                --output-dir ${OUTPUT_DIR} \
-               --profile r3 \
+               --profile r4 \
                --trip-filter-radius-km 20.0 \
                --no-exclusion-zone \
                --no-predecessors \

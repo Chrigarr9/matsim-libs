@@ -7,7 +7,7 @@ Documentation of the MATSim DRT demand extraction pipeline. The Stage-2 ride-mat
 
 Selection at the CLI: `--algorithm=exmas|bamas` (default `bamas`). Per-scenario fixtures (`scenarios/KelheimScenarioFixture`, `scenarios/LyonEqasimScenarioFixture`) and `scenarios/AlgorithmProfile` (R1/R2/R3/R4) configure the choice for runners and tests.
 
-> **Profile naming note (paper vs. code).** The paper presentation order is a strict-subset progression R2 ⊂ R3 ⊂ R4 (R3 = + in-DFS distance gate, R4 = + post-extension pruner = production). The `AlgorithmProfile` enum still uses original-insertion order (code-R3 = paper-R4, code-R4 = paper-R3). A code rename is queued. This document uses paper-naming throughout.
+> **Profile naming.** Paper and code now agree (rename completed 2026-04-28): the strict-subset progression is R2 ⊂ R3 ⊂ R4, where R3 adds the in-DFS distance gate and R4 adds the post-extension pruner (= production). Pre-2026-04-28 run artefacts on disk under `R3/` and `R4/` directory names refer to the pre-swap meaning (old-R3 ≡ new-R4 production; old-R4 ≡ new-R3 ablation).
 
 ## 1. Pipeline Overview
 

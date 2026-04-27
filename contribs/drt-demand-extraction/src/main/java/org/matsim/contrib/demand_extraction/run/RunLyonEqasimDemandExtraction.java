@@ -32,9 +32,11 @@ import org.matsim.core.controler.Controler;
  *
  * <p>Use {@code --profile r1|r2|r3|r4} to apply the Paper 1 {@link AlgorithmProfile}
  * (sets both algorithm and pruning knobs). R1 = ExMAS reference, R2 = BAMAS no
- * pruning, R3 = BAMAS production defaults (distance + post-extension pruning),
- * R4 = BAMAS distance-pruning ablation (distance gate only, no post-extension
- * pruner). Overrides {@code --algorithm} when both are specified.
+ * pruning, R3 = BAMAS distance-gate-only ablation (in-DFS heuristic gate ON,
+ * post-extension OFF), R4 = BAMAS production defaults (in-DFS heuristic gate ON
+ * + post-extension COVERAGE_TOPK with K=20). The profiles form a strict-subset
+ * progression R2 ⊂ R3 ⊂ R4 by enabled gates. Overrides {@code --algorithm} when
+ * both are specified.
  */
 public class RunLyonEqasimDemandExtraction {
 
@@ -51,7 +53,7 @@ public class RunLyonEqasimDemandExtraction {
 		public final double minDrtCostPerKm;
 		public final int pruningCoverageK;
 		public final ExMasConfigGroup.Algorithm algorithm;
-		/** Paper 1 profile (R1/R2/R3). When set, overrides algorithm + all pruning knobs. */
+		/** Paper 1 profile (R1/R2/R3/R4). When set, overrides algorithm + all pruning knobs. */
 		public final AlgorithmProfile profile;
 		/** Override trip-filter radius (km). NaN = keep fixture default. */
 		public final double tripFilterRadiusKm;

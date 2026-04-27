@@ -188,9 +188,9 @@ class ExMasLyonR1R2FastComparisonTest {
 		}
 
 		if (runR3) {
-			// ── 7b. R3: BAMAS with production-default pruning (heuristic gate + top-K coverage).
-			// Uses the same BamasEngine path as R2; only the AlgorithmProfile differs. R3
-			// drops dominated rides during extension so memory is much lower than R2's.
+			// ── 7b. R3: BAMAS heuristic-only distance-gate ablation (in-DFS gate ON,
+			// post-extension pruner OFF). Sits between R2 (no pruning) and R4 (full
+			// production pruning) in the layered C3 progression R2 ⊂ R3 ⊂ R4.
 			AlgorithmProfile.R3.apply(config);
 			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
 			exMasConfig.setAlgorithmProcessCount(-1);
@@ -211,10 +211,10 @@ class ExMasLyonR1R2FastComparisonTest {
 		}
 
 		if (runR4) {
-			// ── 7c. R4: BAMAS distance-pruning ablation (heuristic gate ON, post-extension OFF).
-			// Sits between R2 (no pruning) and R3 (full production pruning) so the dissertation
-			// can attribute the savings of each pruning mechanism separately. Re-applies the
-			// profile after R3 to flip the post-extension flag back off.
+			// ── 7c. R4: BAMAS production-default pruning (heuristic in-DFS gate ON +
+			// post-extension COVERAGE_TOPK with K=20). The profile fed to the Python
+			// MIP optimiser. Re-applies the profile after R3 to flip the post-extension
+			// flag back on.
 			AlgorithmProfile.R4.apply(config);
 			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
 			exMasConfig.setAlgorithmProcessCount(-1);

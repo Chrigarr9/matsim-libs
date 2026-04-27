@@ -44,10 +44,14 @@ public class ExMasAlgorithmE2ETest {
 	}
 
 	static Stream<Arguments> kelheimMatrix() {
+		// R1 = ExMAS reference, R2 = BAMAS no-pruning, R4 = BAMAS production
+		// (heuristic gate + post-extension top-K). R3 (heuristic-only ablation)
+		// is a Lyon-only profile for the C3 layered comparison and intentionally
+		// not exercised in the regression matrix.
 		return Stream.of(
 				Arguments.of(new KelheimScenarioFixture(), AlgorithmProfile.R1),
 				Arguments.of(new KelheimScenarioFixture(), AlgorithmProfile.R2),
-				Arguments.of(new KelheimScenarioFixture(), AlgorithmProfile.R3));
+				Arguments.of(new KelheimScenarioFixture(), AlgorithmProfile.R4));
 	}
 
 	@Nested
@@ -64,10 +68,12 @@ public class ExMasAlgorithmE2ETest {
 		}
 
 		Stream<Arguments> lyonMatrix() {
+			// R3 (heuristic-only ablation) is collected separately by the C3
+			// layered ablation script; the E2E gate runs the production R4.
 			return Stream.of(
 					Arguments.of(LyonEqasimScenarioFixture.fromEnv(), AlgorithmProfile.R1),
 					Arguments.of(LyonEqasimScenarioFixture.fromEnv(), AlgorithmProfile.R2),
-					Arguments.of(LyonEqasimScenarioFixture.fromEnv(), AlgorithmProfile.R3));
+					Arguments.of(LyonEqasimScenarioFixture.fromEnv(), AlgorithmProfile.R4));
 		}
 	}
 }
