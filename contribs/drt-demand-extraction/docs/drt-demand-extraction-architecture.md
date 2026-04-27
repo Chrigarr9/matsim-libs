@@ -1,13 +1,17 @@
 # DRT Demand Extraction Architecture
 
-Comprehensive documentation of the MATSim DRT demand extraction pipeline
-including the ExMAS ride generation algorithm and all optimization mechanisms.
+Documentation of the MATSim DRT demand extraction pipeline. The Stage-2 ride-matching algorithm exists in two implementations after the 2026-04-21 fork:
+
+- **`algorithm/exmas/`** — frozen reference port of the original ExMAS algorithm (Kucharski & Cats 2020), used as the R1 baseline. Verified equivalent to `main@54d611e854d` on Kelheim by `ExMasReferencePortRegressionTest`.
+- **`algorithm/bamas/`** — Budget-Aware Matching of Autonomous Shared-rides (BAMAS), the active algorithm used in profiles R2/R3/R4. **This document describes BAMAS unless otherwise noted.**
+
+Selection at the CLI: `--algorithm=exmas|bamas` (default `bamas`). Per-scenario fixtures (`scenarios/KelheimScenarioFixture`, `scenarios/LyonEqasimScenarioFixture`) and `scenarios/AlgorithmProfile` (R1/R2/R3/R4) configure the choice for runners and tests.
+
+> **Profile naming note (paper vs. code).** The paper presentation order is a strict-subset progression R2 ⊂ R3 ⊂ R4 (R3 = + in-DFS distance gate, R4 = + post-extension pruner = production). The `AlgorithmProfile` enum still uses original-insertion order (code-R3 = paper-R4, code-R4 = paper-R3). A code rename is queued. This document uses paper-naming throughout.
 
 ## 1. Pipeline Overview
 
-The pipeline extracts DRT-eligible trips from a MATSim simulation, computes
-utility budgets against baseline modes, and generates a database of feasible
-shared rides at increasing pooling degrees.
+The pipeline extracts DRT-eligible trips from a MATSim simulation, computes utility budgets against baseline modes, and generates a database of feasible shared rides at increasing pooling degrees.
 
 ```mermaid
 flowchart TD
@@ -20,19 +24,19 @@ flowchart TD
     subgraph "Phase 1-2: Demand Extraction"
         MC[ModeRoutingCache<br/>route all modes per trip]
         CI[ChainIdentifier<br/>subtour vehicle dependencies]
-        BC[BudgetToConstraints<br/>binary search: budget → maxDetour, maxWait, maxWalk]
+        BC["BudgetToConstraintsCalculator<br/>budgetToMaxDetourTime (binary search) + budgetToMaxCost (closed-form)"]
         RF[DrtRequestFactory<br/>build DrtRequest objects]
     end
 
-    subgraph "Phase 3: ExMAS Ride Generation"
-        SG[SingleRideGenerator<br/>degree 1]
+    subgraph "Phase 3: BAMAS Ride Generation"
+        SG[BamasSingleRideGenerator<br/>degree 1]
         PG[PairGenerator<br/>degree 2, FIFO + LIFO]
         SH[ShareabilityGraph<br/>pairwise feasibility]
-        EXT["RideExtender loop<br/>degree 3 → maxDegree"]
-        DG[DegreeGraph<br/>extension index + consensus]
-        OC[OrderingConflicts<br/>cross-degree learning]
-        SF[SubSetOrderingFeasibility<br/>sub-set pruning]
-        PR[PostExtensionPruner<br/>inter-degree pruning]
+        EXT["BamasRideExtender loop<br/>degree 3 → maxDegree<br/>(saturation termination)"]
+        DG[DegreeGraph<br/>extension index by (k−1)-subset]
+        OE[OrderingEnumerator<br/>DFS + B&B + 6 admissibility checks]
+        BV[BudgetValidator<br/>holistic per-passenger validation]
+        PR[PostExtensionPruner<br/>optional, between degrees]
     end
 
     subgraph "Phase 4-7: Output"
@@ -50,19 +54,21 @@ flowchart TD
     SG -->|degree-1 rides| PG
     PG -->|degree-2 rides| SH
     SH --> EXT
+    EXT --> OE
+    OE --> BV
+    BV --> EXT
     EXT <-->|per degree| DG
-    EXT <-->|record/lookup| OC
-    EXT <-->|record/lookup| SF
-    EXT -->|after each degree| PR
-    PR -->|pruned rides| EXT
+    EXT -->|after each degree, optional| PR
+    PR -->|filtered rides| EXT
     EXT -->|all rides| PP
     PP --> HP1 --> HP2 --> OUT
 ```
 
+The R1 reference path (`algorithm/exmas/`) replaces `BamasRideExtender` with `ReferenceRideExtender` (which retains every admissible ordering per set via `cartesianProduct` over FIFO/LIFO pair-ride combinations — the 2026-04-22 paper-Algorithm-2 fix), has no `DegreeGraph`, and has no `PostExtensionPruner` block. R1's memory wall on Lyon 10% at degree 5 is a direct consequence of this difference.
+
 ## 2. Budget and Constraint Derivation
 
-Each trip's utility budget determines what level of DRT service the agent
-would accept. Constraints are derived from the budget via binary search.
+Each trip's utility budget determines what level of DRT service the agent would accept. The framework supports four budget→constraint operators, but **only two are live in the main pipeline**; wait and walk admissibility are enforced *holistically* by `BudgetValidator` rather than via precomputed per-dimension caps.
 
 ```mermaid
 flowchart LR
@@ -72,51 +78,65 @@ flowchart LR
         BUD["budget = ideal − best<br/>(can be negative)"]
     end
 
-    subgraph "Binary Search"
-        MDF["maxDetourFactor<br/>adapter.scoreTrip(detour) ≥ bestModeScore"]
-        MWT["maxWaitTime<br/>adapter.scoreTrip(wait) ≥ bestModeScore"]
-        MWD["maxWalkDistance<br/>adapter.scoreTrip(walk) ≥ bestModeScore"]
-        MTT["maxTravelTime<br/>directTT × maxDetourFactor"]
+    subgraph "Live in main pipeline"
+        MDF["budgetToMaxDetourTime (binary search)<br/>called from DrtRequestFactory"]
+        MTT["maxTravelTime = directTT × maxDetourFactor"]
+        MC["budgetToMaxCost (closed-form)<br/>baseFare + budget / margUtilMoney<br/>called from RidePostProcessor"]
+    end
+
+    subgraph "Dead-code methods (API surface only)"
+        MWT["budgetToMaxWaitingTime<br/>(no live caller)"]
+        MWD["budgetToMaxWalkDistance<br/>(no live caller)"]
+    end
+
+    subgraph "Holistic validation at every ride site"
+        HOL["BudgetValidator.validateAndPopulateBudgets<br/>scores actual ride trip vs score(best_baseline)<br/>enforces wait + walk admissibility"]
     end
 
     IDEAL --> BUD
     BEST --> BUD
     BUD --> MDF
-    BUD --> MWT
-    BUD --> MWD
+    BUD --> MC
     MDF --> MTT
+    BUD --> HOL
 ```
 
-## 3. Degree-by-Degree Extension Loop
+**Binary-search tolerances**: 5.0 (seconds for time, meters for distance) since 2026-03-26 (was 1.0). **Adapter SPI** (`scoring/DemandExtractionScoringAdapter`): three implementations — eqasim, DMC, stock MATSim. Income enters indirectly via subpopulation-specific scoring parameters; per-trip via eqasim's `marginalUtilityOfMoney(d) = |betaCost| × (d/d_ref)^lambda`. Boolean `includeOpportunityCost` was replaced by an `OpportunityCostModel` enum (NONE / LINEAR / LOG); the older `supportsIterativeConstraints()` SPI method was replaced by `supportsDistanceSpecificMoneyUtility()`.
 
-The core loop generates rides at increasing pooling degrees. Each degree
-builds on the previous degree's rides and graph structures.
+## 3. Degree-by-Degree Extension Loop (BAMAS)
+
+The core loop generates rides at increasing pooling degrees via `BamasEngine.run`. Each degree builds on the previous degree's rides and the DegreeGraph extension index.
 
 ```mermaid
 flowchart TD
     D2[Degree 2 rides<br/>FIFO + LIFO pairs]
     
-    subgraph "Degree k → k+1 Extension"
-        FIND[Find candidate sets<br/>DegreeGraph.findExtensions<br/>or ShareabilityGraph.findCommonNeighbors]
-        DEDUP[Atomic ConcurrentHashMap dedup<br/>claim set hash]
+    subgraph "Degree k → k+1 Extension (BamasRideExtender)"
+        FIND[Find candidate sets<br/>DegreeGraph.findExtensions at k≥4<br/>ShareabilityGraph.findCommonNeighbors at k=3]
+        DEDUP["Atomic ConcurrentHashMap dedup<br/>claimedHashes.add(setHash) at line 206"]
         PROC[processSet per candidate<br/>parallel ForkJoinPool]
-        EVAL[Evaluate orderings<br/>OrderingEnumerator.enumerateAndEvaluate]
-        BUILD[buildRideFromOrdering<br/>route + validate]
-        BUDGET[BudgetValidator<br/>remaining budget ≥ 0?]
-        BEST1[Keep best ride per set<br/>lowest distance]
+        EVAL[OrderingEnumerator.enumerateAndEvaluateSeeded<br/>DFS + B&B + 6 admissibility checks]
+        BEST1["Keep min-distance valid ordering<br/>resultBySetHash at line 145<br/>tighten on VALID orderings only"]
     end
 
     subgraph "Between Degrees"
-        COMMIT_OC[OrderingConflicts.commit<br/>make conflicts visible]
-        COMMIT_SF[SubSetOrderingFeasibility.commit<br/>make sub-set data visible]
-        BUILD_DG[DegreeGraph.buildFromRides<br/>extension index + consensus bits]
-        PRUNE[PostExtensionPruner<br/>keep top fraction by distance savings]
+        PRUNE[PostExtensionPruner — optional<br/>COVERAGE_TOPK or RATIO_THRESHOLD<br/>degree-2 rides never pruned]
+        BUILD_DG[DegreeGraph.buildFromRides<br/>indexes (k-1)-subsets → extension elements]
     end
 
-    D2 --> FIND --> DEDUP --> PROC --> EVAL --> BUILD --> BUDGET --> BEST1
-    BEST1 --> COMMIT_OC --> COMMIT_SF --> BUILD_DG --> PRUNE
-    PRUNE -->|survivors as base sets| FIND
+    subgraph "Termination"
+        TERM[zero new rides at degree d<br/>OR maxPoolingDegree cap]
+    end
+
+    D2 --> FIND --> DEDUP --> PROC --> EVAL --> BEST1
+    BEST1 --> PRUNE --> BUILD_DG
+    BUILD_DG -->|next iteration| FIND
+    BEST1 -.->|no new rides| TERM
 ```
+
+**Saturation termination**: when no new rides are produced at degree d, the loop exits. On Lyon 10% R2 reaches saturation at d = 14 (32M rides retained). **Final batch validation**: `BudgetValidator.populateBudgetsBatch` runs once at `BamasEngine.java:187`, gated by `exmas.deferExtensionBudgetValidation` (default false). The 2026-04-26 in-place mutation pattern (`Ride.setRemainingBudgets` setter + compact-in-place batch) reduced peak ride retention from 2× to 1× input — load-bearing for 32M-ride scale.
+
+**R1 reference path** has no extension loop and no DegreeGraph — `ReferenceRideExtender.cartesianProduct` enumerates every combination of FIFO/LIFO pair-rides per set and retains every admissible ordering. This is the design that lets R1 be a faithful Algorithm-2 reference port; it is also why R1 OOMs at d = 5 on Lyon 10% even at 100 GB heap.
 
 ## 4. Pairwise Constraint Extraction
 
@@ -141,100 +161,98 @@ flowchart TD
         NONE["No ride exists<br/>→ set INFEASIBLE"]
     end
 
-    subgraph "Tightening (degree 4+)"
-        CONSENSUS["DegreeGraph.getOriginConsensus<br/>check all (k-1)-subsets"]
-        TIGHT["If consensus: remove<br/>one direction from both-ways pair"]
-    end
-
     PAIR_RIDES --> FWD_FIFO & FWD_LIFO & REV_FIFO & REV_LIFO
     FWD_FIFO & FWD_LIFO & REV_FIFO & REV_LIFO --> BOTH & FWD_ONLY & REV_ONLY & NONE
-    BOTH --> CONSENSUS --> TIGHT
 ```
+
+**Routing-cache fix (2026-04-25).** `PairGenerator.generatePairs` computes the SSSP envelope `globalMaxTravelTime = max(r.maxTravelTime)` once per call (lines 90–95), with an inline correctness argument at lines 195–199 (the cache key `(origin, dest, timeBin)` is anonymous, so a per-request bound contaminates entries shared across requests with the same origin link). The beeline pre-filter remains active (lines 228–246) with `BeelineDetourFilterTest` codifying zero false rejections.
+
+**Note: no consensus tightening.** Older versions of this document described a `DegreeGraph.getOriginConsensus` call that tightens BOTH-ways pairs to one direction at degree ≥ 4 (`enableConsensusTightening` flag). **That mechanism does not exist in the current code.** The DegreeGraph is a pure extension-index structure; it does not modify pairwise constraints.
 
 ## 5. Set Evaluation Decision Tree
 
-This is the core per-set evaluation showing every check, constraint, and
-pruning mechanism in the order they are applied.
+This is the core per-set evaluation in `BamasRideExtender.processSet` showing every check, constraint, and pruning mechanism in the order they are applied. The OrderingEnumerator implements **six admissibility-preserving mechanisms** plus a **parent-seeded sort bias** that tightens `bestValidDist[0]` early.
 
 ```mermaid
 flowchart TD
-    START([processSet called<br/>candidate set S, degree D])
+    START([BamasRideExtender.processSet<br/>candidate set S, degree D])
     
     SAME_PAX{Same person<br/>in two requests?}
     START --> SAME_PAX
     SAME_PAX -->|yes| REJECT_PAX([Reject: same-person])
     
-    EXTRACT[Extract pairwise constraints<br/>from ShareabilityGraph]
+    EXTRACT[Extract PairInfo bits<br/>from ShareabilityGraph]
     SAME_PAX -->|no| EXTRACT
     
     ANY_MISSING{Any pair has<br/>no shared ride?}
     EXTRACT --> ANY_MISSING
     ANY_MISSING -->|yes| REJECT_PAIR([Reject: missing pair])
     
-    TIGHTEN{Degree ≥ 4 and<br/>DegreeGraph available?}
-    ANY_MISSING -->|no| TIGHTEN
-    TIGHTEN -->|yes| DO_TIGHTEN[Tighten constraints<br/>via consensus bitmask]
-    TIGHTEN -->|no| ENUM
-    DO_TIGHTEN --> ENUM
-    
-    ENUM[Build origin adjacency DAG<br/>from constraints]
+    ENUM[Build origin DAG<br/>from PairInfo + parent seed]
+    ANY_MISSING -->|no| ENUM
     ENUM --> ORIGIN_ENUM
 
     subgraph ORIGIN_ENUM ["Origin Enumeration (recursive, depth 0→D)"]
         direction TB
         DEPTH_CHECK{depth == D?<br/>all origins placed}
         
-        CHECK_A{Check A: any passenger<br/>in-vehicle time > maxTravelTime<br/>from origins alone?}
+        CHECK_A_O{"#1 Check A — origin:<br/>any placed passenger's<br/>origin-only travel time<br/>> maxTravelTime?"}
         
-        TOPO_FILTER[Topological filter:<br/>find valid candidates<br/>from adjacency DAG]
+        MININ_GUARD{"depth > 0?<br/>(asymmetric guard:<br/>first-placed origin<br/>has no incoming segment)"}
         
-        CONFLICT_CHECK{OrderingConflicts<br/>hasConflict?}
+        MININ_LB{"#4 minIn LB cut:<br/>partialDist + totalMinInRemaining<br/>> bestValidDist[0]?"}
         
-        SUBSET_CHECK["SubSetOrderingFeasibility<br/>isInfeasible? (measurement)"]
+        TOPO_FILTER["Topological filter:<br/>candidates whose DAG<br/>predecessors are placed"]
         
-        ROUTE_ORIGIN[Route segment:<br/>prev origin → candidate origin]
+        SORT_GREEDY["Parent-seeded sort:<br/>primary = parent-consistent rank<br/>secondary = cheapest segment dist"]
         
-        DIST_BB{Accumulated distance<br/>> bestValidDist?}
+        ROUTE_ORIGIN[Route segment via cache:<br/>prev origin → candidate origin]
         
-        SORT_GREEDY[Sort candidates by<br/>segment distance ascending]
+        DIST_BB{"#3 Distance B&B per-segment:<br/>partialDist + segment<br/>> bestValidDist[0]?"}
+        
+        DELAY_O{"#5 Delay-window check (origin):<br/>per-passenger delay<br/>over-approx > budget?"}
         
         RECURSE[Recurse: depth + 1<br/>with candidate placed]
     end
     
     ORIGIN_ENUM --> DEPTH_CHECK
-    DEPTH_CHECK -->|no| CHECK_A
-    CHECK_A -->|violated| RECORD_A([Record conflict + sub-set<br/>infeasibility. Prune subtree.])
-    CHECK_A -->|ok| TOPO_FILTER
-    TOPO_FILTER --> CONFLICT_CHECK
-    CONFLICT_CHECK -->|conflict found| SKIP_CAND([Skip candidate<br/>prunedByConflict++])
-    CONFLICT_CHECK -->|no conflict| SUBSET_CHECK
-    SUBSET_CHECK -->|would prune| COUNT_SS([Count only:<br/>wouldPruneBySubsetLookup++])
-    COUNT_SS --> ROUTE_ORIGIN
-    SUBSET_CHECK -->|no match| ROUTE_ORIGIN
-    ROUTE_ORIGIN --> SORT_GREEDY --> DIST_BB
-    DIST_BB -->|exceeded| BREAK_BB([Break: distance B&B<br/>prunes remaining sorted candidates])
-    DIST_BB -->|within bound| RECURSE
+    DEPTH_CHECK -->|no| CHECK_A_O
+    CHECK_A_O -->|violated| PRUNE_A([prunedByTravelTime++<br/>prune subtree])
+    CHECK_A_O -->|ok| MININ_GUARD
+    MININ_GUARD -->|depth=0| TOPO_FILTER
+    MININ_GUARD -->|depth>0| MININ_LB
+    MININ_LB -->|exceeded| PRUNE_LB([prune: LB cut])
+    MININ_LB -->|within bound| TOPO_FILTER
+    TOPO_FILTER --> SORT_GREEDY --> ROUTE_ORIGIN --> DIST_BB
+    DIST_BB -->|exceeded| BREAK_BB([Break: distance B&B<br/>prunes all remaining sorted candidates])
+    DIST_BB -->|within bound| DELAY_O
+    DELAY_O -->|over| PRUNE_DEL_O([prunedByDelayWindowOrigin++])
+    DELAY_O -->|ok| RECURSE
     RECURSE --> DEPTH_CHECK
     
     DEPTH_CHECK -->|yes: all origins placed| DEST_ENUM
 
     subgraph DEST_ENUM ["Destination Enumeration (recursive, depth 0→D)"]
         direction TB
+        DEST_STRUCT{"#6 Structural infeasibility?<br/>no pair-ride in chosen direction<br/>completes the topo sort"}
+        
         DEST_DEPTH{depth == D?<br/>all dests placed}
         
-        DEST_STRUCT{Structural<br/>infeasibility?<br/>no pair ride in<br/>chosen direction}
+        DEST_CHECK_A{"#2 Check A — dest:<br/>any undropped passenger's<br/>origin-only TT > maxTravelTime?"}
         
-        DEST_CHECK_A{Check A: any<br/>undropped passenger<br/>> maxTravelTime?}
+        DEST_MININ{"#4 minIn LB (all-depths on dest):<br/>partialDist + totalMinInRemaining<br/>> bestValidDist[0]?"}
         
         DEST_TOPO[Topological filter:<br/>destination DAG<br/>from FIFO/LIFO + origin order]
         
-        DEST_ROUTE[Route segment:<br/>prev stop → candidate dest]
+        DEST_ROUTE[Route segment via cache:<br/>prev stop → candidate dest]
         
-        DEST_DIST_BB{Accumulated distance<br/>> bestValidDist?}
+        DEST_DIST_BB{"#3 Distance B&B per-segment"}
         
-        DROPOFF_CHECK{Dropoff check:<br/>passenger full in-vehicle<br/>> maxTravelTime?}
+        DROPOFF_CHECK{"Dropoff check:<br/>passenger full in-vehicle<br/>at their dropoff > maxTT?"}
         
-        DEST_CHECK_B{Check B: any remaining<br/>passenger would exceed<br/>maxTravelTime?}
+        DEST_CHECK_B{"Check B:<br/>any remaining on-vehicle pax<br/>would exceed maxTT?"}
+        
+        DELAY_D{"#5 Delay-window check (dropoff):<br/>per-passenger delay (exact)<br/>> budget?"}
         
         DEST_RECURSE[Recurse: dest depth + 1]
     end
@@ -242,249 +260,164 @@ flowchart TD
     DEST_ENUM --> DEST_STRUCT
     DEST_STRUCT -->|infeasible| REJECT_STRUCT([Return: structural<br/>infeasibility])
     DEST_STRUCT -->|ok| DEST_DEPTH_START
-    DEST_DEPTH_START([Start dest<br/>enumeration]) --> DEST_DEPTH
+    DEST_DEPTH_START([Start dest enumeration]) --> DEST_DEPTH
     DEST_DEPTH -->|no| DEST_CHECK_A
-    DEST_CHECK_A -->|violated| RECORD_DEST_A([Record conflict<br/>prunedByTravelTime++<br/>prune subtree])
-    DEST_CHECK_A -->|ok| DEST_TOPO
+    DEST_CHECK_A -->|violated| PRUNE_DA([prunedByTravelTime++<br/>prune subtree])
+    DEST_CHECK_A -->|ok| DEST_MININ
+    DEST_MININ -->|exceeded| PRUNE_DMI([prune: LB cut])
+    DEST_MININ -->|within bound| DEST_TOPO
     DEST_TOPO --> DEST_ROUTE --> DEST_DIST_BB
-    DEST_DIST_BB -->|exceeded| BREAK_DEST_BB([Break: distance B&B<br/>destResult.distBB = true])
+    DEST_DIST_BB -->|exceeded| BREAK_DEST_BB([Break: distance B&B])
     DEST_DIST_BB -->|within bound| DROPOFF_CHECK
-    DROPOFF_CHECK -->|exceeded| SKIP_DROP([Skip candidate<br/>prunedByDropoffCheck++])
+    DROPOFF_CHECK -->|exceeded| SKIP_DROP([prunedByTravelTime++<br/>skip candidate])
     DROPOFF_CHECK -->|ok| DEST_CHECK_B
-    DEST_CHECK_B -->|violated| SKIP_B([Skip candidate<br/>prunedByTravelTime++])
-    DEST_CHECK_B -->|ok| DEST_RECURSE
+    DEST_CHECK_B -->|violated| SKIP_B([prunedByTravelTime++])
+    DEST_CHECK_B -->|ok| DELAY_D
+    DELAY_D -->|over| PRUNE_DEL_D([prunedByDelayWindowDropoff++])
+    DELAY_D -->|ok| DEST_RECURSE
     DEST_RECURSE --> DEST_DEPTH
     
     DEST_DEPTH -->|yes: complete ordering| EVALUATOR
 
-    subgraph EVALUATOR ["Evaluator Callback"]
+    subgraph EVALUATOR ["evaluateOrdering callback (~line 453)"]
         direction TB
         BUILD_RIDE[buildRideFromOrdering<br/>pre-routed segments → Ride]
         
         DELAY_OPT{Delay optimization<br/>feasible?}
         
-        BUDGET_VAL[BudgetValidator<br/>score actual DRT trip<br/>vs bestModeScore]
+        BUDGET_VAL["BudgetValidator.validateAndPopulateBudgets<br/>score actual DRT trip vs score(best_baseline)<br/>uses ScoringContext cache"]
         
         BUDGET_OK{All passengers<br/>remainingBudget ≥ 0?}
         
-        TIGHTEN_BOUND[bestValidDist = ride.distance<br/>tighten B&B bound]
-        
-        ACCUM_CONSENSUS[Accumulate consensus bits<br/>for DegreeGraph]
+        TIGHTEN_BOUND["bestValidDist[0] ← ride.distance<br/>(tighten on VALID orderings only)"]
     end
     
     EVALUATOR --> BUILD_RIDE --> DELAY_OPT
     DELAY_OPT -->|infeasible| REJECT_DELAY([Reject: delay bounds])
     DELAY_OPT -->|feasible| BUDGET_VAL --> BUDGET_OK
     BUDGET_OK -->|no| REJECT_BUDGET([Reject: budget violation])
-    BUDGET_OK -->|yes| TIGHTEN_BOUND --> ACCUM_CONSENSUS
-    ACCUM_CONSENSUS --> VALID_RIDE([Valid ride found<br/>update bestRide if shorter])
-
-    subgraph TRIGGER_2 ["Trigger 2: After All Dest Orderings"]
-        direction TB
-        T2_CHECK{Any ordering<br/>reached evaluator?}
-        T2_DIST{Any ordering<br/>pruned by dist B&B?}
-        T2_RECORD[Record OrderingConflicts<br/>+ SubSetOrderingFeasibility<br/>allDestFailConflicts++]
-    end
-    
-    DEST_ENUM -->|all dest orderings done| T2_CHECK
-    T2_CHECK -->|yes| T2_DONE([At least one ordering evaluated])
-    T2_CHECK -->|no| T2_DIST
-    T2_DIST -->|yes| T2_DONE2([Dist B&B limited exploration<br/>cannot conclude infeasibility])
-    T2_DIST -->|no| T2_RECORD
-    T2_RECORD --> T2_DONE3([Origin ordering proven<br/>infeasible by travel time])
+    BUDGET_OK -->|yes| TIGHTEN_BOUND
+    TIGHTEN_BOUND --> VALID_RIDE([Valid ride: update bestRide<br/>if shorter than current best])
 ```
 
-## 6. Sub-Set Ordering Feasibility (Enhancement)
+**Bound-tightening discipline.** `bestValidDist[0]` is updated **only** when a complete admissible ordering finishes — never on infeasible partials. This is enforced together with the parent-seeded sort: the parent's ordering (or its parent-consistent extension when a new request is inserted) is explored first, finding a valid ride and a useful bound early. Per `bnb-tightening-v1` numbers, ≥ 83% of valid rides at degrees 4–11 are reached via the parent-seeded ordering. Catches: `UnsoundBreakRegressionTest`, `MinInLowerBoundTest`, `ParentConsistentSortTest`.
 
-The sub-set ordering feasibility mechanism replaces the sparse cross-set
-conflict approach with direct lookups using pre-computed degree-k data.
+**No cross-degree learning structures.** Older versions of this document described `OrderingConflicts` (cross-degree conflict learning) and `SubSetOrderingFeasibility` (Lehmer-encoded sub-set ordering lookup) sitting between origin Check A and the routing step. **These mechanisms have been removed from the source tree.** The `minIn` LB cut + parent-seeded DFS sort provides equivalent pruning power without the bookkeeping cost; the routing cache makes per-segment lookups effectively free, eliminating the motivation for amortizing routing across orderings via combinatorial sub-set feasibility.
 
-### 6.1 Core Insight
-
-Every degree-7 set has C(7,3) = 35 triple sub-sets. We already computed
-valid rides for ALL of them at degree 3. For each triple, we know exactly
-which of the 3! = 6 origin orderings are infeasible.
-
-```mermaid
-flowchart LR
-    subgraph "Degree 3 Enumeration"
-        D3_SET["Triple {A, B, C}<br/>6 possible origin orderings"]
-        D3_ENUM["Try all orderings<br/>A→B→C, A→C→B, B→A→C, ..."]
-        D3_RESULT["Result per ordering:<br/>valid ride / TT violation / dist B&B"]
-        D3_RECORD["Record infeasible orderings<br/>as bits in Long2IntOpenHashMap"]
-    end
-
-    subgraph "Degree 7 Lookup"
-        D7_SET["Set {A,B,C,D,E,F,G}<br/>~5768 orderings"]
-        D7_TRIPLE["For candidate G at depth 6:<br/>check C(6,2)=15 triples"]
-        D7_LOOKUP["Hash sorted triple → get bitmask<br/>Lehmer index → check bit"]
-        D7_PRUNE["If bit set → sub-ordering<br/>proven infeasible → skip"]
-    end
-
-    D3_SET --> D3_ENUM --> D3_RESULT --> D3_RECORD
-    D3_RECORD -->|committed between degrees| D7_TRIPLE
-    D7_SET --> D7_TRIPLE --> D7_LOOKUP --> D7_PRUNE
-```
-
-### 6.2 Recording Triggers
-
-```mermaid
-flowchart TD
-    subgraph "Trigger 1: Check A (Origin Phase)"
-        CA_FIRE["Passenger p exceeds maxTravelTime<br/>from origin-only traversal at depth d"]
-        CA_RANGE["Infeasible sub-ordering:<br/>perm[victimPos .. d-1]"]
-        CA_RECORD["For each C(len, k) sub-sets:<br/>compute Lehmer index, record bit"]
-    end
-
-    subgraph "Trigger 2: All-Dest-Fail"
-        T2_FIRE["All destination orderings failed<br/>due to travel time violations<br/>(not distance B&B)"]
-        T2_FULL["Full origin ordering perm[0..n-1]<br/>is infeasible"]
-        T2_RECORD["For each C(n, k) sub-sets:<br/>compute Lehmer index, record bit"]
-    end
-
-    CA_FIRE --> CA_RANGE --> CA_RECORD
-    T2_FIRE --> T2_FULL --> T2_RECORD
-
-    CA_RECORD --> PENDING[ConcurrentLinkedQueue<br/>pending buffer]
-    T2_RECORD --> PENDING
-    PENDING -->|commit between degrees| MAP["Long2IntOpenHashMap<br/>triple hash → 6-bit infeasibility mask"]
-```
-
-### 6.3 Data Structure
-
-```mermaid
-flowchart TD
-    subgraph "SubSetOrderingFeasibility"
-        TRIPLES["Long2IntOpenHashMap<br/>triple hash → 6 bits (3!)<br/>~7M entries, ~84 MB"]
-        QUADS["Long2IntOpenHashMap<br/>quad hash → 24 bits (4!)<br/>~1.9M entries, ~23 MB"]
-        QUINTS["2× Long2LongOpenHashMap<br/>quint hash → 120 bits (5!)<br/>~1.7M entries, ~41 MB"]
-    end
-
-    subgraph "Lehmer Encoding"
-        SORT["Sort sub-set elements<br/>{30, 10, 20} → {10, 20, 30}"]
-        RANK["Compute ranks in positional order<br/>(30, 10, 20) → ranks (2, 0, 1)"]
-        LEHMER["Lehmer code: O(k^2)<br/>(2,0,1) → 2×2! + 0×1! = 4"]
-        BIT["Set bit 4 in bitmask"]
-    end
-
-    SORT --> RANK --> LEHMER --> BIT
-    BIT --> TRIPLES
-```
-
-### 6.4 Lookup Cost per Candidate
-
-| Sub-set size | Lookups at depth d | Cost per lookup | Example: depth 6 |
-|:---:|:---:|:---:|:---:|
-| Triples (k=3) | C(d, 2) | ~30ns: hash + map get + bit test | 15 lookups |
-| Quads (k=4) | C(d, 3) | ~40ns | 20 lookups |
-| Quints (k=5) | C(d, 4) | ~50ns | 15 lookups |
-
-Compare: `OrderingConflicts.hasConflict` is O(2^d) subsequence checks at depth d.
-
-## 7. Cross-Degree Data Flow
+## 6. Cross-Degree Data Flow (BAMAS)
 
 ```mermaid
 sequenceDiagram
-    participant E as ExMasEngine
-    participant RE as RideExtender
+    participant E as BamasEngine
+    participant RE as BamasRideExtender
     participant OE as OrderingEnumerator
-    participant OC as OrderingConflicts
-    participant SF as SubSetOrderingFeasibility
+    participant BV as BudgetValidator
     participant DG as DegreeGraph
+    participant PR as PostExtensionPruner
 
-    Note over E: Degree 3
+    Note over E: Degree 3 (DegreeGraph not yet built)
     E->>RE: extendRides(degree2Rides)
-    RE->>OE: enumerateAndEvaluate(set, conflicts, subsetFeasibility)
-    OE->>OC: recordPending (Check A, Trigger 2)
-    OE->>SF: recordInfeasibleOrdering (Check A, Trigger 2)
-    OE-->>RE: best ride per set
+    RE->>RE: ShareabilityGraph.findCommonNeighbors → triple candidates
+    RE->>OE: enumerateAndEvaluateSeeded(set, parentSeed)
+    OE->>OE: DFS + B&B with 6 admissibility checks
+    OE->>BV: validateAndPopulateBudgets(candidate Ride)
+    BV-->>OE: pass/fail (uses ScoringContext cache)
+    OE-->>RE: min-distance valid ride per set (or none)
     RE-->>E: degree3Rides
-    E->>OC: commit()
-    E->>SF: commit()
-    E->>DG: buildFromRides(degree3Rides)
+    E->>PR: prune(degree3Rides) — degree-2 rides skipped
+    PR-->>E: filtered rides
+    E->>DG: buildFromRides(degree3Rides) — index pairs → extensions
 
     Note over E: Degree 4
     E->>RE: extendRides(degree3Rides)
     RE->>DG: findExtensions(baseSet)
-    DG-->>RE: candidate sets
-    RE->>DG: getOriginConsensus(pair)
-    DG-->>RE: tightened constraints
-    RE->>OE: enumerateAndEvaluate(set, tightened, conflicts, SF)
-    OE->>OC: hasConflict? (lookup committed degree-3 data)
-    OE->>SF: isInfeasible? (lookup committed degree-3 triples)
-    OE->>OC: recordPending (new conflicts)
-    OE->>SF: recordInfeasibleOrdering (new triples)
-    OE-->>RE: best ride per set
+    DG-->>RE: candidate sets (k-1 subsets agree)
+    RE->>OE: enumerateAndEvaluateSeeded(set, parentSeed)
+    OE->>OE: minIn LB cut fires aggressively from parent seed
+    OE->>BV: validateAndPopulateBudgets
+    BV-->>OE: pass/fail
+    OE-->>RE: min-distance valid ride per set
     RE-->>E: degree4Rides
-    E->>OC: commit()
-    E->>SF: commit()
+    E->>PR: prune(degree4Rides)
+    PR-->>E: filtered rides
     E->>DG: buildFromRides(degree4Rides)
 
-    Note over E: Degree 5, 6, 7 ... (same pattern)
+    Note over E: Degree 5..N — same pattern, until 0 new rides at degree d (saturation)<br/>Final: BudgetValidator.populateBudgetsBatch (in-place) at BamasEngine.java:187
 ```
 
-## 8. Pruning Mechanisms Summary
+**Per-degree data structures**:
+- `EnumerationStats` — orderings evaluated, parentSeedRidesFound, prunedByTravelTime, prunedByDelayWindow*, prunedByDistanceBB
+- `MemoryProfiler` — end-of-degree heap snapshots; before/after `populateBudgetsBatch`; engine completion. Source of paper §5 memory column.
 
-All pruning mechanisms ordered by when they apply during set evaluation:
+**No cross-degree conflict learning.** Older versions of this document showed `OrderingConflicts` and `SubSetOrderingFeasibility` participants in the sequence diagram with `commit()` calls between degrees and `hasConflict?` / `isInfeasible?` lookups during enumeration. **Those participants have been removed.** The current cross-degree information flow is just (a) the `DegreeGraph` extension index and (b) the parent-seeded DFS sort that propagates the parent's ordering to children. There is no bitmap-based learning between degrees.
+
+## 7. Pruning Mechanisms Summary
+
+All pruning mechanisms ordered by when they apply during set evaluation. The six admissibility-preserving mechanisms (P5/P10 = Check A on both phases; P6 = minIn LB cut; P8/P11 = distance B&B; P9 = structural infeasibility; P12 = delay-window) are the methodological core. P4 is the DAG topological filter (information reuse, also admissibility-preserving). P3 is part of the DegreeGraph extension index (cross-degree information reuse). P15 (in-DFS distance gate) and P19 (post-extension pruner) are the two **optional planner-tunable** filters that are NOT admissibility-preserving.
 
 ```mermaid
 flowchart TD
     subgraph "Pre-Enumeration"
         P1["Same-person filter<br/>O(D^2) per set"]
         P2["Missing-pair filter<br/>O(D^2) constraint extraction"]
-        P3["Consensus tightening<br/>DegreeGraph reduces DAG"]
+        P3["DegreeGraph extension index<br/>(k-1)-subset agreement filter"]
     end
 
     subgraph "Origin Phase"
-        P4["Topological filter<br/>DAG adjacency check"]
-        P5["Check A: origin-only TT<br/>prunes entire subtree"]
-        P6["OrderingConflicts lookup<br/>O(2^d) subsequence match"]
-        P7["SubSetOrderingFeasibility<br/>O(C(d,2)) triple lookup"]
-        P8["Distance B&B<br/>sorted candidates, break on exceed"]
+        P4["Topological filter<br/>DAG adjacency"]
+        P5["#1 Check A — origin<br/>per-passenger TT vs maxTravelTime"]
+        P6["#4 minIn LB cut<br/>partialDist + totalMinInRemaining"]
+        P7["Parent-seeded sort<br/>tightens bound early — not a prune"]
+        P8["#3 Distance B&B per-segment<br/>sorted candidates, break on exceed"]
     end
 
     subgraph "Destination Phase"
-        P9["Structural infeasibility<br/>no pair ride in chosen direction"]
-        P10["Check A: undropped pax TT<br/>prunes subtree"]
-        P11["Distance B&B<br/>sorted candidates, break on exceed"]
-        P12["Dropoff check: pax full TT<br/>skip candidate"]
-        P13["Check B: remaining pax TT<br/>skip candidate"]
+        P9["#6 Structural infeasibility<br/>no pair ride in chosen direction"]
+        P10["#2 Check A — dest<br/>any undropped pax TT > maxTT"]
+        P11["#3 Distance B&B per-segment"]
+        P12["#5 Delay-window<br/>over-approx origin + exact dropoff"]
+        P13["Dropoff check<br/>passenger full TT at their dropoff"]
+        P14["Check B<br/>remaining on-vehicle pax"]
     end
 
     subgraph "Evaluation Phase"
-        P14["Delay optimization<br/>feasibility check"]
-        P15["Budget validation<br/>remainingBudget ≥ 0"]
-        P16["Bound tightening<br/>bestValidDist ← ride.distance"]
+        P15["In-DFS distance-savings gate<br/>OPTIONAL (pruningDistanceSavingsLogScale)"]
+        P16["Delay optimization feasibility"]
+        P17["BudgetValidator<br/>holistic per-passenger validation"]
+        P18["Bound tightening on VALID only<br/>bestValidDist[0] ← ride.distance"]
     end
 
     subgraph "Post-Extension"
-        P17["Trigger 2 recording<br/>all-dest-fail → learn conflicts"]
-        P18["Inter-degree pruning<br/>keep top fraction"]
+        P19["PostExtensionPruner — OPTIONAL<br/>COVERAGE_TOPK K=20 (production)<br/>degree ≥ 3 only"]
     end
 
     P1 --> P2 --> P3
     P3 --> P4 --> P5 --> P6 --> P7 --> P8
-    P8 --> P9 --> P10 --> P11 --> P12 --> P13
-    P13 --> P14 --> P15 --> P16
-    P16 --> P17 --> P18
+    P8 --> P9 --> P10 --> P11 --> P12 --> P13 --> P14
+    P14 --> P15 --> P16 --> P17 --> P18
+    P18 --> P19
 ```
 
-### Pruning effectiveness (10% Bavaria, 21k requests)
+### Pruning effectiveness (historical 10% Bavaria, 21k requests)
+
+> Lyon 10% per-degree counter data lives in the comparison-battery `EnumerationStats` artifacts (commit `0e811ed`). The Bavaria numbers below predate the algorithm/{exmas,bamas} fork and are kept for relative-magnitude reference only.
 
 | Mechanism | Degree 5 | Degree 6 | Degree 7 |
 |:---|:---:|:---:|:---:|
-| Consensus tightening | moderate | strong | very strong |
-| Check A (origin phase) | 1.7x speedup | 1.7x | 1.7x |
-| Distance B&B | dominant deg3-4 | moderate | minor |
+| DegreeGraph extension index | 82% candidate reduction at d=4, 93.5% at d=5 | strong | strong |
+| Check A (origin + dest) | 1.7× speedup | 1.7× | 1.7× |
+| Distance B&B per-segment | dominant deg 3–4 | moderate | minor |
+| minIn LB cut | growing | dominant | dominant (billions of fires at d 8–9) |
+| Parent-seeded sort | ≥ 83% of valid rides reached via parent seed at d 4–11 | same | same |
 | Dropoff check | 93.5% of dest failures | 93.5% | 93.5% |
-| Trigger 2 learning | recording only | recording | recording |
-| Sub-set lookup | **TBD (measuring)** | **TBD** | **TBD** |
 
-## 9. Complete Pipeline Timing (10% Bavaria, degrees 3-7)
+## 8. Pipeline Timing (historical 10% Bavaria, degrees 3–7)
+
+> The current production scenario is Lyon 10% (eqasim-france Loyette cluster, ~30k DRT requests). Lyon-specific timing is captured in the comparison-battery artifacts and the synthesis at `papers/paper1/planning/reviews/2026-04-27-bamas-deep-dive-synthesis.md`. The Bavaria numbers below predate the algorithm/{exmas,bamas} fork; they show the order-of-magnitude scaling but are not the production figures.
 
 ```mermaid
 gantt
-    title Execution Time by Degree (10% Bavaria, current optimizations)
+    title Execution Time by Degree (10% Bavaria — historical)
     dateFormat X
     axisFormat %s s
 
@@ -506,7 +439,7 @@ gantt
 
 The factorial wall on orderings per set dominates at high degrees:
 
-| Degree | Avg orderings/set | Typical candidates | Wall-clock time |
+| Degree | Avg orderings/set | Typical candidates | Wall-clock time (Bavaria 10%) |
 |:---:|:---:|:---:|:---:|
 | 3 | 2-6 | ~473k sets | 23s |
 | 4 | 3-18 | ~180k sets | 10s |
@@ -514,7 +447,9 @@ The factorial wall on orderings per set dominates at high degrees:
 | 6 | 15-200 | ~45k sets | 124s |
 | 7 | 100-9000 | ~18k sets | 405s |
 
-## 10. Output Schema
+**Lyon 10% headline numbers (R1/R2/R4 paper naming, R3 row pending)**: R1 OOMs at d=5 even at 100 GB heap (the `cartesianProduct` retention blows up); R2 saturates at d=14 in 3h17m with 32M rides retained (no pruning); R4 (production: both pruning gates ON) completes in well under R2's wall time.
+
+## 9. Output Schema
 
 ```mermaid
 erDiagram
@@ -561,12 +496,14 @@ erDiagram
 | `person_attributes.csv` | Demographics for clustering | SimWrapper visualization |
 | `connection_cache.csv` | Predecessor/successor links | Empty vehicle routing |
 
-## 11. Worked Example: 4 Requests Through Degree 1–4
+## 10. Worked Example: 4 Requests Through Degree 1–4
+
+> **Note on this section.** §10.1–10.4 below (setup, degree 1, degree 2, shareability graph) are unchanged — they describe the still-current pair generation and ShareabilityGraph behavior. §10.5 onwards has been **edited to remove all references to the deleted `SubSetOrderingFeasibility` mechanism**. Where the old example walked through "Trigger 2" recording and degree-4 sub-set lookup hits, the corrected trace shows the equivalent pruning being done by the `minIn` LB cut and per-segment distance B&B. The original tree shapes and per-ordering decisions are preserved; only the bookkeeping mechanism has changed.
 
 This section traces four DRT requests through every phase of the algorithm,
 visualizing DAGs, orderings, pruning checks, and cross-degree learning.
 
-### 11.1 Setup: Four Requests Along a Corridor
+### 10.1 Setup: Four Requests Along a Corridor
 
 ```
 West ──────────────────────────────────────────────────── East
@@ -589,7 +526,7 @@ West ─────────────────────────
 | **C** | O_C | D_C | 8:04 | 11 min | 1.5 | **16.5 min** |
 | **D** | O_D | D_D | 8:05 | 6 min | 1.8 | **10.8 min** |
 
-### 11.2 Degree 1: Single Rides
+### 10.2 Degree 1: Single Rides
 
 Each request gets a direct (unshared) ride. Budget validation computes
 `remainingBudget = score(DRT direct) − score(best baseline mode)`.
@@ -606,7 +543,7 @@ flowchart LR
 
 **Output:** 4 single rides, all pass budget validation.
 
-### 11.3 Degree 2: Pair Generation
+### 10.3 Degree 2: Pair Generation
 
 The PairGenerator tries every pair in both directions (A first vs B first)
 and both kinds (FIFO = first-in-first-out, LIFO = last-in-first-out).
@@ -644,7 +581,7 @@ All six pairs are evaluated. Here are the results:
 
 **Output:** 10 pair rides (some pairs produce rides in both directions), all pass budget.
 
-### 11.4 Shareability Graph
+### 10.4 Shareability Graph
 
 The shareability graph stores which pairs are feasible and with what kind.
 Edges are directional: edge (A→B, FIFO) means "ride with A first, FIFO dropoff."
@@ -668,9 +605,9 @@ Key observations:
 - **B→C exists but C→B does not** → B must always be picked up before C
 - **All other pairs** have edges in both directions → no forced origin order
 
-### 11.5 Degree 3: Triple Enumeration
+### 10.5 Degree 3: Triple Enumeration
 
-#### 11.5.1 Candidate generation
+#### 10.5.1 Candidate generation
 
 At degree 3, candidates are found via `ShareabilityGraph.findCommonNeighbors`.
 A triple {X,Y,Z} is a candidate if all three pairs (X,Y), (X,Z), (Y,Z) have
@@ -678,7 +615,7 @@ at least one shared ride.
 
 All 4 triples are feasible: **{A,B,C}**, **{A,B,D}**, **{A,C,D}**, **{B,C,D}**
 
-#### 11.5.2 Triple {A, B, C} — Constrained DAG
+#### 10.5.2 Triple {A, B, C} — Constrained DAG
 
 **Step 1: Build origin DAG from pairwise constraints**
 
@@ -732,22 +669,11 @@ flowchart TD
     FAIL["prunedByDropoffCheck++<br/>B exceeds maxTravelTime"]
     
     ORD --> ROUTE --> DC_A -->|pass| DC_B -->|"FAIL"| FAIL
-
-    T2["Trigger 2: all dest orderings failed<br/>(1 ordering, 0 reached evaluator, 0 dist-BB)<br/>→ Record infeasible origin [A,B,C]"]
-    
-    FAIL --> T2
-    
-    subgraph "SubSetOrderingFeasibility recording"
-        REC["Record triple {A,B,C}<br/>ordering (A,B,C) = Lehmer 0<br/>→ set bit 0 in infeasibility map"]
-    end
-    
-    T2 --> REC
 ```
 
-**Result:** {A,B,C} produces **0 valid rides**. The origin ordering is
-recorded as infeasible in `SubSetOrderingFeasibility`.
+**Result:** {A,B,C} produces **0 valid rides**. Because no valid ride is found, this triple is **not** added to the DegreeGraph extension index — no degree-4 candidate set containing {A,B,C} as a 3-subset will be generated. (In older versions of this document, the same outcome was additionally recorded as a Lehmer-encoded sub-set ordering infeasibility for cross-degree lookup; that bookkeeping has been removed.)
 
-#### 11.5.3 Triple {A, C, D} — Unconstrained DAG, Multiple Orderings
+#### 10.5.3 Triple {A, C, D} — Unconstrained DAG, Multiple Orderings
 
 **Step 1: Origin DAG** — All three pairs allow both directions → empty DAG.
 
@@ -878,9 +804,7 @@ flowchart TD
     
     PRUNE["prunedByTravelTime++<br/>D already busted from origins alone<br/>no destination ordering can help"]
     
-    RECORD["Record sub-set infeasibility:<br/>perm[0..2] = [D, C, A]<br/>Triple {A,C,D} ordering (D,C,A) = Lehmer 5<br/>→ set bit 5 in infeasibility map"]
-    
-    CHECK --> CA_D -->|"FAIL"| PRUNE --> RECORD
+    CHECK --> CA_D -->|"FAIL"| PRUNE
 ```
 
 **Step 4: Summary of all 6 orderings for {A,C,D}**
@@ -904,7 +828,7 @@ bound, pruning entire subtrees before any routing of later origins.
 
 **Best ride for {A,C,D}:** ordering #1, distance 21km.
 
-#### 11.5.4 Degree-3 results summary
+#### 10.5.4 Degree-3 results summary
 
 | Triple | Origin orderings | Evaluated | Valid rides | Best dist |
 |:---:|:---:|:---:|:---:|:---:|
@@ -913,26 +837,7 @@ bound, pruning entire subtrees before any routing of later origins.
 | {A,C,D} | 6 | 4 | 2 | 21km |
 | {B,C,D} | 3 | 5 | 2 | 18km |
 
-### 11.6 SubSetOrderingFeasibility After Degree 3
-
-After `commit()`, the infeasibility map contains:
-
-| Triple (sorted) | Hash | Infeasible bits | Infeasible orderings |
-|:---:|:---:|:---:|:---|
-| {A,B,C} | h₁ | `000001` | (A,B,C) = Lehmer 0 |
-| {A,C,D} | h₂ | `100100` | (A,D,C) = Lehmer 1, (D,C,A) = Lehmer 5 |
-| {A,B,D} | h₃ | `010000` | (B,D,A) = Lehmer 4 |
-
-```mermaid
-flowchart LR
-    subgraph "Long2IntOpenHashMap (triples)"
-        H1["hash({A,B,C}) → 0b000001<br/>bit 0 set: (A,B,C) infeasible"]
-        H2["hash({A,C,D}) → 0b100100<br/>bit 2: (A,D,C) infeasible<br/>bit 5: (D,C,A) infeasible"]
-        H3["hash({A,B,D}) → 0b010000<br/>bit 4: (B,D,A) infeasible"]
-    end
-```
-
-### 11.7 DegreeGraph After Degree 3
+### 10.6 DegreeGraph After Degree 3
 
 The DegreeGraph is built from valid degree-3 rides. It has two components:
 
@@ -956,12 +861,9 @@ Note: {A,B,C} had 0 valid rides → **not** in the extension index.
 This means no degree-4 set containing {A,B,C} as a sub-set will be
 generated as a candidate.
 
-The DegreeGraph also stores consensus bitmasks (which pairwise origin
-directions appeared in all valid orderings). These are used for optional
-consensus tightening (`enableConsensusTightening`, off by default) and
-are not shown in this example.
+The DegreeGraph stores **only** the extension index (pair → list of valid extension elements). Older versions of this document described an additional consensus-bitmask component used for optional pairwise tightening (`enableConsensusTightening` flag); that mechanism does not exist in the current code.
 
-### 11.8 Degree 4: Set {A, B, C, D}
+### 10.7 Degree 4: Set {A, B, C, D}
 
 For this section, assume {A,B,C} produced 1 valid ride at degree 3 (with
 ordering [A,B,C], dest [D_B,D_A,D_C]), so {A,B,C,D} passes the DegreeGraph
@@ -980,7 +882,7 @@ filter as a valid degree-4 candidate. This lets us trace the full enumeration.
 | O_D → O_B | 7 km | 9 min |
 | O_D → O_C | 4 km | 5 min |
 
-#### 11.8.1 All 24 permutations vs. DAG constraints
+#### 10.7.1 All 24 permutations vs. DAG constraints
 
 The pairwise constraints yield origin DAG edges **A→B** and **B→C**. Of the
 4! = 24 possible origin permutations, only those respecting both edges are
@@ -1032,7 +934,7 @@ The topological sort builds these lazily — it never generates the 20 invalid
 permutations. At each recursive depth, only candidates whose DAG predecessors
 are all placed are considered.
 
-#### 11.8.2 Branch-and-bound tree with in-vehicle times
+#### 10.7.2 Branch-and-bound tree with in-vehicle times
 
 The tree below traces every node the algorithm visits. At each node:
 - **Bold** = the passenger just picked up
@@ -1108,11 +1010,7 @@ flowchart TD
     %% Sub-set lookup: {A,B,C} ordering (A,B,C) → bit 0 SET → INFEASIBLE!
     %% ========================
 
-    ABD2 -->|"depth 3: [C]<br/>Check A: A=15 ≤ 15 ✓"| ABDC_LOOKUP
-
-    ABDC_LOOKUP["Sub-set lookup for candidate C:<br/>Triple {A,B,C} with ordering (A,B,C)<br/>→ Lehmer 0 → <b>bit IS SET</b><br/>wouldPruneBySubsetLookup++"]
-
-    ABDC_LOOKUP -->|"measurement: count only,<br/>still evaluate"| ABDC3
+    ABD2 -->|"depth 3: [C]<br/>Check A: A=15 ≤ 15 ✓"| ABDC3
 
     ABDC3(["Pick <b>C</b><br/>O_D →4km/5min→ O_C<br/>time = 8:20<br/>In-vehicle: A=20, B=14, D=5, C=0<br/>partialDist = 16<br/>16 ≤ 18 ✓"])
 
@@ -1174,7 +1072,6 @@ flowchart TD
     style ABDC_DEST fill:#fcc,stroke:#a00
     style AD_BB fill:#fcc,stroke:#a00,color:#a00
     style DA_CHECKA fill:#fcc,stroke:#a00
-    style ABDC_LOOKUP fill:#ffa,stroke:#aa0
 ```
 
 **Reading the tree:**
@@ -1203,78 +1100,33 @@ Key observations:
    aggressive bound then prunes [A,D,...] whose origin partial (19 km)
    alone exceeds the best total ride (18 km).
 
-4. **The sub-set lookup (yellow node) flags [A,B,D,C]** as containing the
-   infeasible triple ordering (A,B,C). In measurement mode this is counted;
-   in pruning mode the entire destination enumeration would be skipped —
-   saving the 4-dest-stop routing and all checks.
-
-5. **Check A prunes [D,A,B,C] at depth 2** without any candidate routing.
+4. **Check A prunes [D,A,B,C] at depth 2** without any candidate routing.
    D has been in the vehicle for 15 minutes just traversing O_D→O_A.
    No destination ordering can reduce D's in-vehicle time, so the entire
    subtree is killed immediately.
 
-#### 11.8.3 What the tree would look like without the DAG
+#### 10.7.3 What the tree would look like without the DAG
 
 Without the origin constraints A→B and B→C, all 24 permutations would be
 topologically valid. The tree would have 4 children at depth 0, up to 3 at
 depth 1, up to 2 at depth 2, and 1 at depth 3 — potentially visiting 24
 leaf nodes. The DAG reduces this to 4 leaves.
 
-At degree 7, the difference is even more dramatic: 7! = 5,040 permutations
-vs. typically 100–500 after DAG constraints (further reduced by sub-set
-ordering lookup).
+At degree 7, the difference is even more dramatic: 7! = 5,040 permutations vs. typically 100–500 after DAG constraints (further reduced by minIn LB cut and parent-seeded sort once the bound tightens).
 
-#### 11.8.4 SubSetOrderingFeasibility lookup detail
+#### 10.7.4 The minIn LB cut at high degree
 
-At depth 3, when considering candidate C with prefix [A, B, D] already
-placed, the lookup checks all C(3,2) = 3 triples:
+Where the sub-set lookup mechanism (now removed) would have flagged candidate C with prefix [A,B,D] by detecting the infeasible (A,B,C) triple ordering, the current code achieves equivalent — or better — pruning via the **minIn LB cut** (mechanism #4 in §5):
 
-```mermaid
-flowchart TD
-    subgraph "Sub-set lookup: prefix [A,B,D], candidate C"
-        direction TB
-        TRIPLE1["Triple {A,B,C}<br/>Positions: A@0, B@1, C@3<br/>Sub-ordering: (A, B, C)<br/>Sorted: {A,B,C} → hash h₁<br/>Ranks: (0, 1, 2) → Lehmer 0<br/>Lookup: h₁ bit 0 → <b>SET!</b>"]
-        
-        TRIPLE2["Triple {A,D,C}<br/>Positions: A@0, D@2, C@3<br/>Sub-ordering: (A, D, C)<br/>Sorted: {A,C,D} → hash h₂<br/>Ranks: (0, 2, 1) → Lehmer 1<br/>Lookup: h₂ bit 1 → SET!"]
-        
-        TRIPLE3["Triple {B,D,C}<br/>Positions: B@1, D@2, C@3<br/>Sub-ordering: (B, D, C)<br/>Sorted: {B,C,D} → hash h₄<br/>Ranks: (0, 2, 1) → Lehmer 1<br/>Lookup: h₄ bit 1 → not set"]
-    end
+- For each unplaced stop, `minIn[stop]` is the minimum incoming network-distance over all other stops (computed once per set, with beeline fallback under time-dependent routing).
+- `totalMinInRemaining` = sum of `minIn` over unplaced stops.
+- Predicate at depth d > 0 (origin phase): `partialDist + totalMinInRemaining > bestValidDist[0]` → prune.
 
-    TRIPLE1 -->|"INFEASIBLE"| RESULT["First hit → candidate pruned<br/>(short-circuit, no need to<br/>check remaining triples)"]
-    
-    style TRIPLE1 fill:#fcc,stroke:#a00
-    style TRIPLE2 fill:#fcc,stroke:#a00
-    style TRIPLE3 fill:#efe
-    style RESULT fill:#ffa
-```
+Once `bestValidDist[0]` tightens to 18 km after [A,B,C,D] is found valid, branches whose `partialDist + totalMinInRemaining` exceeds 18 are pruned without further routing. The cut fires aggressively from depth 1 onwards because the parent-seeded sort discovered a tight bound first.
 
-Note: **two** of the three triples have infeasible bits set. The lookup
-short-circuits on the first hit — the remaining triples are never checked.
+The trade-off vs. the deleted sub-set lookup: the LB cut requires no cross-degree bookkeeping (no `Long2IntOpenHashMap`, no Lehmer encoding), at the cost of a single sum-check per DFS node. With the routing cache making per-segment lookups effectively free, this trade-off favors the LB cut.
 
-For comparison, candidate D with prefix [A, B, C]:
-
-```mermaid
-flowchart TD
-    subgraph "Sub-set lookup: prefix [A,B,C], candidate D"
-        direction TB
-        T1["Triple {A,B,D}: ordering (A,B,D)<br/>Lehmer 0 → bit 0 not set ✓"]
-        T2["Triple {A,C,D}: ordering (A,C,D)<br/>Lehmer 0 → bit 0 not set ✓"]
-        T3["Triple {B,C,D}: ordering (B,C,D)<br/>Lehmer 0 → bit 0 not set ✓"]
-    end
-
-    T1 --> OK
-    T2 --> OK
-    T3 --> OK["All 3 triples clear → proceed"]
-
-    style T1 fill:#efe
-    style T2 fill:#efe
-    style T3 fill:#efe
-    style OK fill:#afa
-```
-
-All triples pass — this is the ordering that produces the valid ride.
-
-### 11.9 Visual Summary: Cross-Degree Information Flow
+### 10.8 Visual Summary: Cross-Degree Information Flow
 
 ```mermaid
 flowchart TD
@@ -1291,32 +1143,29 @@ flowchart TD
     end
 
     subgraph BETWEEN3 ["Between degree 3 and 4"]
-        SF3["SubSetOrderingFeasibility<br/>3 triples with infeasible bits"]
-        DG3["DegreeGraph<br/>extension index: 6 entries"]
-        OC3["OrderingConflicts<br/>origin stop sequences"]
+        DG3["DegreeGraph<br/>extension index: 6 entries<br/>(only triples with valid rides)"]
+        PARENT["Per-set parent ordering<br/>(propagated to children<br/>via parent-seed at d+1)"]
+        OPT_PRUNE["Optional: PostExtensionPruner<br/>(degree ≥ 3 only;<br/>OFF in R2, ON in R4)"]
     end
 
     subgraph DEG4 ["Degree 4"]
         CAND4["DegreeGraph filters candidates<br/>{A,B,C,D} rejected:<br/>{A,B,C} has no rides"]
-        LOOKUP4["Sub-set lookup catches<br/>infeasible sub-orderings"]
-        ENUM4["Remaining orderings<br/>evaluated"]
+        ENUM4["DFS with 6 admissibility checks<br/>parent-seeded sort + minIn LB cut"]
     end
 
     PAIRS --> SGRAPH --> CAND3 --> ENUM3 --> CHECKS3 --> RIDES3
-    RIDES3 --> SF3 & DG3 & OC3
-    SF3 --> LOOKUP4
-    DG3 --> CAND4 --> LOOKUP4 --> ENUM4
-    OC3 --> ENUM4
+    RIDES3 --> DG3 & PARENT & OPT_PRUNE
+    DG3 --> CAND4 --> ENUM4
+    PARENT --> ENUM4
 
-    style SF3 fill:#e8f4e8
     style DG3 fill:#e8e8f4
-    style OC3 fill:#f4e8e8
+    style PARENT fill:#f4e8e8
+    style OPT_PRUNE fill:#ffe
 ```
 
-### 11.10 Pruning Layers Visualized
+### 10.9 Pruning Layers Visualized
 
-Each layer filters candidates before the next (more expensive) layer runs.
-Numbers are illustrative for the {A,C,D} triple:
+Each layer filters candidates before the next (more expensive) layer runs. Numbers are illustrative for the {A,C,D} triple:
 
 ```mermaid
 flowchart TD
@@ -1324,13 +1173,11 @@ flowchart TD
     
     TOPO["6 pass topological filter<br/>(no forced constraints)"]
     
-    CONFLICT["6 pass conflict lookup<br/>(no conflicts learned yet at degree 3)"]
+    SORT["6 sorted: parent-seed (none at d=3)<br/>+ cheapest-segment-distance"]
     
-    SUBSET["6 pass sub-set lookup<br/>(no sub-set data yet at degree 3)"]
+    MININ["6 pass minIn LB cut<br/>(bestValidDist still ∞ at first ordering)"]
     
-    ROUTE["6 routed + sorted by distance"]
-    
-    BB["4 survive distance B&B<br/>(2 pruned: D-first orderings exceed bound)"]
+    BB["4 survive distance B&B<br/>(2 pruned: D-first origin partial &gt; tightened bound)"]
     
     DEST["4 enter destination enumeration"]
     
@@ -1338,13 +1185,15 @@ flowchart TD
     
     DROP["2 survive dropoff check<br/>(1 pruned: passenger exceeds maxTT at dropoff)"]
     
+    DELAY_OK["2 pass delay-window check"]
+    
     EVAL["2 reach evaluator"]
     
-    BUDGET["2 pass budget validation"]
+    BUDGET["2 pass budget validation<br/>(holistic per-passenger)"]
     
     BEST["Best ride: ordering #1, dist = 21km"]
     
-    ALL --> TOPO --> CONFLICT --> SUBSET --> ROUTE --> BB --> DEST --> CHECKA_DEST --> DROP --> EVAL --> BUDGET --> BEST
+    ALL --> TOPO --> SORT --> MININ --> BB --> DEST --> CHECKA_DEST --> DROP --> DELAY_OK --> EVAL --> BUDGET --> BEST
     
     BB -->|"2 pruned"| P1["D,A,C and D,C,A<br/>partialDist > 21km"]
     CHECKA_DEST -->|"1 pruned"| P2["C,D,A: D busted<br/>at origin depth 2"]
@@ -1355,6 +1204,4 @@ flowchart TD
     style P3 fill:#fcc
 ```
 
-At **degree 4 and beyond**, the sub-set lookup layer becomes powerful:
-infeasible triples learned at degree 3 prune candidates before any routing
-occurs, avoiding the expensive O(k!) destination enumeration entirely.
+At **degree 4 and beyond**, the minIn LB cut becomes the dominant pruning mechanism: once `bestValidDist[0]` tightens via the parent-seeded ordering, branches whose `partialDist + totalMinInRemaining` exceeds the bound are pruned at depth d > 0 without further routing. This is what replaces the role the deleted sub-set lookup mechanism played in earlier versions of this document.
