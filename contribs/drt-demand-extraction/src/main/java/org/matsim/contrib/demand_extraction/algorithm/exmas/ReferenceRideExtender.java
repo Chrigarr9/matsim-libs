@@ -180,13 +180,17 @@ public final class ReferenceRideExtender {
 						}
 
 						for (int[] pairRides : allPairRideCombinations) {
+							long t0 = System.nanoTime();
 							Ride ext = tryExtend(base, addedRequest, pairRides, 0);
+							if (stats != null) stats.rideConstructionCpuNs.add(System.nanoTime() - t0);
 							if (ext == null) {
 								if (stats != null) stats.tryExtendFailed.increment();
 								continue;
 							}
 
+							long t1 = System.nanoTime();
 							Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
+							if (stats != null) stats.budgetValidationCpuNs.add(System.nanoTime() - t1);
 							if (validated == null) {
 								if (stats != null) stats.budgetValidationFailed.increment();
 								continue;
@@ -219,8 +223,11 @@ public final class ReferenceRideExtender {
 
 		long elapsed = System.currentTimeMillis() - startTime;
 		double seconds = elapsed / 1000.0;
+		stats.logTimeBreakdown(/* threads= */ 1, elapsed, setsProcessed);
 		log.info("Extension complete: {} rides extended to degree {} in {}s ({} request sets)",
 				allExtended.size(), targetDegree, String.format("%.1f", seconds), setsProcessed);
+		org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler
+				.snapshotAtEndOfDegree(targetDegree, allExtended.size());
 
 		return allExtended;
 	}
@@ -238,6 +245,12 @@ public final class ReferenceRideExtender {
 		private final LongAdder distanceSavingsPrunedEarly = new LongAdder();
 		private final LongAdder candidatesAdded = new LongAdder();
 		private final LongAdder prunedByTopNPerBase = new LongAdder();
+
+		// Time accumulators (nanoseconds), matched to R2's EnumerationStats labels for
+		// apples-to-apples R1↔R2 comparison. R1 ReferenceRideExtender is single-threaded
+		// (see extendRides outer loop), so total CPU-ms ~= wall ms; informative on its own.
+		private final LongAdder rideConstructionCpuNs = new LongAdder();
+		private final LongAdder budgetValidationCpuNs = new LongAdder();
 
 		private ExtensionAttemptStats(int targetDegree, ExMasConfigGroup config) {
 			this.targetDegree = targetDegree;
@@ -322,6 +335,35 @@ public final class ReferenceRideExtender {
 				log.info("    RESULT: 0 candidates generated -> {}.", likelyCause);
 			}
 		}
+
+		/**
+		 * Per-degree CPU-time breakdown matching R2's {@code EnumerationStats} labels so the
+		 * R1↔R2 dissertation comparison can read both engines' logs with the same parser.
+		 * R1 ReferenceRideExtender is single-threaded (see extendRides outer loop), so
+		 * {@code threads=1} and Total CPU-ms ≈ wall ms.
+		 */
+		void logTimeBreakdown(int threads, long wallMs, long setsProcessed) {
+			long constructionMs = rideConstructionCpuNs.sum() / 1_000_000L;
+			long budgetMs = budgetValidationCpuNs.sum() / 1_000_000L;
+			long totalMs = wallMs * threads;
+			long enumerationMs = Math.max(0L, totalMs - constructionMs - budgetMs);
+			long otherMs = 0L; // R1 has no separate setup/dedup phase to time
+			double denom = setsProcessed > 0 ? setsProcessed : 1.0;
+			log.info("  Time breakdown (CPU-ms across {} threads):", threads);
+			log.info("    Total:              {}ms ({}ms/set)",
+					totalMs, String.format(Locale.ROOT, "%.3f", totalMs / denom));
+			log.info("    Pure enumeration:   {}ms ({}ms/set) ({}%)",
+					enumerationMs, String.format(Locale.ROOT, "%.3f", enumerationMs / denom),
+					String.format(Locale.ROOT, "%.1f", totalMs > 0 ? 100.0 * enumerationMs / totalMs : 0.0));
+			log.info("    Ride construction:  {}ms ({}ms/set) ({}%)",
+					constructionMs, String.format(Locale.ROOT, "%.3f", constructionMs / denom),
+					String.format(Locale.ROOT, "%.1f", totalMs > 0 ? 100.0 * constructionMs / totalMs : 0.0));
+			log.info("    Budget validation:  {}ms ({}ms/set) ({}%)",
+					budgetMs, String.format(Locale.ROOT, "%.3f", budgetMs / denom),
+					String.format(Locale.ROOT, "%.1f", totalMs > 0 ? 100.0 * budgetMs / totalMs : 0.0));
+			log.info("    Other (setup/dedup): {}ms ({}ms/set) ({}%)",
+					otherMs, String.format(Locale.ROOT, "%.3f", otherMs / denom), "0.0");
+		}
 	}
 
 	private static boolean isPowerOfTwo(int value) {
@@ -389,7 +431,9 @@ public final class ReferenceRideExtender {
 			// parallel comment in extendRides for rationale.
 
 			for (int[] pairRides : allPairRideCombinations) {
+				long t0 = System.nanoTime();
 				Ride ext = tryExtend(ride, newRequest, pairRides, 0);
+				if (stats != null) stats.rideConstructionCpuNs.add(System.nanoTime() - t0);
 				if (ext == null) {
 					if (stats != null) {
 						stats.tryExtendFailed.increment();
@@ -397,7 +441,9 @@ public final class ReferenceRideExtender {
 					continue;
 				}
 
+				long t1 = System.nanoTime();
 				Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
+				if (stats != null) stats.budgetValidationCpuNs.add(System.nanoTime() - t1);
 				if (validated == null) {
 					if (stats != null) {
 						stats.budgetValidationFailed.increment();

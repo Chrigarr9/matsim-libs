@@ -30,10 +30,11 @@ import org.matsim.core.controler.Controler;
  *   -Denforcer.skip=true
  * </pre>
  *
- * <p>Use {@code --profile r1|r2|r3} to apply the Paper 1 {@link AlgorithmProfile}
+ * <p>Use {@code --profile r1|r2|r3|r4} to apply the Paper 1 {@link AlgorithmProfile}
  * (sets both algorithm and pruning knobs). R1 = ExMAS reference, R2 = BAMAS no
- * pruning, R3 = BAMAS production defaults. Overrides {@code --algorithm} when both
- * are specified.
+ * pruning, R3 = BAMAS production defaults (distance + post-extension pruning),
+ * R4 = BAMAS distance-pruning ablation (distance gate only, no post-extension
+ * pruner). Overrides {@code --algorithm} when both are specified.
  */
 public class RunLyonEqasimDemandExtraction {
 
@@ -129,7 +130,8 @@ public class RunLyonEqasimDemandExtraction {
 					case "R1" -> AlgorithmProfile.R1;
 					case "R2" -> AlgorithmProfile.R2;
 					case "R3" -> AlgorithmProfile.R3;
-					default -> throw new IllegalArgumentException("Unknown profile: " + args[i] + " (expected r1|r2|r3)");
+					case "R4" -> AlgorithmProfile.R4;
+					default -> throw new IllegalArgumentException("Unknown profile: " + args[i] + " (expected r1|r2|r3|r4)");
 				};
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
@@ -145,7 +147,7 @@ public class RunLyonEqasimDemandExtraction {
 		if (p.sample < 0 || p.scenarioDir == null || p.travelTimesPath == null) {
 			System.err.println("Usage: --sample <N> --scenario-dir <path> [--prefix <s>] "
 					+ "--travel-times <path> [--output-dir <path>] "
-					+ "[--profile r1|r2|r3] [--algorithm bamas|exmas] "
+					+ "[--profile r1|r2|r3|r4] [--algorithm bamas|exmas] "
 					+ "[--search-horizon <s>] [--max-detour-factor <f>] "
 					+ "[--min-drt-cost-per-km <eur>] [--pruning-coverage-k <int>] "
 					+ "[--trip-filter-radius-km <km>] [--no-exclusion-zone] "

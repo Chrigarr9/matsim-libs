@@ -172,6 +172,8 @@ public final class ExMasReferenceEngine {
 				singleRides.size(), pairRides.size(), allRides.size() - singleRides.size() - pairRides.size());
 		log.info("  Total execution time: {}s", String.format("%.1f", totalSeconds));
 		log.info("======================================================================");
+		org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler
+				.snapshotAtEndOfDegree(-1, allRides.size());
 
 		// Log network routing statistics
 		log.info("");

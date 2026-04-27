@@ -286,6 +286,8 @@ public final class BamasRideExtender {
 		log.info("Extension complete: {} rides at degree {} in {}s ({} candidate sets, {} threads, {} skipped dedup, {} base sets)",
 				results.size(), targetDegree, String.format("%.1f", elapsed / 1000.0),
 				canonicalCount, parallelism, dedupSkipped, uniqueBaseSets.size());
+		org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler
+				.snapshotAtEndOfDegree(targetDegree, results.size());
 
 		return results;
 	}

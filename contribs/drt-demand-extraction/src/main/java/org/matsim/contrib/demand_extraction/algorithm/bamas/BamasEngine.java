@@ -181,10 +181,14 @@ public final class BamasEngine {
 		if (exMasConfig.isDeferExtensionBudgetValidation()) {
 			log.info("");
 			log.info("Populating deferred budgets for {} rides...", allRides.size());
+			org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler
+					.snapshot("before-deferred-budget-population");
 			long budgetStart = System.currentTimeMillis();
 			allRides = budgetValidator.populateBudgetsBatch(allRides);
 			log.info("  Deferred budget population took {}s",
 					String.format("%.1f", (System.currentTimeMillis() - budgetStart) / 1000.0));
+			org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler
+					.snapshotAtEndOfDegree(-1, allRides.size());
 		}
 
 		long totalElapsed = System.currentTimeMillis() - algorithmStartTime;
@@ -197,6 +201,8 @@ public final class BamasEngine {
 				singleRides.size(), pairRides.size(), allRides.size() - singleRides.size() - pairRides.size());
 		log.info("  Total execution time: {}s", String.format("%.1f", totalSeconds));
 		log.info("======================================================================");
+		org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler
+				.snapshotAtEndOfDegree(-1, allRides.size());
 
 		// Log network routing statistics
 		log.info("");

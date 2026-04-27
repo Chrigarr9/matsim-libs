@@ -7,7 +7,7 @@ import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
 
 /**
- * Declarative algorithm + pruning knobs for the Paper 1 R1/R2/R3 matrix.
+ * Declarative algorithm + pruning knobs for the Paper 1 R1/R2/R3/R4 matrix.
  *
  * <ul>
  *   <li><b>R1</b> = vanilla ExMAS (frozen reference port). EXMAS strategy ignores
@@ -17,9 +17,13 @@ import org.matsim.core.config.ConfigUtils;
  *       choosing RATIO_THRESHOLD with interDegreeKeepFraction=1.0 (the only "off"
  *       state currently expressible via the config; COVERAGE_TOPK always builds
  *       a pruner).</li>
- *   <li><b>R3</b> = BAMAS with the production-default pruning (heuristic gate ON,
- *       COVERAGE_TOPK with K=20 — Pareto-minimal per the 2026-04-17 cascade
- *       analysis).</li>
+ *   <li><b>R3</b> = BAMAS with the production-default pruning (heuristic distance
+ *       gate ON + post-extension COVERAGE_TOPK with K=20 — Pareto-minimal per
+ *       the 2026-04-17 cascade analysis).</li>
+ *   <li><b>R4</b> = BAMAS distance-pruning ablation: heuristic distance gate ON,
+ *       post-extension pruner OFF. Sits between R2 (no pruning) and R3 (full
+ *       production pruning) so the dissertation can attribute the savings of
+ *       each pruning mechanism separately.</li>
  * </ul>
  *
  * <p>R1 is "vanilla" regardless of what {@code main}'s runner defaults happen
@@ -47,6 +51,8 @@ public record AlgorithmProfile(
 			new AlgorithmProfile("R2", Algorithm.BAMAS, false, false, false, Integer.MAX_VALUE);
 	public static final AlgorithmProfile R3 =
 			new AlgorithmProfile("R3", Algorithm.BAMAS, true, true, true, Integer.MAX_VALUE);
+	public static final AlgorithmProfile R4 =
+			new AlgorithmProfile("R4", Algorithm.BAMAS, true, false, false, Integer.MAX_VALUE);
 
 	/**
 	 * Apply this profile to {@code config}. Overrides only the algorithm + pruning

@@ -116,50 +116,122 @@ class ExMasLyonR1R2FastComparisonTest {
 		exMasConfig.setCalcPredecessors(false);
 		exMasConfig.setCalcShapleyValues(false);
 
+		// Optional override: -DmaxPoolingDegree=N caps both R1 and R2 at degree N. Used
+		// for the R1 d≤4 run (R1 OOMs at d5 even with 100GB heap; cap at 4 produces a
+		// clean R1 ride CSV for R1↔R2 completeness comparison at degrees 2-4).
+		int maxPoolingDegreeOverride = Integer.getInteger("maxPoolingDegree", -1);
+		if (maxPoolingDegreeOverride > 0) {
+			log.info("Overriding maxPoolingDegree from {} to {} (-DmaxPoolingDegree)",
+					exMasConfig.getMaxPoolingDegree(), maxPoolingDegreeOverride);
+			exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
+		}
+
 		// ── 5. Passthrough budget validator ──────────────────────────────────────
 		// maxTravelTime (geometric constraint) is enforced by PairGenerator before
 		// validateAndPopulateBudgets is called; remaining budget = request.budget
 		// avoids needing a scoring context that is absent from CSV-loaded requests.
 		BudgetValidator validator = new PassthroughBudgetValidator(exMasConfig, config);
 
-		// ── 6. R1: ExMAS reference, parallel ─────────────────────────────────────
-		AlgorithmProfile.R1.apply(config);
-		exMasConfig.setAlgorithmProcessCount(-1); // -1 = all cores; parallel SpeedyALT is byte-deterministic
-		log.info("R1 config: algorithm={}, processCount={}",
-				exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount());
-
-		List<Ride> r1Rides = new ExMasReferenceEngine(
-				cache, validator,
-				exMasConfig.getSearchHorizon(),
-				exMasConfig.getMaxPoolingDegree(),
-				exMasConfig)
-				.run(new ArrayList<>(requests));
-		log.info("R1: {} total rides", r1Rides.size());
+		boolean skipR1 = Boolean.getBoolean("skipR1");
+		boolean skipR2 = Boolean.getBoolean("skipR2");
+		boolean runR3 = Boolean.getBoolean("runR3");
+		boolean runR4 = Boolean.getBoolean("runR4");
 		Path r1Csv = outputDir.resolve("r1_rides.csv");
-		ExMasCsvWriter.writeRides(r1Csv.toString(), r1Rides);
 
-		// ── 7. R2: BAMAS no-pruning, parallel ────────────────────────────────────
-		// Shares the warmed-up routing cache from R1 — identical routing for any
-		// segment already computed; new segments use thread-local SpeedyALT instances.
-		AlgorithmProfile.R2.apply(config);
-		exMasConfig.setAlgorithmProcessCount(-1);
-		log.info("R2 config: algorithm={}, processCount={}",
-				exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount());
+		if (!skipR1) {
+			// ── 6. R1: ExMAS reference, parallel ─────────────────────────────────────
+			AlgorithmProfile.R1.apply(config);
+			// Re-apply maxPoolingDegree override AFTER profile.apply() — the profile resets
+			// maxPoolingDegree to Integer.MAX_VALUE, which would otherwise wipe the cap.
+			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
+			exMasConfig.setAlgorithmProcessCount(-1); // -1 = all cores; parallel SpeedyALT is byte-deterministic
+			log.info("R1 config: algorithm={}, processCount={}, maxPoolingDegree={}",
+					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree());
 
-		List<Ride> r2Rides = new BamasEngine(
-				cache, validator,
-				exMasConfig.getSearchHorizon(),
-				exMasConfig.getMaxPoolingDegree(),
-				exMasConfig)
-				.run(new ArrayList<>(requests));
-		log.info("R2: {} total rides", r2Rides.size());
+			List<Ride> r1Rides = new ExMasReferenceEngine(
+					cache, validator,
+					exMasConfig.getSearchHorizon(),
+					exMasConfig.getMaxPoolingDegree(),
+					exMasConfig)
+					.run(new ArrayList<>(requests));
+			log.info("R1: {} total rides", r1Rides.size());
+			ExMasCsvWriter.writeRides(r1Csv.toString(), r1Rides);
+		} else {
+			log.info("R1 skipped (-DskipR1=true) — running R2 (BAMAS) only");
+		}
+
 		Path r2Csv = outputDir.resolve("r2_rides.csv");
-		ExMasCsvWriter.writeRides(r2Csv.toString(), r2Rides);
+		if (!skipR2) {
+			// ── 7. R2: BAMAS no-pruning, parallel ────────────────────────────────────
+			// Shares the warmed-up routing cache from R1 — identical routing for any
+			// segment already computed; new segments use thread-local SpeedyALT instances.
+			AlgorithmProfile.R2.apply(config);
+			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
+			exMasConfig.setAlgorithmProcessCount(-1);
+			log.info("R2 config: algorithm={}, processCount={}, maxPoolingDegree={}",
+					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree());
 
-		// ── 8. Compare canonical ride sets ───────────────────────────────────────
-		// relTol=1e-9: with identical SpeedyALT routing and a shared cache, distances
-		// for the same canonical set must be bit-identical between R1 and R2.
-		GoldenAsserter.assertEquivalent(r1Csv, r2Csv, 1e-9);
+			List<Ride> r2Rides = new BamasEngine(
+					cache, validator,
+					exMasConfig.getSearchHorizon(),
+					exMasConfig.getMaxPoolingDegree(),
+					exMasConfig)
+					.run(new ArrayList<>(requests));
+			log.info("R2: {} total rides", r2Rides.size());
+			ExMasCsvWriter.writeRides(r2Csv.toString(), r2Rides);
+		} else {
+			log.info("R2 skipped (-DskipR2=true)");
+		}
+
+		if (runR3) {
+			// ── 7b. R3: BAMAS with production-default pruning (heuristic gate + top-K coverage).
+			// Uses the same BamasEngine path as R2; only the AlgorithmProfile differs. R3
+			// drops dominated rides during extension so memory is much lower than R2's.
+			AlgorithmProfile.R3.apply(config);
+			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
+			exMasConfig.setAlgorithmProcessCount(-1);
+			log.info("R3 config: algorithm={}, processCount={}, maxPoolingDegree={}",
+					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree());
+
+			List<Ride> r3Rides = new BamasEngine(
+					cache, validator,
+					exMasConfig.getSearchHorizon(),
+					exMasConfig.getMaxPoolingDegree(),
+					exMasConfig)
+					.run(new ArrayList<>(requests));
+			log.info("R3: {} total rides", r3Rides.size());
+			Path r3Csv = outputDir.resolve("r3_rides.csv");
+			ExMasCsvWriter.writeRides(r3Csv.toString(), r3Rides);
+		}
+
+		if (runR4) {
+			// ── 7c. R4: BAMAS distance-pruning ablation (heuristic gate ON, post-extension OFF).
+			// Sits between R2 (no pruning) and R3 (full production pruning) so the dissertation
+			// can attribute the savings of each pruning mechanism separately. Re-applies the
+			// profile after R3 to flip the post-extension flag back off.
+			AlgorithmProfile.R4.apply(config);
+			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
+			exMasConfig.setAlgorithmProcessCount(-1);
+			log.info("R4 config: algorithm={}, processCount={}, maxPoolingDegree={}",
+					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree());
+
+			List<Ride> r4Rides = new BamasEngine(
+					cache, validator,
+					exMasConfig.getSearchHorizon(),
+					exMasConfig.getMaxPoolingDegree(),
+					exMasConfig)
+					.run(new ArrayList<>(requests));
+			log.info("R4: {} total rides", r4Rides.size());
+			Path r4Csv = outputDir.resolve("r4_rides.csv");
+			ExMasCsvWriter.writeRides(r4Csv.toString(), r4Rides);
+		}
+
+		if (!skipR1 && !skipR2) {
+			// ── 8. Compare canonical ride sets ───────────────────────────────────────
+			// relTol=1e-9: with identical SpeedyALT routing and a shared cache, distances
+			// for the same canonical set must be bit-identical between R1 and R2.
+			GoldenAsserter.assertEquivalent(r1Csv, r2Csv, 1e-9);
+		}
 	}
 
 	/**
@@ -191,6 +263,13 @@ class ExMasLyonR1R2FastComparisonTest {
 				double maxTT = Double.parseDouble(p[col.get("maxTravelTime")].trim());
 				// maxTravelTime = directTravelTime * maxDetourFactor; recover the factor
 				double maxDetour = directTT > 0 ? maxTT / directTT : 1.3;
+				// Cap detour at 1.3 to shrink feasible-pair search space (Lyon 10% R1 OOMs at d4 with 1.5).
+				maxDetour = Math.min(maxDetour, 1.3);
+				double cappedMaxTT = directTT * maxDetour;
+				double earliestDeparture = Double.parseDouble(p[col.get("earliestDeparture")].trim());
+				double latestArrival = Math.min(
+						Double.parseDouble(p[col.get("latestArrival")].trim()),
+						earliestDeparture + cappedMaxTT);
 
 				requests.add(DrtRequest.builder()
 						.index(Integer.parseInt(p[col.get("index")].trim()))
@@ -225,8 +304,8 @@ class ExMasLyonR1R2FastComparisonTest {
 								? destLink.getToNode().getCoord().getY() : 0)
 						.directTravelTime(directTT)
 						.directDistance(Double.parseDouble(p[col.get("directDistance")].trim()))
-						.earliestDeparture(Double.parseDouble(p[col.get("earliestDeparture")].trim()))
-						.latestArrival(Double.parseDouble(p[col.get("latestArrival")].trim()))
+						.earliestDeparture(earliestDeparture)
+						.latestArrival(latestArrival)
 						.maxDetourFactor(maxDetour)
 						.maxWalkDistance(0.0)
 						.originActivityType(p[col.get("originActivityType")].trim())
@@ -264,6 +343,16 @@ class ExMasLyonR1R2FastComparisonTest {
 					.mapToDouble(r -> r.budget)
 					.toArray();
 			return ride.toBuilder().remainingBudgets(budgets).build();
+		}
+
+		@Override
+		public Ride populateBudgetsInPlace(Ride ride) {
+			// In-place mutation: critical at 30M+ rides where the rebuild path OOMs at 64GB.
+			double[] budgets = Arrays.stream(ride.getRequests())
+					.mapToDouble(r -> r.budget)
+					.toArray();
+			ride.setRemainingBudgets(budgets);
+			return ride;
 		}
 
 		@Override
