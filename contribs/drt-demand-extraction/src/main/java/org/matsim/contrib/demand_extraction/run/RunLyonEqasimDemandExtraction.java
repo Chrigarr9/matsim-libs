@@ -65,13 +65,18 @@ public class RunLyonEqasimDemandExtraction {
 		 *  (OnlyTimeDependentTravelDisutility). Eliminates thread-local SpeedyALT variation
 		 *  for uncovered segments, making parallel runs byte-identical. */
 		public final boolean deterministicRouting;
+		/** Override maxPoolingDegree. -1 = keep config/profile default. Use 1 to skip
+		 *  pair generation entirely (drt_requests.csv + singles only — fast path for
+		 *  regenerating the requests CSV). */
+		public final int maxPoolingDegree;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
 				double minDrtCostPerKm, int pruningCoverageK,
 				ExMasConfigGroup.Algorithm algorithm, AlgorithmProfile profile,
 				double tripFilterRadiusKm, boolean noExclusionZone,
-				boolean noPredecessors, boolean noShapley, boolean deterministicRouting) {
+				boolean noPredecessors, boolean noShapley, boolean deterministicRouting,
+				int maxPoolingDegree) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -88,6 +93,7 @@ public class RunLyonEqasimDemandExtraction {
 			this.noPredecessors = noPredecessors;
 			this.noShapley = noShapley;
 			this.deterministicRouting = deterministicRouting;
+			this.maxPoolingDegree = maxPoolingDegree;
 		}
 	}
 
@@ -108,6 +114,7 @@ public class RunLyonEqasimDemandExtraction {
 		boolean noPredecessors = false;
 		boolean noShapley = false;
 		boolean deterministicRouting = false;
+		int maxPoolingDegree = -1;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -126,6 +133,7 @@ public class RunLyonEqasimDemandExtraction {
 				case "--no-predecessors" -> noPredecessors = true;
 				case "--no-shapley" -> noShapley = true;
 				case "--deterministic-routing" -> deterministicRouting = true;
+				case "--max-pooling-degree" -> maxPoolingDegree = Integer.parseInt(args[++i]);
 				case "--profile" -> profile = switch (args[++i].toUpperCase()) {
 					case "R1" -> AlgorithmProfile.R1;
 					case "R2" -> AlgorithmProfile.R2;
@@ -138,7 +146,8 @@ public class RunLyonEqasimDemandExtraction {
 		}
 		return new ParsedArgs(sample, scenarioDir, prefix, travelTimesPath, outputDir,
 				searchHorizon, maxDetourFactor, minDrtCostPerKm, pruningCoverageK, algorithm, profile,
-				tripFilterRadiusKm, noExclusionZone, noPredecessors, noShapley, deterministicRouting);
+				tripFilterRadiusKm, noExclusionZone, noPredecessors, noShapley, deterministicRouting,
+				maxPoolingDegree);
 	}
 
 	public static void main(String[] args) throws Exception {
@@ -151,7 +160,8 @@ public class RunLyonEqasimDemandExtraction {
 					+ "[--search-horizon <s>] [--max-detour-factor <f>] "
 					+ "[--min-drt-cost-per-km <eur>] [--pruning-coverage-k <int>] "
 					+ "[--trip-filter-radius-km <km>] [--no-exclusion-zone] "
-					+ "[--no-predecessors] [--no-shapley] [--deterministic-routing]");
+					+ "[--no-predecessors] [--no-shapley] [--deterministic-routing] "
+					+ "[--max-pooling-degree <int>]");
 			System.exit(1);
 		}
 
@@ -219,6 +229,10 @@ public class RunLyonEqasimDemandExtraction {
 		if (p.deterministicRouting) {
 			log.info("  Override: deterministic routing enabled (shared locked router, time-only disutility)");
 			exMas.setUseDeterministicNetworkRouting(true);
+		}
+		if (p.maxPoolingDegree > 0) {
+			log.info("  Override: maxPoolingDegree = {}", p.maxPoolingDegree);
+			exMas.setMaxPoolingDegree(p.maxPoolingDegree);
 		}
 	}
 }

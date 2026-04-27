@@ -55,20 +55,38 @@ public record AlgorithmProfile(
 			new AlgorithmProfile("R4", Algorithm.BAMAS, true, false, false, Integer.MAX_VALUE);
 
 	/**
-	 * Apply this profile to {@code config}. Overrides only the algorithm + pruning
-	 * knobs; all other ExMAS settings are left intact so each scenario fixture's
-	 * domain choices survive.
+	 * Production-default heuristic distance-savings log-scale (matches
+	 * {@code LyonEqasimScenarioFixture} and {@code RunBavaria*}). Used when
+	 * {@code heuristicPruningEnabled=true} to make {@link #apply} idempotent —
+	 * otherwise sequential profile applications on the same {@link Config} (e.g.
+	 * R2 → R3 in the Lyon comparison test) would leave the gate disabled because
+	 * R2 sets scale=-1 and R3 never restores it. {@code RunKelheimDemandExtraction}
+	 * uses 0.25 outside this profile path.
+	 */
+	private static final double HEURISTIC_SCALE_PRODUCTION_DEFAULT = 0.15;
+
+	/** Production-default top-K coverage (matches {@code ExMasConfigGroup} default). */
+	private static final int COVERAGE_TOPK_PRODUCTION_DEFAULT = 20;
+
+	/**
+	 * Apply this profile to {@code config}. Idempotent across sequential calls on
+	 * the same {@link Config}: every relevant pruning knob is written in BOTH the
+	 * enabled and disabled directions, so a later {@code R3.apply()} fully
+	 * recovers from an earlier {@code R2.apply()} (and vice-versa). Other ExMAS
+	 * settings are left intact so scenario-fixture domain choices survive.
 	 */
 	public void apply(Config config) {
 		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		exMas.setAlgorithm(algorithm);
 		exMas.setHeuristicPruningEnabled(heuristicPruningEnabled);
-		if (!heuristicPruningEnabled) {
-			// BamasEngine's pair-level distance-savings gate condition is `scale >= 0`.
-			// Setting scale=-1 makes the condition false, skipping the gate entirely.
-			exMas.setPruningDistanceSavingsLogScale(-1.0);
-		}
-		if (!postExtensionPruningEnabled) {
+		// BamasEngine's pair-level distance-savings gate condition is `scale >= 0`.
+		// scale=-1 disables; scale>=0 enables (production default 0.15).
+		exMas.setPruningDistanceSavingsLogScale(
+				heuristicPruningEnabled ? HEURISTIC_SCALE_PRODUCTION_DEFAULT : -1.0);
+		if (postExtensionPruningEnabled) {
+			exMas.setPruningMode(PruningMode.COVERAGE_TOPK);
+			exMas.setPruningCoverageK(COVERAGE_TOPK_PRODUCTION_DEFAULT);
+		} else {
 			exMas.setPruningMode(PruningMode.RATIO_THRESHOLD);
 			exMas.setInterDegreeKeepFraction(1.0);
 		}

@@ -145,8 +145,10 @@ class ExMasLyonR1R2FastComparisonTest {
 			// maxPoolingDegree to Integer.MAX_VALUE, which would otherwise wipe the cap.
 			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
 			exMasConfig.setAlgorithmProcessCount(-1); // -1 = all cores; parallel SpeedyALT is byte-deterministic
-			log.info("R1 config: algorithm={}, processCount={}, maxPoolingDegree={}",
-					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree());
+			log.info("R1 config: algorithm={}, processCount={}, maxPoolingDegree={}, distScale={}, pruningMode={}, K={}, keepFrac={}",
+					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree(),
+					exMasConfig.getPruningDistanceSavingsLogScale(), exMasConfig.getPruningMode(),
+					exMasConfig.getPruningCoverageK(), exMasConfig.getInterDegreeKeepFraction());
 
 			List<Ride> r1Rides = new ExMasReferenceEngine(
 					cache, validator,
@@ -168,8 +170,10 @@ class ExMasLyonR1R2FastComparisonTest {
 			AlgorithmProfile.R2.apply(config);
 			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
 			exMasConfig.setAlgorithmProcessCount(-1);
-			log.info("R2 config: algorithm={}, processCount={}, maxPoolingDegree={}",
-					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree());
+			log.info("R2 config: algorithm={}, processCount={}, maxPoolingDegree={}, distScale={}, pruningMode={}, K={}, keepFrac={}",
+					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree(),
+					exMasConfig.getPruningDistanceSavingsLogScale(), exMasConfig.getPruningMode(),
+					exMasConfig.getPruningCoverageK(), exMasConfig.getInterDegreeKeepFraction());
 
 			List<Ride> r2Rides = new BamasEngine(
 					cache, validator,
@@ -190,8 +194,10 @@ class ExMasLyonR1R2FastComparisonTest {
 			AlgorithmProfile.R3.apply(config);
 			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
 			exMasConfig.setAlgorithmProcessCount(-1);
-			log.info("R3 config: algorithm={}, processCount={}, maxPoolingDegree={}",
-					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree());
+			log.info("R3 config: algorithm={}, processCount={}, maxPoolingDegree={}, distScale={}, pruningMode={}, K={}, keepFrac={}",
+					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree(),
+					exMasConfig.getPruningDistanceSavingsLogScale(), exMasConfig.getPruningMode(),
+					exMasConfig.getPruningCoverageK(), exMasConfig.getInterDegreeKeepFraction());
 
 			List<Ride> r3Rides = new BamasEngine(
 					cache, validator,
@@ -212,8 +218,10 @@ class ExMasLyonR1R2FastComparisonTest {
 			AlgorithmProfile.R4.apply(config);
 			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
 			exMasConfig.setAlgorithmProcessCount(-1);
-			log.info("R4 config: algorithm={}, processCount={}, maxPoolingDegree={}",
-					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree());
+			log.info("R4 config: algorithm={}, processCount={}, maxPoolingDegree={}, distScale={}, pruningMode={}, K={}, keepFrac={}",
+					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree(),
+					exMasConfig.getPruningDistanceSavingsLogScale(), exMasConfig.getPruningMode(),
+					exMasConfig.getPruningCoverageK(), exMasConfig.getInterDegreeKeepFraction());
 
 			List<Ride> r4Rides = new BamasEngine(
 					cache, validator,
