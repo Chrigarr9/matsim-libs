@@ -101,11 +101,15 @@ class ExMasLyonR1R2FastComparisonTest {
 
 		// ── 2. Routing — FreeSpeedTravelTime + SpeedyALT via test constructor ────
 		// Mirrors the production routing combination (SpeedyALT cache-miss + LeastCostPathTree
-		// batch SSSP). Determinism is verified by RoutingDeterminismTest: parallel SpeedyALT
-		// is byte-identical to sequential under OnlyTimeDependent on Lyon (1000 OD pairs, 8 threads).
+		// batch SSSP). The "Deterministic" variant adds the production safeguards
+		// (single shared SpeedyALT + time-distance tie-breaking) needed for deterministic routing — the
+		// chain script (run_lyon10pct_chain.sh) runs R1 and R2 in *separate* mvn invocations,
+		// and without those safeguards a handful of pair rides at the feasibility boundary
+		// flip between JVMs (R1 v8: 182,509 pairs vs R2 v9: 182,506 pairs from identical inputs),
+		// cascading via the directional shareability graph into per-degree set deltas.
 		TravelTime tt = new FreeSpeedTravelTime();
 		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
-		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture.createWithSpeedyAltRouting(network, tt, td, 900);
+		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
 
 		// ── 3. Requests from CSV (bypasses the ~20-min mode-routing-cache phase) ─
 		List<DrtRequest> requests = loadRequestsFromCsv(requestsCsv, network);
@@ -116,15 +120,21 @@ class ExMasLyonR1R2FastComparisonTest {
 		exMasConfig.setCalcPredecessors(false);
 		exMasConfig.setCalcShapleyValues(false);
 
-		// Optional override: -DmaxPoolingDegree=N caps both R1 and R2 at degree N. Used
-		// for the R1 d≤4 run (R1 OOMs at d5 even with 100GB heap; cap at 4 produces a
-		// clean R1 ride CSV for R1↔R2 completeness comparison at degrees 2-4).
+		// Optional overrides:
+		//   -DmaxPoolingDegree=N    caps every engine (R1, R2, R3, R4) at degree N.
+		//   -DmaxPoolingDegreeR1=N  caps R1 only — used by the single-JVM chain so R1 stops
+		//                           at d=4 (avoids OOM) while R2/R3/R4 saturate at d=14.
+		//   -DmaxPoolingDegreeR2=N / R3 / R4 likewise per-engine.
+		// Per-engine value falls back to the global `maxPoolingDegree` (then to the engine's
+		// configured default) if not set. Required because the chain runs all four engines
+		// in one mvn invocation — a separate JVM per engine drifts via SpeedyALT landmark
+		// non-determinism (~10 pairs / 180k = 0.006% at Lyon 10%, but cascades into
+		// per-degree set deltas via the directional shareability graph).
 		int maxPoolingDegreeOverride = Integer.getInteger("maxPoolingDegree", -1);
-		if (maxPoolingDegreeOverride > 0) {
-			log.info("Overriding maxPoolingDegree from {} to {} (-DmaxPoolingDegree)",
-					exMasConfig.getMaxPoolingDegree(), maxPoolingDegreeOverride);
-			exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
-		}
+		int maxPoolingDegreeR1 = Integer.getInteger("maxPoolingDegreeR1", maxPoolingDegreeOverride);
+		int maxPoolingDegreeR2 = Integer.getInteger("maxPoolingDegreeR2", maxPoolingDegreeOverride);
+		int maxPoolingDegreeR3 = Integer.getInteger("maxPoolingDegreeR3", maxPoolingDegreeOverride);
+		int maxPoolingDegreeR4 = Integer.getInteger("maxPoolingDegreeR4", maxPoolingDegreeOverride);
 
 		// ── 5. Passthrough budget validator ──────────────────────────────────────
 		// maxTravelTime (geometric constraint) is enforced by PairGenerator before
@@ -137,13 +147,14 @@ class ExMasLyonR1R2FastComparisonTest {
 		boolean runR3 = Boolean.getBoolean("runR3");
 		boolean runR4 = Boolean.getBoolean("runR4");
 		Path r1Csv = outputDir.resolve("r1_rides.csv");
+		int r1MaxDegree = 0;
 
 		if (!skipR1) {
 			// ── 6. R1: ExMAS reference, parallel ─────────────────────────────────────
 			AlgorithmProfile.R1.apply(config);
 			// Re-apply maxPoolingDegree override AFTER profile.apply() — the profile resets
 			// maxPoolingDegree to Integer.MAX_VALUE, which would otherwise wipe the cap.
-			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
+			if (maxPoolingDegreeR1 > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeR1);
 			exMasConfig.setAlgorithmProcessCount(-1); // -1 = all cores; parallel SpeedyALT is byte-deterministic
 			log.info("R1 config: algorithm={}, processCount={}, maxPoolingDegree={}, distScale={}, pruningMode={}, K={}, keepFrac={}",
 					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree(),
@@ -156,6 +167,7 @@ class ExMasLyonR1R2FastComparisonTest {
 					exMasConfig.getMaxPoolingDegree(),
 					exMasConfig)
 					.run(new ArrayList<>(requests));
+			r1MaxDegree = r1Rides.stream().mapToInt(Ride::getDegree).max().orElse(0);
 			log.info("R1: {} total rides", r1Rides.size());
 			ExMasCsvWriter.writeRides(r1Csv.toString(), r1Rides);
 		} else {
@@ -168,7 +180,7 @@ class ExMasLyonR1R2FastComparisonTest {
 			// Shares the warmed-up routing cache from R1 — identical routing for any
 			// segment already computed; new segments use thread-local SpeedyALT instances.
 			AlgorithmProfile.R2.apply(config);
-			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
+			if (maxPoolingDegreeR2 > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeR2);
 			exMasConfig.setAlgorithmProcessCount(-1);
 			log.info("R2 config: algorithm={}, processCount={}, maxPoolingDegree={}, distScale={}, pruningMode={}, K={}, keepFrac={}",
 					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree(),
@@ -188,11 +200,11 @@ class ExMasLyonR1R2FastComparisonTest {
 		}
 
 		if (runR3) {
-			// ── 7b. R3: BAMAS heuristic-only distance-gate ablation (in-DFS gate ON,
-			// post-extension pruner OFF). Sits between R2 (no pruning) and R4 (full
-			// production pruning) in the layered C3 progression R2 ⊂ R3 ⊂ R4.
+			// ── 7b. R3: BAMAS distance-only / heuristic-only pruning (heuristic gate ON,
+			// post-extension OFF). This is the first pruning layer after R2, isolating
+			// the in-DFS distance gate before adding the top-K post-extension pruner.
 			AlgorithmProfile.R3.apply(config);
-			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
+			if (maxPoolingDegreeR3 > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeR3);
 			exMasConfig.setAlgorithmProcessCount(-1);
 			log.info("R3 config: algorithm={}, processCount={}, maxPoolingDegree={}, distScale={}, pruningMode={}, K={}, keepFrac={}",
 					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree(),
@@ -211,12 +223,12 @@ class ExMasLyonR1R2FastComparisonTest {
 		}
 
 		if (runR4) {
-			// ── 7c. R4: BAMAS production-default pruning (heuristic in-DFS gate ON +
-			// post-extension COVERAGE_TOPK with K=20). The profile fed to the Python
-			// MIP optimiser. Re-applies the profile after R3 to flip the post-extension
-			// flag back on.
+			// ── 7c. R4: BAMAS production-default pruning (distance gate + top-K coverage).
+			// Adds the second pruning layer on top of R3 and is the profile fed to the
+			// Python MIP optimiser. Re-applies the profile after R3 so the post-extension
+			// pruner is explicitly restored when running both in one JVM.
 			AlgorithmProfile.R4.apply(config);
-			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
+			if (maxPoolingDegreeR4 > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeR4);
 			exMasConfig.setAlgorithmProcessCount(-1);
 			log.info("R4 config: algorithm={}, processCount={}, maxPoolingDegree={}, distScale={}, pruningMode={}, K={}, keepFrac={}",
 					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree(),
@@ -238,7 +250,7 @@ class ExMasLyonR1R2FastComparisonTest {
 			// ── 8. Compare canonical ride sets ───────────────────────────────────────
 			// relTol=1e-9: with identical SpeedyALT routing and a shared cache, distances
 			// for the same canonical set must be bit-identical between R1 and R2.
-			GoldenAsserter.assertEquivalent(r1Csv, r2Csv, 1e-9);
+			GoldenAsserter.assertEquivalent(r1Csv, r2Csv, 1e-9, r1MaxDegree);
 		}
 	}
 

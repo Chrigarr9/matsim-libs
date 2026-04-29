@@ -108,8 +108,43 @@ public class MatsimNetworkCacheBatchTest {
 		assertTrue(nearbyBatch.isReachable(), "Nearby should be reachable with tight bound");
 		assertEquals(nearbyPtp.getTravelTime(), nearbyBatch.getTravelTime(), 1e-9);
 
-		TravelSegment farBatch = cache.getSegment(origin, far, departureTime);
-		assertFalse(farBatch.isReachable(), "Far target should be unreachable with tight bound");
+		TravelSegment farCached = MatsimNetworkCacheTestFixture.peek(cache, origin, far,
+				(int) (departureTime / 900));
+		assertNull(farCached, "Far target should remain absent after tight-bound batch precompute");
+
+		TravelSegment farLookup = cache.getSegment(origin, far, departureTime);
+		assertTrue(farLookup.isReachable(), "Far target should still be routable on demand after batch miss");
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	void batchPrecomputeDoesNotCacheForbiddenAdjacentTurnAsReachable() {
+		Network network = buildForbiddenAdjacentTurnNetwork();
+		var tt = new FreeSpeedTravelTime();
+		var td = new OnlyTimeDependentTravelDisutility(tt);
+		MatsimNetworkCache localCache = MatsimNetworkCacheTestFixture
+				.createWithRouting(network, tt, td, 900);
+
+		Id<Link> origin = Id.createLinkId("12");
+		Id<Link> target = Id.createLinkId("23");
+		double departureTime = 8 * 3600;
+
+		TravelSegment pointToPoint = localCache.getSegment(origin, target, departureTime);
+		assertFalse(pointToPoint.isReachable(),
+				"Direct link-to-link routing should respect the forbidden immediate turn");
+
+		localCache.clearCache();
+		Id<Link>[] targets = new Id[] { target };
+		localCache.batchPrecompute(origin, departureTime, targets, 600.0);
+
+		TravelSegment cachedAfterBatch = MatsimNetworkCacheTestFixture.peek(localCache, origin, target,
+				(int) (departureTime / 900));
+		assertTrue(cachedAfterBatch == null || !cachedAfterBatch.isReachable(),
+				"batchPrecompute must not materialize a reachable segment for a forbidden adjacent turn");
+
+		TravelSegment afterBatchLookup = localCache.getSegment(origin, target, departureTime);
+		assertFalse(afterBatchLookup.isReachable(),
+				"Lookup after batch precompute must remain unreachable for a forbidden adjacent turn");
 	}
 
 	/**
@@ -142,6 +177,24 @@ public class MatsimNetworkCacheBatchTest {
 				}
 			}
 		}
+
+		return network;
+	}
+
+	private static Network buildForbiddenAdjacentTurnNetwork() {
+		Network network = NetworkUtils.createNetwork();
+		Node n1 = NetworkUtils.createAndAddNode(network, Id.createNodeId("1"), new Coord(0, 0));
+		Node n2 = NetworkUtils.createAndAddNode(network, Id.createNodeId("2"), new Coord(100, 0));
+		Node n3 = NetworkUtils.createAndAddNode(network, Id.createNodeId("3"), new Coord(200, 0));
+
+		Link link12 = NetworkUtils.createAndAddLink(network, Id.createLinkId("12"), n1, n2,
+				100.0, 10.0, 1000.0, 1.0);
+		Link link23 = NetworkUtils.createAndAddLink(network, Id.createLinkId("23"), n2, n3,
+				100.0, 10.0, 1000.0, 1.0);
+
+		link12.setAllowedModes(Set.of(TransportMode.car));
+		link23.setAllowedModes(Set.of(TransportMode.car));
+		NetworkUtils.addDisallowedNextLinks(link12, TransportMode.car, List.of(link23.getId()));
 
 		return network;
 	}

@@ -39,6 +39,12 @@ public final class GoldenAsserter {
 
 	public static void assertEquivalent(Path golden, Path actual, double relTol)
 			throws IOException {
+		assertEquivalent(golden, actual, relTol, Integer.MAX_VALUE);
+	}
+
+	public static void assertEquivalent(Path golden, Path actual, double relTol,
+			int maxDegreeInclusive)
+			throws IOException {
 		Map<RequestSet, Double> goldenBest = bestDistancePerSet(golden);
 		Map<RequestSet, Double> actualBest = bestDistancePerSet(actual);
 
@@ -50,6 +56,7 @@ public final class GoldenAsserter {
 		Set<Integer> allDegrees = new TreeSet<>();
 		allDegrees.addAll(goldenByDegree.keySet());
 		allDegrees.addAll(actualByDegree.keySet());
+		allDegrees.removeIf(d -> d > maxDegreeInclusive);
 
 		for (int d : allDegrees) {
 			Set<RequestSet> g = goldenByDegree.getOrDefault(d, Set.of());
@@ -72,6 +79,7 @@ public final class GoldenAsserter {
 		// Distance comparison on common sets
 		int distMismatches = 0;
 		for (RequestSet set : goldenBest.keySet()) {
+			if (set.degree > maxDegreeInclusive) continue;
 			if (!actualBest.containsKey(set)) continue;
 			double gd = goldenBest.get(set);
 			double ad = actualBest.get(set);

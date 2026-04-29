@@ -7,6 +7,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
 /**
  * Degree-specific feasible-set index for higher-degree candidate generation.
@@ -14,9 +15,8 @@ import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
  * <p>Built from constraint-feasible sets at degree k, used to generate
  * degree-(k+1) candidates. For each (k-1)-subset of a feasible set, records
  * which extra elements extended it into a feasible k-set. When extending a
- * k-set at the next degree, we intersect the extension lists from its
- * k (k-1)-subsets: an element that appears in all k lists is guaranteed to
- * form a feasible k-sub-set with every combination of k-1 existing elements.
+ * k-set at the next degree, a candidate extension must be supported by every
+ * (k-1)-subset of the base set.
  *
  * <p>This replaces pair-graph-based candidate generation at degree 4+.
  * The shareability graph is still needed for FIFO/LIFO ordering constraints.
@@ -25,20 +25,30 @@ public final class DegreeGraph {
 
     private final int degree;
     private final Long2ObjectOpenHashMap<int[]> extensionIndex;
+    private final LongOpenHashSet feasibleSetHashes;
 
-    private DegreeGraph(int degree, Long2ObjectOpenHashMap<int[]> extensionIndex) {
+    private DegreeGraph(int degree, Long2ObjectOpenHashMap<int[]> extensionIndex,
+                        LongOpenHashSet feasibleSetHashes) {
         this.degree = degree;
         this.extensionIndex = extensionIndex;
+        this.feasibleSetHashes = feasibleSetHashes;
     }
 
     public int getDegree() { return degree; }
+
+    /** Return true if the exact sorted request set exists in this degree catalog. */
+    public boolean containsSet(int[] sortedSet) {
+        if (sortedSet.length != degree) return false;
+        return feasibleSetHashes.contains(hashRequestSet(sortedSet));
+    }
 
     /**
      * Find all requests that extend baseSet into a feasible (degree+1)-set.
      *
      * <p>For each (k-1)-subset of baseSet, looks up extension elements in the index.
-     * Returns the intersection of all k lists, minus base set elements.
-     * This guarantees ALL k+1 sub-sets of the result are feasible.
+     * Returns extension elements present in every subset's extension list, minus base set
+     * elements. This preserves the BAMAS downward-closure invariant: a feasible
+     * (k+1)-set is generated only when all of its k-subsets were feasible.
      *
      * @param baseSet sorted request indices of size {@code degree}
      * @return sorted extension request indices (may be empty)
@@ -49,24 +59,50 @@ public final class DegreeGraph {
             throw new IllegalArgumentException("Base set size " + k + " != graph degree " + degree);
         }
 
-        // Look up k extension lists (one per (k-1)-subset)
-        int[][] lists = new int[k][];
+        int[] intersection = null;
         for (int skip = 0; skip < k; skip++) {
             long subHash = hashSubsetSkipping(baseSet, skip);
             int[] extensions = extensionIndex.get(subHash);
             if (extensions == null) return EMPTY;
-            lists[skip] = extensions;
+            intersection = intersection == null
+                    ? extensions.clone()
+                    : intersectSorted(intersection, extensions);
+            if (intersection.length == 0) return EMPTY;
         }
 
-        // k-way sorted intersection
-        int[] result = lists[0];
-        for (int i = 1; i < k; i++) {
-            result = intersectSorted(result, lists[i]);
-            if (result.length == 0) return EMPTY;
+        if (intersection == null || intersection.length == 0) return EMPTY;
+        int[] result = intersection;
+        int unique = 0;
+        for (int i = 0; i < result.length; i++) {
+            if (Arrays.binarySearch(baseSet, result[i]) < 0
+                    && (unique == 0 || result[i] != result[unique - 1])) {
+                result[unique++] = result[i];
+            }
+        }
+        return unique == 0 ? EMPTY : Arrays.copyOf(result, unique);
+    }
+
+    private static int[] intersectSorted(int[] left, int[] right) {
+        int[] result = new int[Math.min(left.length, right.length)];
+        int leftIndex = 0;
+        int rightIndex = 0;
+        int resultSize = 0;
+
+        while (leftIndex < left.length && rightIndex < right.length) {
+            int leftValue = left[leftIndex];
+            int rightValue = right[rightIndex];
+            if (leftValue == rightValue) {
+                result[resultSize++] = leftValue;
+                leftIndex++;
+                rightIndex++;
+            } else if (leftValue < rightValue) {
+                leftIndex++;
+            } else {
+                rightIndex++;
+            }
         }
 
-        // Remove base set elements
-        return removeSorted(result, baseSet);
+        return resultSize == result.length ? result : Arrays.copyOf(result, resultSize);
     }
 
     /**
@@ -82,6 +118,7 @@ public final class DegreeGraph {
      */
     public static DegreeGraph buildFromRides(Collection<Ride> rides, int degree) {
         Long2ObjectOpenHashMap<int[]> extIndex = new Long2ObjectOpenHashMap<>();
+        LongOpenHashSet feasibleSetHashes = new LongOpenHashSet(rides.size());
 
         int estimatedBuckets = rides.size() * degree;
         Long2ObjectOpenHashMap<IntArrayList> tempIndex =
@@ -94,6 +131,7 @@ public final class DegreeGraph {
 
             int[] sorted = reqIndices.clone();
             Arrays.sort(sorted);
+            feasibleSetHashes.add(hashRequestSet(sorted));
 
             // For each element, hash the (k-1)-subset without it and record extensibility.
             for (int skip = 0; skip < k; skip++) {
@@ -110,7 +148,7 @@ public final class DegreeGraph {
             extIndex.put(entry.getLongKey(), arr);
         }
 
-        return new DegreeGraph(degree, extIndex);
+        return new DegreeGraph(degree, extIndex, feasibleSetHashes);
     }
 
     // --- Utility methods ---
@@ -135,29 +173,4 @@ public final class DegreeGraph {
         return h;
     }
 
-    private static int[] intersectSorted(int[] a, int[] b) {
-        int[] buf = new int[Math.min(a.length, b.length)];
-        int ai = 0, bi = 0, ri = 0;
-        while (ai < a.length && bi < b.length) {
-            if (a[ai] < b[bi]) ai++;
-            else if (a[ai] > b[bi]) bi++;
-            else { buf[ri++] = a[ai]; ai++; bi++; }
-        }
-        return ri == buf.length ? buf : Arrays.copyOf(buf, ri);
-    }
-
-    private static int[] removeSorted(int[] source, int[] toRemove) {
-        int[] buf = new int[source.length];
-        int si = 0, ri = 0, wi = 0;
-        while (si < source.length) {
-            if (ri < toRemove.length && source[si] == toRemove[ri]) {
-                si++; ri++;
-            } else if (ri < toRemove.length && source[si] > toRemove[ri]) {
-                ri++;
-            } else {
-                buf[wi++] = source[si++];
-            }
-        }
-        return wi == buf.length ? buf : Arrays.copyOf(buf, wi);
-    }
 }

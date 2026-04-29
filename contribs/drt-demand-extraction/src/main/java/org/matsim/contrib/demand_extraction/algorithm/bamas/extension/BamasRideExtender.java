@@ -49,6 +49,7 @@ public final class BamasRideExtender {
 	private final Map<Integer, DrtRequest> requestMap;
 	private final ExMasConfigGroup exMasConfig;
 	private static final double EPSILON = 1e-9;
+	private static final double TIME_FEASIBILITY_EPSILON = 1.0;
 
 	// DegreeGraph from previous degree for candidate generation (null at degree 3)
 	private final DegreeGraph prevDegreeGraph;
@@ -608,7 +609,7 @@ public final class BamasRideExtender {
 
 	private double[] optimizeDelays(double[] delays, double[] maxNeg, double[] maxPos) {
 		for (int i = 0; i < delays.length; i++) {
-			if (maxPos[i] < -maxNeg[i]) return null;
+			if (maxPos[i] < -maxNeg[i] - TIME_FEASIBILITY_EPSILON) return null;
 		}
 
 		double lower = Double.NEGATIVE_INFINITY, upper = Double.POSITIVE_INFINITY;
@@ -617,7 +618,7 @@ public final class BamasRideExtender {
 			upper = Math.min(upper, maxPos[i] - delays[i]);
 		}
 
-		if (lower > upper + EPSILON) return null;
+		if (lower > upper + TIME_FEASIBILITY_EPSILON) return null;
 
 		double maxDelay = Double.NEGATIVE_INFINITY, minDelay = Double.POSITIVE_INFINITY;
 		for (double d : delays) {
@@ -631,7 +632,8 @@ public final class BamasRideExtender {
 		double[] adjusted = new double[delays.length];
 		for (int i = 0; i < delays.length; i++) {
 			adjusted[i] = delays[i] + depOpt;
-			if (adjusted[i] < -maxNeg[i] - EPSILON || adjusted[i] > maxPos[i] + EPSILON) return null;
+			if (adjusted[i] < -maxNeg[i] - TIME_FEASIBILITY_EPSILON
+					|| adjusted[i] > maxPos[i] + TIME_FEASIBILITY_EPSILON) return null;
 		}
 		return adjusted;
 	}

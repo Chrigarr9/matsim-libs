@@ -34,11 +34,11 @@ import it.unimi.dsi.fastutil.ints.IntList;
  * <ul>
  *   <li><b>Travel-time Check A/B/Dropoff</b>: prune when any picked-up passenger's
  *       in-vehicle time would exceed their {@code maxTravelTime}.</li>
- *   <li><b>Delay-window intersection</b>: maintain the running feasible
- *       departure-offset interval across all picked-up and dropped-off passengers
- *       (sound over-approximation at origin placement, exact value at dropoff).
- *       Prune when the intersection goes empty — no single departure can satisfy
- *       all passengers' delay windows simultaneously.</li>
+	 *   <li><b>Delay-window intersection</b>: maintain the running feasible
+	 *       departure-offset interval across all picked-up and dropped-off passengers
+	 *       (sound over-approximation at origin placement, exact value at dropoff).
+	 *       Prune when the intersection goes empty — no single departure can satisfy
+	 *       all passengers' delay windows simultaneously.</li>
  *   <li><b>Distance branch-and-bound</b>: track the partial routed distance; prune
  *       when {@code partialDist > bestValidDist[0]} (the shortest valid ride found
  *       so far for this set). Candidates are sorted by next-segment distance so
@@ -47,8 +47,8 @@ import it.unimi.dsi.fastutil.ints.IntList;
  */
 public final class OrderingEnumerator {
 
-	/** Feasibility tolerance for delay-window intersection check (seconds). */
-	private static final double DELAY_WINDOW_EPSILON = 1e-6;
+	/** Feasibility tolerance for routed-time and delay-window checks (seconds). */
+	private static final double TIME_FEASIBILITY_EPSILON = 1.0;
 
 	/** Pairwise constraint: which FIFO/LIFO pair ride kinds exist in each direction */
 	public record PairInfo(
@@ -343,7 +343,7 @@ public final class OrderingEnumerator {
 			EnumerationStats stats = EnumerationStats.get();
 			for (int p = 0; p < depth; p++) {
 				double inVehicle = currentTime - pickupTimes[perm[p]];
-				if (inVehicle > requests[perm[p]].getMaxTravelTime()) {
+				if (inVehicle > requests[perm[p]].getMaxTravelTime() + TIME_FEASIBILITY_EPSILON) {
 					stats.prunedByTravelTime++;
 					return;
 				}
@@ -397,7 +397,7 @@ public final class OrderingEnumerator {
 						- Math.max(0.0, reqC.getPositiveDelayRelComponent());
 				double newL = currentL > newLowC ? currentL : newLowC;
 				double newU = currentU < newHighC ? currentU : newHighC;
-				if (newL > newU + DELAY_WINDOW_EPSILON) {
+				if (newL > newU + TIME_FEASIBILITY_EPSILON) {
 					EnumerationStats.get().prunedByDelayWindowOrigin++;
 					continue;
 				}
@@ -474,7 +474,7 @@ public final class OrderingEnumerator {
 						- Math.max(0.0, reqC.getPositiveDelayRelComponent())) - delayC;
 				double newL = currentL > newLowC ? currentL : newLowC;
 				double newU = currentU < newHighC ? currentU : newHighC;
-				if (newL > newU + DELAY_WINDOW_EPSILON) {
+				if (newL > newU + TIME_FEASIBILITY_EPSILON) {
 					EnumerationStats.get().prunedByDelayWindowOrigin++;
 					continue;
 				}
@@ -525,7 +525,7 @@ public final class OrderingEnumerator {
 			EnumerationStats stats = EnumerationStats.get();
 			for (int p = 0; p < depth; p++) {
 				double inVehicle = currentTime - pickupTimes[perm[p]];
-				if (inVehicle > requests[perm[p]].getMaxTravelTime()) {
+				if (inVehicle > requests[perm[p]].getMaxTravelTime() + TIME_FEASIBILITY_EPSILON) {
 					stats.prunedByTravelTime++;
 					return;
 				}
@@ -549,16 +549,12 @@ public final class OrderingEnumerator {
 		if (depth == 0) {
 			for (int c : candidates) {
 				DrtRequest reqC = requests[c];
-				// Delay-window contribution at depth 0: delay = 0 (currentTime = reqTime).
-				// Origin-time UB:
-				//   paxLow = -0 - maxNeg = -maxNeg
-				//   paxHigh = (maxPos - max(0, posRelComp)) - 0
 				double newLowC = -reqC.getMaxNegativeDelay();
 				double newHighC = reqC.getMaxPositiveDelay()
 						- Math.max(0.0, reqC.getPositiveDelayRelComponent());
 				double newL = currentL > newLowC ? currentL : newLowC;
 				double newU = currentU < newHighC ? currentU : newHighC;
-				if (newL > newU + DELAY_WINDOW_EPSILON) {
+				if (newL > newU + TIME_FEASIBILITY_EPSILON) {
 					EnumerationStats.get().prunedByDelayWindowOrigin++;
 					continue;
 				}
@@ -596,21 +592,18 @@ public final class OrderingEnumerator {
 				break;
 			}
 
-			// Delay-window feasibility (origin-time over-approximation).
-			// effMaxNeg_UB = maxNegativeDelay (detour → ∞ → negAdj → 0)
-			// effMaxPos_UB = maxPos - max(0, posRelComp) (detour ∈ [0, posRelComp])
-			double newPickupTime = currentTime + seg.getTravelTime();
-			DrtRequest reqC = requests[c];
-			double delayC = newPickupTime - reqC.getRequestTime();
-			double newLowC = -delayC - reqC.getMaxNegativeDelay();
-			double newHighC = (reqC.getMaxPositiveDelay()
-					- Math.max(0.0, reqC.getPositiveDelayRelComponent())) - delayC;
-			double newL = currentL > newLowC ? currentL : newLowC;
-			double newU = currentU < newHighC ? currentU : newHighC;
-			if (newL > newU + DELAY_WINDOW_EPSILON) {
-				EnumerationStats.get().prunedByDelayWindowOrigin++;
-				continue;
-			}
+				double newPickupTime = currentTime + seg.getTravelTime();
+				DrtRequest reqC = requests[c];
+				double delayC = newPickupTime - reqC.getRequestTime();
+				double newLowC = -delayC - reqC.getMaxNegativeDelay();
+				double newHighC = (reqC.getMaxPositiveDelay()
+						- Math.max(0.0, reqC.getPositiveDelayRelComponent())) - delayC;
+				double newL = currentL > newLowC ? currentL : newLowC;
+				double newU = currentU < newHighC ? currentU : newHighC;
+				if (newL > newU + TIME_FEASIBILITY_EPSILON) {
+					EnumerationStats.get().prunedByDelayWindowOrigin++;
+					continue;
+				}
 
 			used[c] = true;
 			perm[depth] = c;
@@ -701,7 +694,7 @@ public final class OrderingEnumerator {
 		for (int p = 0; p < n; p++) {
 			if (used[p]) continue; // already dropped off
 			double inVehicleTime = currentTime - pickupTimes[p];
-			if (inVehicleTime > requests[p].getMaxTravelTime()) {
+			if (inVehicleTime > requests[p].getMaxTravelTime() + TIME_FEASIBILITY_EPSILON) {
 				stats.prunedByTravelTime++;
 				return;
 			}
@@ -745,7 +738,7 @@ public final class OrderingEnumerator {
 			// Check at Dropoff: passenger c's ride is now complete.
 			// Their full in-vehicle time (pickup to this dropoff) must not exceed maxTravelTime.
 			double fullInVehicle = newTime - pickupTimes[c];
-			if (fullInVehicle > requests[c].getMaxTravelTime()) {
+			if (fullInVehicle > requests[c].getMaxTravelTime() + TIME_FEASIBILITY_EPSILON) {
 				stats.prunedByDropoffCheck++;
 				continue;
 			}
@@ -755,7 +748,7 @@ public final class OrderingEnumerator {
 			int bustedVictim = -1;
 			for (int p = 0; p < n; p++) {
 				if (used[p] || p == c) continue; // already dropped off, or being dropped off now
-				if (newTime - pickupTimes[p] > requests[p].getMaxTravelTime()) {
+				if (newTime - pickupTimes[p] > requests[p].getMaxTravelTime() + TIME_FEASIBILITY_EPSILON) {
 					bustedVictim = p;
 					break;
 				}
@@ -782,7 +775,7 @@ public final class OrderingEnumerator {
 			double actualHighC = effMaxPosC - delayC;
 			double newL = currentL > actualLowC ? currentL : actualLowC;
 			double newU = currentU < actualHighC ? currentU : actualHighC;
-			if (newL > newU + DELAY_WINDOW_EPSILON) {
+			if (newL > newU + TIME_FEASIBILITY_EPSILON) {
 				EnumerationStats.get().prunedByDelayWindowDropoff++;
 				continue;
 			}
@@ -908,7 +901,7 @@ public final class OrderingEnumerator {
 		for (int p = 0; p < n; p++) {
 			if (used[p]) continue; // already dropped off
 			double inVehicleTime = currentTime - pickupTimes[p];
-			if (inVehicleTime > requests[p].getMaxTravelTime()) {
+			if (inVehicleTime > requests[p].getMaxTravelTime() + TIME_FEASIBILITY_EPSILON) {
 				stats.prunedByTravelTime++;
 				return;
 			}
@@ -981,7 +974,7 @@ public final class OrderingEnumerator {
 
 				// Check at Dropoff: passenger c's ride is now complete.
 				double fullInVehicle = newTime - pickupTimes[c];
-				if (fullInVehicle > requests[c].getMaxTravelTime()) {
+				if (fullInVehicle > requests[c].getMaxTravelTime() + TIME_FEASIBILITY_EPSILON) {
 					stats.prunedByDropoffCheck++;
 					continue;
 				}
@@ -991,7 +984,7 @@ public final class OrderingEnumerator {
 				int bustedVictim = -1;
 				for (int p = 0; p < n; p++) {
 					if (used[p] || p == c) continue;
-					if (newTime - pickupTimes[p] > requests[p].getMaxTravelTime()) {
+					if (newTime - pickupTimes[p] > requests[p].getMaxTravelTime() + TIME_FEASIBILITY_EPSILON) {
 						bustedVictim = p;
 						break;
 					}
@@ -1015,7 +1008,7 @@ public final class OrderingEnumerator {
 				double actualHighC = effMaxPosC - delayC;
 				double newL = currentL > actualLowC ? currentL : actualLowC;
 				double newU = currentU < actualHighC ? currentU : actualHighC;
-				if (newL > newU + DELAY_WINDOW_EPSILON) {
+				if (newL > newU + TIME_FEASIBILITY_EPSILON) {
 					EnumerationStats.get().prunedByDelayWindowDropoff++;
 					continue;
 				}

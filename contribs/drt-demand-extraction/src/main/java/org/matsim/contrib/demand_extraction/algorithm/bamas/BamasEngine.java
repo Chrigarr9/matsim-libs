@@ -193,12 +193,13 @@ public final class BamasEngine {
 
 		long totalElapsed = System.currentTimeMillis() - algorithmStartTime;
 		double totalSeconds = totalElapsed / 1000.0;
+		int[] rideCounts = summarizeRideCounts(allRides);
 		log.info("");
 		log.info("======================================================================");
 		log.info("ExMAS Algorithm Complete (Door-to-Door)");
 		log.info("  Total D2D rides generated: {}", allRides.size());
 		log.info("  Single: {}, Pairs: {}, Higher: {}",
-				singleRides.size(), pairRides.size(), allRides.size() - singleRides.size() - pairRides.size());
+				rideCounts[0], rideCounts[1], rideCounts[2]);
 		log.info("  Total execution time: {}s", String.format("%.1f", totalSeconds));
 		log.info("======================================================================");
 		org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler
@@ -551,6 +552,24 @@ public final class BamasEngine {
 			default:
 				throw new IllegalStateException("Unknown pruning mode: " + cfg.getPruningMode());
 		}
+	}
+
+	private static int[] summarizeRideCounts(List<Ride> rides) {
+		int singles = 0;
+		int pairs = 0;
+		int higher = 0;
+
+		for (Ride ride : rides) {
+			if (ride.getDegree() == 1) {
+				singles++;
+			} else if (ride.getDegree() == 2) {
+				pairs++;
+			} else {
+				higher++;
+			}
+		}
+
+		return new int[] { singles, pairs, higher };
 	}
 
 	private static double computeRequiredSavingForDegree(int degree, double scale, double maxSaving, int minDegree) {

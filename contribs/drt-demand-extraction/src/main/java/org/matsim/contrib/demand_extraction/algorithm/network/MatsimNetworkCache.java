@@ -6,7 +6,6 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -22,7 +21,6 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.util.StringUtils;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.core.population.PopulationUtils;
-import org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutility;
 import org.matsim.core.router.costcalculators.TravelDisutilityFactory;
 import org.matsim.core.router.speedy.LeastCostPathTree;
 import org.matsim.core.router.speedy.SpeedyALTFactory;
@@ -72,12 +70,13 @@ import com.google.inject.name.Names;
 public class MatsimNetworkCache {
 	
 	private static final Logger log = LogManager.getLogger(MatsimNetworkCache.class);
+	private static final double DETERMINISTIC_TIME_COEF = 1.0;
+	private static final double DETERMINISTIC_DISTANCE_COEF = 1e-9;
 	
 	private final Network network;
 	private final Provider<LeastCostPathCalculator> routerProvider;
 	private final ThreadLocal<LeastCostPathCalculator> threadLocalRouter;
 	private final boolean useSharedDeterministicRouter;
-	private final boolean quantizeDeterministicSegments;
 	private final LeastCostPathCalculator sharedRouter;
 	private final Object routerLock = new Object();
 	private final TravelTime travelTime;
@@ -132,17 +131,7 @@ public class MatsimNetworkCache {
 
 		// Get DRT-specific router provider (uses filtered network)
 		this.routerProvider = injector.getProvider(Key.get(LeastCostPathCalculator.class, Names.named(drtRouterName)));
-		this.threadLocalRouter = ThreadLocal.withInitial(routerProvider::get);
-		// In deterministic mode, avoid subtle per-instance differences from multiple router instances.
-		// Some router implementations (e.g. SpeedyALT) can vary slightly between instances.
-		// We serialize access through a single shared instance to make cached values invariant
-		// to thread scheduling.
 		this.useSharedDeterministicRouter = config.isUseDeterministicNetworkRouting();
-		// Additionally, quantize segment metrics to avoid tiny run-to-run floating drift
-		// (e.g., on multithreaded travel-time aggregation) that can flip 2-decimal CSV rounding.
-		this.quantizeDeterministicSegments = config.isUseDeterministicNetworkRouting();
-		this.sharedRouter = useSharedDeterministicRouter ? routerProvider.get() : null;
-
 		// Try to get DRT-specific TravelTime, fall back to car
 		TravelTime drtTravelTime;
 		try {
@@ -159,12 +148,15 @@ public class MatsimNetworkCache {
 		//
 		// NOTE: DemandExtractionModule sets config.routing().routingRandomness = 0
 		// which ensures deterministic routing while preserving toll/cost calculations.
-		// If useDeterministicNetworkRouting is true, we use OnlyTimeDependentTravelDisutility
-		// which ignores distance/monetary costs entirely (useful for debugging or specific scenarios).
+		// If useDeterministicNetworkRouting is true, use time plus a small distance
+		// tie-breaker. Pure time-only routing admits many equal-time paths, and SpeedyALT
+		// and LeastCostPathTree can choose different representatives for the same OD.
 		TravelDisutility disutility;
 		if (config.isUseDeterministicNetworkRouting()) {
-			log.info("Using time-only network routing (ignores tolls and distance costs)");
-			disutility = new OnlyTimeDependentTravelDisutility(drtTravelTime);
+			log.info("Using deterministic time-distance network routing (ignores tolls, distance coefficient={})",
+					DETERMINISTIC_DISTANCE_COEF);
+			disutility = new TimeDistanceTravelDisutility(drtTravelTime,
+					DETERMINISTIC_TIME_COEF, DETERMINISTIC_DISTANCE_COEF);
 		} else {
 			// Use mode-specific TravelDisutility (captures tolls, deterministic via routingRandomness=0)
 			TravelDisutilityFactory drtDisutilityFactory;
@@ -183,6 +175,18 @@ public class MatsimNetworkCache {
 		this.travelTime = drtTravelTime;
 		this.travelDisutility = disutility;
 		this.timeBinSize = config.getNetworkTimeBinSize();
+
+		final TravelTime routingTravelTime = drtTravelTime;
+		final TravelDisutility routingDisutility = disutility;
+		if (config.isUseDeterministicNetworkRouting()) {
+			SpeedyALTFactory altFactory = new SpeedyALTFactory();
+			this.threadLocalRouter = ThreadLocal.withInitial(() ->
+					altFactory.createPathCalculator(network, routingDisutility, routingTravelTime));
+			this.sharedRouter = altFactory.createPathCalculator(network, routingDisutility, routingTravelTime);
+		} else {
+			this.threadLocalRouter = ThreadLocal.withInitial(routerProvider::get);
+			this.sharedRouter = null;
+		}
 
 		// Create dummy person and vehicle for generic routing
 		// These are required by the router/travel time/disutility calculations
@@ -221,9 +225,8 @@ public class MatsimNetworkCache {
 
 		CacheKey key = new CacheKey(originLinkId, destLinkId, timeBin);
 
-		// Use computeIfAbsent for atomic cache operations
-		// This ensures only ONE thread computes the segment for a given key,
-		// preventing race conditions in the SpeedyALT router
+		// Use computeIfAbsent for atomic cache operations. This ensures only ONE thread
+		// computes the segment for a given key, preventing race conditions in routers.
 		return cache.computeIfAbsent(key, k ->
 				computeSegment(originLinkId, destLinkId, canonicalDepartureTime));
 	}
@@ -294,18 +297,31 @@ public class MatsimNetworkCache {
 				continue;
 			}
 
+			// LeastCostPathTree is node-based. When the target link starts at the same
+			// node where the source link ends, tree state collapses to zero inter-link
+			// cost and cannot encode whether the actual transition onto toLink is legal
+			// (e.g. forbidden immediate turn or only a loop-back path exists). Route
+			// these adjacent link-to-link cases point-to-point instead.
+			if (fromLink.getToNode().getId().equals(toLink.getFromNode().getId())) {
+				cache.put(key, computeSegment(fromLinkId, toLinkId, canonicalDepartureTime));
+				batchSegmentsPopulated.incrementAndGet();
+				continue;
+			}
+
 			int toNodeIdx = toLink.getFromNode().getId().index();
 			OptionalTime time = tree.getTime(toNodeIdx);
 
 			if (time.isDefined()) {
-				double tt = time.seconds() - canonicalDepartureTime;
-				double dist = tree.getDistance(toNodeIdx);
-				double utility = -tree.getCost(toNodeIdx);
-				if (quantizeDeterministicSegments) {
-					tt = quantizeSecondsToTenth(tt);
-					dist = quantizeMetersToCentimeter(dist);
-					utility = quantizeUtilityTo1e4(utility);
-				}
+				// Mirror the convention in computeSegment: add toLink's traversal so each
+				// cache value represents "drive from fromLink.toNode to toLink.toNode".
+				double interLinkTT = time.seconds() - canonicalDepartureTime;
+				double toLinkTT = travelTime.getLinkTravelTime(toLink,
+						time.seconds(), dummyPerson, dummyVehicle);
+				double toLinkDisutility = travelDisutility.getLinkTravelDisutility(toLink,
+						time.seconds(), dummyPerson, dummyVehicle);
+				double tt = interLinkTT + toLinkTT;
+				double dist = tree.getDistance(toNodeIdx) + toLink.getLength();
+				double utility = -(tree.getCost(toNodeIdx) + toLinkDisutility);
 				cache.put(key, new TravelSegment(tt, dist, utility));
 				batchSegmentsPopulated.incrementAndGet();
 			}
@@ -581,11 +597,6 @@ public class MatsimNetworkCache {
 			double linkDisutility = travelDisutility.getLinkTravelDisutility(originLink, departureTime, dummyPerson,
 					dummyVehicle);
 			double utility = -linkDisutility;
-			if (quantizeDeterministicSegments) {
-				linkTravelTime = quantizeSecondsToTenth(linkTravelTime);
-				linkDistance = quantizeMetersToCentimeter(linkDistance);
-				utility = quantizeUtilityTo1e4(utility);
-			}
 			return new TravelSegment(linkTravelTime, linkDistance, utility);
 		}
 		try {
@@ -617,24 +628,25 @@ public class MatsimNetworkCache {
 				routingFailures.incrementAndGet();
 				return createInfinitySegment();
 			}
-			
-			// path.travelTime already includes origin and destination links
-			// path.links already includes all traversed links
-			// Router implementations handle link-to-link travel correctly
-			double tt = path.travelTime;
-			double dist = path.links.stream().mapToDouble(Link::getLength).sum();
 
-			// Network utility: negative of generalized cost (disutility)
-			// This allows sorting by "best" routes (higher utility = better)
-			double disutility = path.travelCost;
-			double utility = -disutility;
+			// MATSim routers (SpeedyALT, SpeedyDijkstra, LeastCostPathTree) all
+			// return path.travelTime measured from fromLink.toNode to toLink.fromNode.
+			// It does NOT include traversal of either fromLink or toLink. We add
+			// toLink's traversal so each cache value represents "drive from event at
+			// fromLink (vehicle at fromLink.toNode) to event at toLink (vehicle at
+			// toLink.toNode)" — matching VrpPaths' "vehicle enters and exits links
+			// at toNode" convention used throughout DVRP/DRT. The first link of any
+			// chain (originsOrdered[0].originLinkId) is never the toLink of any
+			// segment, so its traversal is correctly omitted (the vehicle is assumed
+			// to already be at its toNode at startTime).
+			double toLinkTT = travelTime.getLinkTravelTime(destLink,
+					departureTime + path.travelTime, dummyPerson, dummyVehicle);
+			double toLinkDisutility = travelDisutility.getLinkTravelDisutility(destLink,
+					departureTime + path.travelTime, dummyPerson, dummyVehicle);
+			double tt = path.travelTime + toLinkTT;
+			double dist = path.links.stream().mapToDouble(Link::getLength).sum() + destLink.getLength();
+			double utility = -(path.travelCost + toLinkDisutility);
 
-			if (quantizeDeterministicSegments) {
-				tt = quantizeSecondsToTenth(tt);
-				dist = quantizeMetersToCentimeter(dist);
-				utility = quantizeUtilityTo1e4(utility);
-			}
-			
 			return new TravelSegment(tt, dist, utility);
 			
 		} catch (OutOfMemoryError e) {
@@ -657,39 +669,6 @@ public class MatsimNetworkCache {
 		return TravelSegment.unreachable();
 	}
 
-	private static double quantizeSecondsToTenth(double seconds) {
-		return quantizeTowardZero(seconds, 10.0);
-	}
-
-	private static double quantizeMetersToCentimeter(double meters) {
-		return quantizeTowardZero(meters, 100.0);
-	}
-
-	private static double quantizeUtilityTo1e4(double utility) {
-		return quantizeTowardZero(utility, 10000.0);
-	}
-
-	/**
-	 * Quantizes a value by truncating toward zero on a fixed grid.
-	 * <p>
-	 * We intentionally avoid {@code Math.round(...)} here because tiny run-to-run
-	 * floating drift can flip values across a rounding threshold (e.g. ...3.3499999
-	 * vs ...3.3500001 when quantizing to 0.1), which then propagates into CSV output
-	 * and breaks strict byte-identical determinism.
-	 */
-	private static double quantizeTowardZero(double value, double scale) {
-		if (!Double.isFinite(value)) {
-			return value;
-		}
-
-		double scaled = value * scale;
-		// small epsilon to counter binary representation errors around integer boundaries
-		double eps = 1e-9;
-
-		double truncated = scaled >= 0.0 ? Math.floor(scaled + eps) : Math.ceil(scaled - eps);
-		return truncated / scale;
-	}
-	
 	// ── Test support ─────────────────────────────────────────────────────────
 
 	/**
@@ -720,13 +699,20 @@ public class MatsimNetworkCache {
 		cache.put(new CacheKey(origin, dest, 0), seg);
 	}
 
+	/**
+	 * Read a specific cache slot without triggering routing.
+	 * Intended for diagnostic tests only.
+	 */
+	TravelSegment peekForTesting(Id<Link> origin, Id<Link> dest, int timeBin) {
+		return cache.get(new CacheKey(origin, dest, timeBin));
+	}
+
 	private MatsimNetworkCache() {
 		this.network = null;
 		this.routerProvider = null;
 		this.threadLocalRouter = null;
 		this.threadLocalTree = null;
 		this.useSharedDeterministicRouter = false;
-		this.quantizeDeterministicSegments = false;
 		this.sharedRouter = null;
 		this.travelTime = null;
 		this.travelDisutility = null;
@@ -741,7 +727,7 @@ public class MatsimNetworkCache {
 	 * Defaults to Dijkstra for cache-miss point-to-point routing.
 	 */
 	MatsimNetworkCache(Network network, TravelTime travelTime, TravelDisutility travelDisutility, int timeBinSize) {
-		this(network, travelTime, travelDisutility, timeBinSize, /* useSpeedyAlt= */ false);
+		this(network, travelTime, travelDisutility, timeBinSize, /* useSpeedyAlt= */ false, /* deterministic= */ false);
 	}
 
 	/**
@@ -751,13 +737,38 @@ public class MatsimNetworkCache {
 	 */
 	MatsimNetworkCache(Network network, TravelTime travelTime, TravelDisutility travelDisutility,
 			int timeBinSize, boolean useSpeedyAlt) {
+		this(network, travelTime, travelDisutility, timeBinSize, useSpeedyAlt, /* deterministic= */ false);
+	}
+
+	/**
+	 * Test constructor with selectable cache-miss router AND optional deterministic-mode toggle.
+	 *
+	 * <p>When {@code deterministic=true}, mirrors the production
+	 * {@code useDeterministicNetworkRouting=true} path:
+	 * <ul>
+	 *   <li>Keep raw segment travel-time / distance / utility values, matching production.
+	 *       The cache deliberately avoids per-segment quantization because it is not
+	 *       additive and can make a split route appear
+	 *       shorter than the equivalent direct route at feasibility boundaries.</li>
+	 *   <li>Use the production deterministic time-distance disutility.</li>
+	 *   <li>Route every deterministic cache-miss point-to-point lookup through the
+	 *       same shared SpeedyALT router as production.</li>
+	 * </ul>
+	 *
+	 * <p>{@code deterministic=true} is the right setting for any test that compares
+	 * outputs across separate JVM invocations of the same code (e.g. the Lyon R1/R2/R3
+	 * fast comparison chain).
+	 */
+	MatsimNetworkCache(Network network, TravelTime travelTime, TravelDisutility travelDisutility,
+			int timeBinSize, boolean useSpeedyAlt, boolean deterministic) {
 		this.network = network;
 		this.travelTime = travelTime;
-		this.travelDisutility = travelDisutility;
+		TravelDisutility effectiveTravelDisutility = deterministic
+				? new TimeDistanceTravelDisutility(travelTime, DETERMINISTIC_TIME_COEF, DETERMINISTIC_DISTANCE_COEF)
+				: travelDisutility;
+		this.travelDisutility = effectiveTravelDisutility;
 		this.timeBinSize = timeBinSize;
-		this.useSharedDeterministicRouter = false;
-		this.quantizeDeterministicSegments = false;
-		this.sharedRouter = null;
+		this.useSharedDeterministicRouter = deterministic;
 		this.routerProvider = null;
 		this.routerLock.getClass(); // suppress unused warning
 
@@ -766,16 +777,28 @@ public class MatsimNetworkCache {
 		this.dummyVehicle = VehicleUtils.createVehicle(Id.createVehicleId("test_dummy_vehicle"), dummyType);
 
 		SpeedyGraph speedyGraph = SpeedyGraphBuilder.build(network);
-		if (useSpeedyAlt) {
+		if (deterministic) {
 			SpeedyALTFactory altFactory = new SpeedyALTFactory();
 			this.threadLocalRouter = ThreadLocal.withInitial(() ->
-				altFactory.createPathCalculator(network, travelDisutility, travelTime));
-		} else {
+				altFactory.createPathCalculator(network, effectiveTravelDisutility, travelTime));
+			this.sharedRouter = altFactory.createPathCalculator(network, effectiveTravelDisutility, travelTime);
+		} else if (useSpeedyAlt) {
+			SpeedyALTFactory altFactory = new SpeedyALTFactory();
 			this.threadLocalRouter = ThreadLocal.withInitial(() ->
-				new org.matsim.core.router.DijkstraFactory().createPathCalculator(network, travelDisutility, travelTime));
+				altFactory.createPathCalculator(network, effectiveTravelDisutility, travelTime));
+			this.sharedRouter = deterministic
+					? altFactory.createPathCalculator(network, effectiveTravelDisutility, travelTime)
+					: null;
+		} else {
+			org.matsim.core.router.DijkstraFactory dijkstraFactory = new org.matsim.core.router.DijkstraFactory();
+			this.threadLocalRouter = ThreadLocal.withInitial(() ->
+				dijkstraFactory.createPathCalculator(network, effectiveTravelDisutility, travelTime));
+			this.sharedRouter = deterministic
+					? dijkstraFactory.createPathCalculator(network, effectiveTravelDisutility, travelTime)
+					: null;
 		}
 		this.threadLocalTree = ThreadLocal.withInitial(() ->
-			new LeastCostPathTree(speedyGraph, travelTime, travelDisutility));
+			new LeastCostPathTree(speedyGraph, travelTime, effectiveTravelDisutility));
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────

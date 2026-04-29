@@ -20,13 +20,12 @@ import org.matsim.core.config.ConfigUtils;
  *       state currently expressible via the config; COVERAGE_TOPK always builds
  *       a pruner).</li>
  *   <li><b>R3</b> = BAMAS distance-pruning ablation: heuristic distance gate ON,
- *       post-extension pruner OFF. Sits between R2 (no pruning) and R4 (full
- *       production pruning) so the layered C3 ablation can isolate the in-DFS
- *       distance gate's contribution.</li>
+ *       post-extension pruner OFF. This is the first pruning layer after R2's
+ *       no-pruning baseline and isolates the in-DFS distance gate's contribution.</li>
  *   <li><b>R4</b> = BAMAS with the production-default pruning (heuristic distance
  *       gate ON + post-extension COVERAGE_TOPK with K=20 — Pareto-minimal per
- *       the 2026-04-17 cascade analysis). This is the profile fed to the Python
- *       MIP optimiser.</li>
+ *       the 2026-04-17 cascade analysis). This adds the second pruning layer on
+ *       top of R3 and is the profile fed to the Python MIP optimiser.</li>
  * </ul>
  *
  * <p>R1 is "vanilla" regardless of what {@code main}'s runner defaults happen

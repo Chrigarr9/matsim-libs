@@ -28,6 +28,11 @@ public final class MatsimNetworkCacheTestFixture {
         cache.putForTesting(origin, dest, seg);
     }
 
+    /** Read a specific cache slot without triggering routing. */
+    public static TravelSegment peek(MatsimNetworkCache cache, Id<Link> origin, Id<Link> dest, int timeBin) {
+        return cache.peekForTesting(origin, dest, timeBin);
+    }
+
     /** Build a MatsimNetworkCache with real routing capability for integration tests.
      *  Uses Dijkstra for cache-miss point-to-point routing. */
     public static MatsimNetworkCache createWithRouting(Network network, TravelTime tt, TravelDisutility td, int timeBinSize) {
@@ -39,5 +44,13 @@ public final class MatsimNetworkCacheTestFixture {
      *  Use this when a test needs to exercise the same routing combination eqasim runs in production. */
     public static MatsimNetworkCache createWithSpeedyAltRouting(Network network, TravelTime tt, TravelDisutility td, int timeBinSize) {
         return new MatsimNetworkCache(network, tt, td, timeBinSize, /* useSpeedyAlt= */ true);
+    }
+
+    /** Same as {@link #createWithSpeedyAltRouting} but additionally enables the production
+    *  {@code useDeterministicNetworkRouting=true} guarantees: shared deterministic cache misses,
+    *  deterministic time-distance tie-breaking, and raw additive segment metrics. Required when
+     *  comparing outputs across separate JVM invocations (e.g. the Lyon R1/R2/R3/R4 chain). */
+    public static MatsimNetworkCache createWithSpeedyAltRoutingDeterministic(Network network, TravelTime tt, TravelDisutility td, int timeBinSize) {
+        return new MatsimNetworkCache(network, tt, td, timeBinSize, /* useSpeedyAlt= */ true, /* deterministic= */ true);
     }
 }

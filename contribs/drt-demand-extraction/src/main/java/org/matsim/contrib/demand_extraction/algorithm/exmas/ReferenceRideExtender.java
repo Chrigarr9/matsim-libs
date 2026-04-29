@@ -47,6 +47,7 @@ public final class ReferenceRideExtender {
 	private final Map<Integer, Ride> rideMap;
 	private final ExMasConfigGroup exMasConfig;
 	private static final double EPSILON = 1e-9;
+	private static final double TIME_FEASIBILITY_EPSILON = 1.0;
 
 
 	public ReferenceRideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
@@ -744,7 +745,7 @@ public final class ReferenceRideExtender {
 				pttActual[i] = req.getTravelTime();
 			}
 
-			if (pttActual[i] > req.getMaxTravelTime()) return null;
+			if (pttActual[i] > req.getMaxTravelTime() + TIME_FEASIBILITY_EPSILON) return null;
 		}
 
 		// Calculate delays
@@ -818,7 +819,7 @@ public final class ReferenceRideExtender {
 
 	private double[] optimizeDelays(double[] delays, double[] maxNeg, double[] maxPos) {
 		for (int i = 0; i < delays.length; i++) {
-			if (maxPos[i] < -maxNeg[i]) return null;
+			if (maxPos[i] < -maxNeg[i] - TIME_FEASIBILITY_EPSILON) return null;
 		}
 
 		double lower = Double.NEGATIVE_INFINITY, upper = Double.POSITIVE_INFINITY;
@@ -827,7 +828,7 @@ public final class ReferenceRideExtender {
 			upper = Math.min(upper, maxPos[i] - delays[i]);
 		}
 
-		if (lower > upper + EPSILON) return null;
+		if (lower > upper + TIME_FEASIBILITY_EPSILON) return null;
 
 		double maxDelay = Double.NEGATIVE_INFINITY, minDelay = Double.POSITIVE_INFINITY;
 		for (double d : delays) {
@@ -841,7 +842,8 @@ public final class ReferenceRideExtender {
 		double[] adjusted = new double[delays.length];
 		for (int i = 0; i < delays.length; i++) {
 			adjusted[i] = delays[i] + depOpt;
-			if (adjusted[i] < -maxNeg[i] - EPSILON || adjusted[i] > maxPos[i] + EPSILON) return null;
+			if (adjusted[i] < -maxNeg[i] - TIME_FEASIBILITY_EPSILON
+					|| adjusted[i] > maxPos[i] + TIME_FEASIBILITY_EPSILON) return null;
 		}
 		return adjusted;
 	}
