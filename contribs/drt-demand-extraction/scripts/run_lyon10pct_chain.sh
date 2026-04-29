@@ -5,15 +5,15 @@
 #   1. R1 d≤4 with new memory + time-breakdown profiling (~10 min)
 #      → r1_rides.csv, log: .planning/r1r2-fast-test-10pct-v8-r1-d4.log
 #   2. R2 full + R3 full + R4 full with new profiling (~6-7h)
-#      → r2_rides.csv (no pruning), r3_rides.csv (distance + post-extension),
-#        r4_rides.csv (distance only),
+#      → r2_rides.csv (no pruning), r3_rides.csv (distance only),
+#        r4_rides.csv (distance + post-extension),
 #        log: .planning/r1r2-fast-test-10pct-v9-r2-r3-r4.log
 #
 # Why two invocations: keeps R1's log isolated for d≤4 and lets the R2+R3+R4
 # trio share a warmed routing cache within a single mvn process.
 #
-# R3 vs R4 isolates the contribution of the post-extension pruner: R4 = distance
-# heuristic gate only, R3 = distance heuristic + per-request top-K coverage.
+# R3 vs R4 isolates the contribution of the post-extension pruner: R3 = distance
+# heuristic gate only, R4 = distance heuristic + per-request top-K coverage.
 # Together with R2 (no pruning) this gives a clean ablation across all three
 # pruning configurations against the same R1 reference.
 
