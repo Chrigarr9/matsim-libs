@@ -23,6 +23,10 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler;
+import org.matsim.contrib.demand_extraction.algorithm.profiling.ReferenceProgressCheckpoint;
+import org.matsim.contrib.demand_extraction.algorithm.profiling.ReferenceProgressCheckpointPolicy;
+import org.matsim.contrib.demand_extraction.algorithm.profiling.ReferenceProgressSink;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
@@ -46,12 +50,22 @@ public final class ReferenceRideExtender {
 	private final Map<Integer, DrtRequest> requestMap;
 	private final Map<Integer, Ride> rideMap;
 	private final ExMasConfigGroup exMasConfig;
+	private final String progressRunLabel;
+	private final ReferenceProgressSink progressSink;
+	private final long checkpointIntervalMs;
+	private List<Ride> partialExtendedRidesAtFailure = List.of();
 	private static final double EPSILON = 1e-9;
 	private static final double TIME_FEASIBILITY_EPSILON = 1.0;
 
 
 	public ReferenceRideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 			List<DrtRequest> requests, List<Ride> rides, ExMasConfigGroup exMasConfig) {
+		this(network, graph, budgetValidator, requests, rides, exMasConfig, null, null, 30_000L);
+	}
+
+	public ReferenceRideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
+			List<DrtRequest> requests, List<Ride> rides, ExMasConfigGroup exMasConfig,
+			String progressRunLabel, ReferenceProgressSink progressSink, long checkpointIntervalMs) {
 		this.network = network;
 		this.graph = graph;
 		this.budgetValidator = budgetValidator;
@@ -60,6 +74,9 @@ public final class ReferenceRideExtender {
 		this.rideMap = new HashMap<>();
 		for (Ride r : rides) rideMap.put(r.getIndex(), r);
 		this.exMasConfig = exMasConfig;
+		this.progressRunLabel = progressRunLabel;
+		this.progressSink = progressSink;
+		this.checkpointIntervalMs = checkpointIntervalMs;
 	}
 
 	/**
@@ -82,6 +99,7 @@ public final class ReferenceRideExtender {
 	 * set's variants (~3-30 entries) instead of all candidates (~39M at 25% scale).
 	 */
 	public List<Ride> extendRides(List<Ride> ridesToExtend, int nextRideIndex) {
+		partialExtendedRidesAtFailure = List.of();
 		int targetDegree = ridesToExtend.isEmpty() ? 0 : ridesToExtend.get(0).getDegree() + 1;
 		ExtensionAttemptStats stats = new ExtensionAttemptStats(targetDegree, exMasConfig);
 		log.info("Extending {} rides from degree {} to {} [per-request-set]...",
@@ -117,107 +135,149 @@ public final class ReferenceRideExtender {
 		}
 		processedSets.clear(); // reset for actual processing
 		log.info("  Found {} candidate request sets at degree {}", totalSets, targetDegree);
+		long lastCheckpointTimeMs = startTime;
 
 		// Process each request set
-		for (Ride ride : ridesToExtend) {
-			int[] neighbors = graph.findCommonNeighborsSorted(ride.getRequestIndices());
+		try {
+			for (Ride ride : ridesToExtend) {
+				int[] neighbors = graph.findCommonNeighborsSorted(ride.getRequestIndices());
 
-			for (int newReq : neighbors) {
-				int[] newSet = buildSortedRequestSet(ride.getRequestIndices(), newReq);
-				String key = Arrays.toString(newSet);
+				for (int newReq : neighbors) {
+					int[] newSet = buildSortedRequestSet(ride.getRequestIndices(), newReq);
+					String key = Arrays.toString(newSet);
 
-				// Skip if already processed this request set
-				if (!processedSets.add(key)) continue;
+					// Skip if already processed this request set
+					if (!processedSets.add(key)) continue;
 
-				setsProcessed++;
-				if (isPowerOfTwo(setsProcessed) || setsProcessed == totalSets) {
-					double pct = (setsProcessed * 100.0) / Math.max(1, totalSets);
+					setsProcessed++;
+					if (isPowerOfTwo(setsProcessed) || setsProcessed == totalSets) {
+						double pct = (setsProcessed * 100.0) / Math.max(1, totalSets);
+						long now = System.currentTimeMillis();
+						double elapsed = Math.max(0.001, (now - startTime) / 1000.0);
+						double eta = (totalSets - setsProcessed) / Math.max(setsProcessed / elapsed, 1e-9);
+						log.info("  Request-set progress: {}/{} ({}%), ETA {}",
+								setsProcessed, totalSets, String.format("%.1f", pct), formatDuration(eta));
+					}
+
+					// Generate ALL variants for this request set from ALL base rides
+					List<ExtensionCandidate> variants = new ArrayList<>();
+
+					// For degree D+1, each variant comes from a degree-D base ride + one added request.
+					// The base ride contains D requests from newSet; the added request is the remaining one.
+					for (int i = 0; i < newSet.length; i++) {
+						int addedReq = newSet[i];
+						int[] baseIndices = new int[newSet.length - 1];
+						for (int j = 0, k = 0; j < newSet.length; j++) {
+							if (j != i) baseIndices[k++] = newSet[j];
+						}
+						String baseKey = Arrays.toString(baseIndices);
+						List<Ride> bases = baseRidesByRequestSet.get(baseKey);
+						if (bases == null) continue;
+
+						DrtRequest addedRequest = requestMap.get(addedReq);
+
+						for (Ride base : bases) {
+							// Duplicate person check
+							boolean duplicatePerson = false;
+							for (DrtRequest existingReq : base.getRequests()) {
+								if (addedRequest.getPaxId().equals(existingReq.getPaxId())) {
+									duplicatePerson = true;
+									break;
+								}
+							}
+							if (duplicatePerson) {
+								if (stats != null) stats.duplicatePersonSkipped.increment();
+								continue;
+							}
+
+							// PORT-NOTE: vanilla ExMAS does not pre-filter extensions by beeline distance.
+							// Per-pair feasibility was already validated in PairGenerator; applying a second,
+							// stricter filter here caused Frame-2-style false rejections (R1 missed valid
+							// triples whose only valid extension frame was silently skipped here).
+							List<int[]> allPairRideCombinations = getAllPairRideCombinations(base.getRequestIndices(), addedReq);
+							if (allPairRideCombinations == null) {
+								if (stats != null) stats.missingPairRidesSkipped.increment();
+								continue;
+							}
+
+							for (int[] pairRides : allPairRideCombinations) {
+								long t0 = System.nanoTime();
+								Ride ext = tryExtend(base, addedRequest, pairRides, 0);
+								if (stats != null) stats.rideConstructionCpuNs.add(System.nanoTime() - t0);
+								if (ext == null) {
+									if (stats != null) stats.tryExtendFailed.increment();
+									continue;
+								}
+
+								long t1 = System.nanoTime();
+								Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
+								if (stats != null) stats.budgetValidationCpuNs.add(System.nanoTime() - t1);
+								if (validated == null) {
+									if (stats != null) stats.budgetValidationFailed.increment();
+									continue;
+								}
+
+								if (exMasConfig != null && exMasConfig.getPruningDistanceSavingsLogScale() >= 0
+										&& !passesDistanceSavingsPruning(validated)) {
+									if (stats != null) stats.distanceSavingsPrunedEarly.increment();
+									continue;
+								}
+
+								variants.add(new ExtensionCandidate(base.getIndex(), addedReq, validated));
+								if (stats != null) stats.candidatesAdded.increment();
+							}
+						}
+					}
+
+					// Percentage-prune this request set immediately
+					if (!variants.isEmpty()) {
+						List<Ride> pruned = pruneRequestSetVariants(variants);
+						for (Ride r : pruned) {
+							allExtended.add(rebuildWithIndex(r, nextRideIndex++));
+						}
+					}
+
 					long now = System.currentTimeMillis();
-					double elapsed = Math.max(0.001, (now - startTime) / 1000.0);
-					double eta = (totalSets - setsProcessed) / Math.max(setsProcessed / elapsed, 1e-9);
-					log.info("  Request-set progress: {}/{} ({}%), ETA {}",
-							setsProcessed, totalSets, String.format("%.1f", pct), formatDuration(eta));
-				}
-
-				// Generate ALL variants for this request set from ALL base rides
-				List<ExtensionCandidate> variants = new ArrayList<>();
-
-				// For degree D+1, each variant comes from a degree-D base ride + one added request.
-				// The base ride contains D requests from newSet; the added request is the remaining one.
-				for (int i = 0; i < newSet.length; i++) {
-					int addedReq = newSet[i];
-					int[] baseIndices = new int[newSet.length - 1];
-					for (int j = 0, k = 0; j < newSet.length; j++) {
-						if (j != i) baseIndices[k++] = newSet[j];
+					long elapsedSinceLastCheckpointMs = now - lastCheckpointTimeMs;
+					if (ReferenceProgressCheckpointPolicy.shouldEmitRunningCheckpoint(
+							targetDegree, setsProcessed, elapsedSinceLastCheckpointMs, checkpointIntervalMs)) {
+						String note = isPowerOfTwo(setsProcessed) ? "power_of_two" : "interval";
+						emitCheckpoint(
+								targetDegree,
+								"running",
+								"checkpoint",
+								setsProcessed,
+								totalSets,
+								allExtended.size(),
+								stats.candidatesAdded.sum(),
+								now - startTime,
+								MemoryProfiler.captureHeapSample("degree=" + targetDegree + "-checkpoint", false),
+								note);
+						lastCheckpointTimeMs = now;
 					}
-					String baseKey = Arrays.toString(baseIndices);
-					List<Ride> bases = baseRidesByRequestSet.get(baseKey);
-					if (bases == null) continue;
-
-					DrtRequest addedRequest = requestMap.get(addedReq);
-
-					for (Ride base : bases) {
-						// Duplicate person check
-						boolean duplicatePerson = false;
-						for (DrtRequest existingReq : base.getRequests()) {
-							if (addedRequest.getPaxId().equals(existingReq.getPaxId())) {
-								duplicatePerson = true;
-								break;
-							}
-						}
-						if (duplicatePerson) {
-							if (stats != null) stats.duplicatePersonSkipped.increment();
-							continue;
-						}
-
-						// PORT-NOTE: vanilla ExMAS does not pre-filter extensions by beeline distance.
-						// Per-pair feasibility was already validated in PairGenerator; applying a second,
-						// stricter filter here caused Frame-2-style false rejections (R1 missed valid
-						// triples whose only valid extension frame was silently skipped here).
-						List<int[]> allPairRideCombinations = getAllPairRideCombinations(base.getRequestIndices(), addedReq);
-						if (allPairRideCombinations == null) {
-							if (stats != null) stats.missingPairRidesSkipped.increment();
-							continue;
-						}
-
-						for (int[] pairRides : allPairRideCombinations) {
-							long t0 = System.nanoTime();
-							Ride ext = tryExtend(base, addedRequest, pairRides, 0);
-							if (stats != null) stats.rideConstructionCpuNs.add(System.nanoTime() - t0);
-							if (ext == null) {
-								if (stats != null) stats.tryExtendFailed.increment();
-								continue;
-							}
-
-							long t1 = System.nanoTime();
-							Ride validated = budgetValidator.validateAndPopulateBudgets(ext);
-							if (stats != null) stats.budgetValidationCpuNs.add(System.nanoTime() - t1);
-							if (validated == null) {
-								if (stats != null) stats.budgetValidationFailed.increment();
-								continue;
-							}
-
-							if (exMasConfig != null && exMasConfig.getPruningDistanceSavingsLogScale() >= 0
-									&& !passesDistanceSavingsPruning(validated)) {
-								if (stats != null) stats.distanceSavingsPrunedEarly.increment();
-								continue;
-							}
-
-							variants.add(new ExtensionCandidate(base.getIndex(), addedReq, validated));
-							if (stats != null) stats.candidatesAdded.increment();
-						}
-					}
+					// variants released — GC can reclaim
 				}
-
-				// Percentage-prune this request set immediately
-				if (!variants.isEmpty()) {
-					List<Ride> pruned = pruneRequestSetVariants(variants);
-					for (Ride r : pruned) {
-						allExtended.add(rebuildWithIndex(r, nextRideIndex++));
-					}
-				}
-				// variants released — GC can reclaim
 			}
+		} catch (OutOfMemoryError error) {
+			partialExtendedRidesAtFailure = allExtended;
+			if (ReferenceProgressCheckpointPolicy.shouldEmitTerminalOom(targetDegree)) {
+				try {
+					emitCheckpoint(
+							targetDegree,
+							"oom",
+							"terminal",
+							setsProcessed,
+							totalSets,
+							allExtended.size(),
+							stats.candidatesAdded.sum(),
+							System.currentTimeMillis() - startTime,
+							MemoryProfiler.captureHeapSample("degree=" + targetDegree + "-oom", false),
+							error.getClass().getName());
+				} catch (Throwable ignored) {
+					// Best effort only. Keep the original OOM as the controlling failure.
+				}
+			}
+			throw error;
 		}
 
 		stats.logSummary(allExtended.size());
@@ -227,10 +287,57 @@ public final class ReferenceRideExtender {
 		stats.logTimeBreakdown(/* threads= */ 1, elapsed, setsProcessed);
 		log.info("Extension complete: {} rides extended to degree {} in {}s ({} request sets)",
 				allExtended.size(), targetDegree, String.format("%.1f", seconds), setsProcessed);
-		org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler
-				.snapshotAtEndOfDegree(targetDegree, allExtended.size());
+		MemoryProfiler.HeapSample completionSample = MemoryProfiler.snapshotAtEndOfDegree(targetDegree, allExtended.size());
+		emitCheckpoint(
+				targetDegree,
+				"completed",
+				"degree_complete",
+				setsProcessed,
+				totalSets,
+				allExtended.size(),
+				stats.candidatesAdded.sum(),
+				elapsed,
+				completionSample,
+				"degree_complete");
 
 		return allExtended;
+	}
+
+	public List<Ride> getPartialExtendedRidesAtFailure() {
+		return partialExtendedRidesAtFailure;
+	}
+
+	private void emitCheckpoint(
+			int degree,
+			String status,
+			String sampleKind,
+			long setsProcessed,
+			long setsTotal,
+			long ridesRetained,
+			long candidatesAdded,
+			long elapsedMs,
+			MemoryProfiler.HeapSample heapSample,
+			String note) {
+		if (progressSink == null) {
+			return;
+		}
+
+		String run = progressRunLabel == null || progressRunLabel.isBlank() ? "reference" : progressRunLabel;
+		progressSink.record(new ReferenceProgressCheckpoint(
+				run,
+				degree,
+				status,
+				sampleKind,
+				setsProcessed,
+				setsTotal,
+				ridesRetained,
+				candidatesAdded,
+				heapSample.usedGiB(),
+				heapSample.committedGiB(),
+				heapSample.maxGiB(),
+				elapsedMs,
+				heapSample.gcMillis(),
+				note));
 	}
 
 	private static final class ExtensionAttemptStats {

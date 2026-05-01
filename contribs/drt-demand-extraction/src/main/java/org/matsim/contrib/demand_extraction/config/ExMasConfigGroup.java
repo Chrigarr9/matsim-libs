@@ -1,5 +1,7 @@
 package org.matsim.contrib.demand_extraction.config;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -239,6 +241,11 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// (dominates legacy RATIO_THRESHOLD at interDegreeKeepFraction=0.10 on all metrics).
 	// Used only when pruningMode == COVERAGE_TOPK.
 	private int pruningCoverageK = 20;
+
+	// Per-degree K override for COVERAGE_TOPK pruning.
+	// Key = output ride degree (3, 4, 5, ...). If empty, pruningCoverageK is used for all degrees.
+	// Not XML-serialized — set programmatically for K-schedule sweeps.
+	private Map<Integer, Integer> pruningCoverageKByDegree = new HashMap<>();
 
 	// Quality metric used to rank rides inside a pruning pass.
 	//   ABS_SAVINGS   — meters saved = sum(request.directDistance) - ride.rideDistance.
@@ -887,6 +894,18 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter("pruningCoverageK")
 	public void setPruningCoverageK(int pruningCoverageK) {
 		this.pruningCoverageK = pruningCoverageK;
+	}
+
+	public Map<Integer, Integer> getPruningCoverageKByDegree() {
+		return Collections.unmodifiableMap(pruningCoverageKByDegree);
+	}
+
+	public void setPruningCoverageKByDegree(Map<Integer, Integer> m) {
+		this.pruningCoverageKByDegree = new HashMap<>(m);
+	}
+
+	public void clearPruningCoverageKByDegree() {
+		this.pruningCoverageKByDegree = new HashMap<>();
 	}
 
 	@StringGetter("pruningQualityMetric")

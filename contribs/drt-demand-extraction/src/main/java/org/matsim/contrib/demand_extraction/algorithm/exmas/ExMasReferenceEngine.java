@@ -22,11 +22,13 @@ import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.hyperpool.HyperPoolGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.hyperpool.StopCompatibilityChecker;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.profiling.ReferenceProgressSink;
 import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinder;
 import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinderFactory;
 import org.matsim.contrib.demand_extraction.algorithm.stops.WalkingDistanceCalculator;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
+import org.matsim.contrib.demand_extraction.io.ExMasCsvWriter;
 import org.matsim.facilities.ActivityFacilities;
 
 /**
@@ -46,28 +48,55 @@ public final class ExMasReferenceEngine {
 	private final int maxDegree;
 	private final org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig;
 	private final ActivityFacilities facilities; // Optional, for predefined stop finder
+	private final String progressRunLabel;
+	private final ReferenceProgressSink progressSink;
+	private final long checkpointIntervalMs;
 
 	private List<DrtRequest> requests;
 	private List<Ride> allRides;
+	private List<Ride> partialExtendedRidesAtFailure;
 	private List<HyperPooledRide> hyperPooledRides;
 	private ShareabilityGraph graph;
 
 	public ExMasReferenceEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
 					   double horizon, int maxDegree,
 					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig) {
-		this(network, budgetValidator, horizon, maxDegree, exMasConfig, null);
+		this(network, budgetValidator, horizon, maxDegree, exMasConfig, null, null, null, 30_000L);
 	}
 
 	public ExMasReferenceEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
 					   double horizon, int maxDegree,
 					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig,
 					   ActivityFacilities facilities) {
+		this(network, budgetValidator, horizon, maxDegree, exMasConfig, facilities, null, null, 30_000L);
+	}
+
+	public ExMasReferenceEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
+					   double horizon, int maxDegree,
+					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig,
+					   String progressRunLabel,
+					   ReferenceProgressSink progressSink,
+					   long checkpointIntervalMs) {
+		this(network, budgetValidator, horizon, maxDegree, exMasConfig, null, progressRunLabel, progressSink,
+				checkpointIntervalMs);
+	}
+
+	public ExMasReferenceEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
+					   double horizon, int maxDegree,
+					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig,
+					   ActivityFacilities facilities,
+					   String progressRunLabel,
+					   ReferenceProgressSink progressSink,
+					   long checkpointIntervalMs) {
 		this.network = network;
 		this.budgetValidator = budgetValidator;
 		this.horizon = horizon;
 		this.maxDegree = maxDegree;
 		this.exMasConfig = exMasConfig;
 		this.facilities = facilities;
+		this.progressRunLabel = progressRunLabel;
+		this.progressSink = progressSink;
+		this.checkpointIntervalMs = checkpointIntervalMs;
 	}
 
     /**
@@ -87,6 +116,7 @@ public final class ExMasReferenceEngine {
 
         this.requests = drtRequests;
         this.allRides = new ArrayList<>();
+		this.partialExtendedRidesAtFailure = List.of();
         this.hyperPooledRides = new ArrayList<>();
         
         DrtRequest[] reqArray = drtRequests.toArray(new DrtRequest[0]);
@@ -149,8 +179,15 @@ public final class ExMasReferenceEngine {
 		int nextRideIndex = allRides.size();
 		for (int degree = 2; degree < maxDegree; degree++) {
 			ReferenceRideExtender extender = new ReferenceRideExtender(network, graph, budgetValidator,
-													 requests, pairAndSingleRides, exMasConfig);
-			List<Ride> extended = extender.extendRides(currentDegreeRides, nextRideIndex);
+											 requests, pairAndSingleRides, exMasConfig,
+											 progressRunLabel, progressSink, checkpointIntervalMs);
+			List<Ride> extended;
+			try {
+				extended = extender.extendRides(currentDegreeRides, nextRideIndex);
+			} catch (OutOfMemoryError error) {
+				partialExtendedRidesAtFailure = extender.getPartialExtendedRidesAtFailure();
+				throw error;
+			}
 
 			if (extended.isEmpty()) {
 				log.info("No extensions possible at degree {}. Stopping.", (degree + 1));
@@ -251,6 +288,15 @@ public final class ExMasReferenceEngine {
 		}
 
 		return allRides;
+	}
+
+	public boolean writePartialRideSnapshot(String filename) {
+		if (partialExtendedRidesAtFailure == null || partialExtendedRidesAtFailure.isEmpty()) {
+			return false;
+		}
+
+		ExMasCsvWriter.writeRideBatches(filename, allRides, partialExtendedRidesAtFailure);
+		return true;
 	}
 
 	/**

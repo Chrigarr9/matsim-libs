@@ -94,25 +94,45 @@ public final class ExMasCsvWriter {
 	 * @throws RuntimeException if writing fails
 	 */
 	public static void writeRides(String filename, List<Ride> rides) {
+		writeRideBatches(filename, rides);
+	}
+
+	@SafeVarargs
+	public static void writeRideBatches(String filename, List<Ride>... rideBatches) {
 		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
-			// Header with all ride attributes and flattened request attributes
-			// Note: predecessors removed (not needed for optimization), successors kept for path cover
-			// Stop-based columns added at the end for backward compatibility
-			writer.write("rideIndex,degree,kind,variant," +
-					"requestIndices,personIds,groupIds,requestTimes,isCommutes,isEducations," +
-					"originsOrdered,destinationsOrdered," +
-					"passengerTravelTimes,passengerDistances,delays,detours,remainingBudgets,maxCosts,maxCostsPerKm,shapleyValues,successors," +
-					"startTime,endTime,rideTravelTime,rideDistance," +
-					"pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty," +
-					"dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty," +
-					"accessWalkDistances,egressWalkDistances");
-			writer.newLine();
+			writeRidesHeader(writer);
+			for (List<Ride> rideBatch : rideBatches) {
+				if (rideBatch == null || rideBatch.isEmpty()) {
+					continue;
+				}
+				writeRideRows(writer, rideBatch);
+			}
+		} catch (IOException e) {
+			throw new RuntimeException("Could not write rides CSV: " + filename, e);
+		}
+	}
 
-			List<Ride> sortedRides = rides.stream()
-					.sorted(Comparator.comparingInt(Ride::getIndex))
-					.toList();
+	private static void writeRidesHeader(BufferedWriter writer) throws IOException {
+		// Header with all ride attributes and flattened request attributes
+		// Note: predecessors removed (not needed for optimization), successors kept for path cover
+		// Stop-based columns added at the end for backward compatibility
+		writer.write("rideIndex,degree,kind,variant," +
+				"requestIndices,personIds,groupIds,requestTimes,isCommutes,isEducations," +
+				"originsOrdered,destinationsOrdered," +
+				"passengerTravelTimes,passengerDistances,delays,detours,remainingBudgets,maxCosts,maxCostsPerKm,shapleyValues,successors," +
+				"startTime,endTime,rideTravelTime,rideDistance," +
+				"pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty," +
+				"dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty," +
+				"accessWalkDistances,egressWalkDistances");
+		writer.newLine();
+	}
 
-			for (Ride ride : sortedRides) {
+	private static void writeRideRows(BufferedWriter writer, List<Ride> rides) throws IOException {
+		List<Ride> sortedRides = rides.stream()
+				.sorted(Comparator.comparingInt(Ride::getIndex))
+				.toList();
+
+		for (Ride ride : sortedRides) {
 				// Flatten request attributes using direct object references
 				DrtRequest[] requests = ride.getRequests();
 
@@ -200,10 +220,7 @@ public final class ExMasCsvWriter {
 						accessWalks, egressWalks));
 				writer.newLine();
 			}
-		} catch (IOException e) {
-			throw new RuntimeException("Could not write rides CSV: " + filename, e);
 		}
-	}
 
 	/**
 	 * Format integer array for CSV output: [1, 2, 3] -> [1 | 2 | 3]

@@ -5,6 +5,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.IntUnaryOperator;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -41,26 +42,33 @@ public final class PostExtensionPruner {
 
 	private final Mode mode;
 	private final double keepTopFraction;
-	private final int coverageK;
+	private final IntUnaryOperator kFunction;
 	private final QualityMetric metric;
 
-	private PostExtensionPruner(Mode mode, double keepTopFraction, int coverageK, QualityMetric metric) {
+	private PostExtensionPruner(Mode mode, double keepTopFraction, IntUnaryOperator kFunction, QualityMetric metric) {
 		this.mode = mode;
 		this.keepTopFraction = keepTopFraction;
-		this.coverageK = coverageK;
+		this.kFunction = kFunction;
 		this.metric = metric;
 	}
 
 	/** Legacy: keep top {@code keepTopFraction} of each degree's rides by savingsRatio. */
 	public static PostExtensionPruner ratioThreshold(double keepTopFraction) {
-		return new PostExtensionPruner(Mode.RATIO_THRESHOLD, keepTopFraction, 0, RATIO_SAVINGS);
+		return new PostExtensionPruner(Mode.RATIO_THRESHOLD, keepTopFraction, null, RATIO_SAVINGS);
 	}
 
-	/** Coverage-aware: per-request top-K by quality metric. */
+	/** Coverage-aware: flat K applied to all degrees. */
 	public static PostExtensionPruner coverageTopK(int K, QualityMetric metric) {
 		if (K < 1) throw new IllegalArgumentException("coverage K must be >= 1, got: " + K);
 		if (metric == null) throw new IllegalArgumentException("metric must not be null");
-		return new PostExtensionPruner(Mode.COVERAGE_TOPK, 1.0, K, metric);
+		return new PostExtensionPruner(Mode.COVERAGE_TOPK, 1.0, d -> K, metric);
+	}
+
+	/** Coverage-aware: per-degree K supplied by {@code kFunction}. */
+	public static PostExtensionPruner coverageTopK(IntUnaryOperator kFunction, QualityMetric metric) {
+		if (kFunction == null) throw new IllegalArgumentException("kFunction must not be null");
+		if (metric == null) throw new IllegalArgumentException("metric must not be null");
+		return new PostExtensionPruner(Mode.COVERAGE_TOPK, 1.0, kFunction, metric);
 	}
 
 	public Mode getMode() {
@@ -134,8 +142,8 @@ public final class PostExtensionPruner {
 	// --- COVERAGE_TOPK --------------------------------------------------------
 
 	private List<Ride> pruneCoverageTopK(List<Ride> rides) {
-		log.info("Post-extension pruning (COVERAGE_TOPK): {} rides input (K={}, metric={})",
-				rides.size(), coverageK, metricName(metric));
+		log.info("Post-extension pruning (COVERAGE_TOPK): {} rides input (metric={})",
+				rides.size(), metricName(metric));
 
 		Map<Integer, List<Ride>> byDegree = groupByDegree(rides);
 		List<Ride> kept = new ArrayList<>();
@@ -148,6 +156,8 @@ public final class PostExtensionPruner {
 				kept.addAll(group);
 				continue;
 			}
+
+			int effectiveK = kFunction.applyAsInt(degree);
 
 			// Pre-compute quality per ride.
 			double[] quality = new double[group.size()];
@@ -182,7 +192,7 @@ public final class PostExtensionPruner {
 				boolean hit = false;
 				for (int j = 0; j < deg; j++) {
 					int r = ride.getRequest(j).index;
-					if (cov[r] < coverageK) { hit = true; break; }
+					if (cov[r] < effectiveK) { hit = true; break; }
 				}
 				if (hit) {
 					kept.add(ride);
@@ -195,10 +205,10 @@ public final class PostExtensionPruner {
 				}
 			}
 
-			log.info("  Degree {}: kept {}/{} ({}), {} requests covered",
+			log.info("  Degree {}: kept {}/{} ({}) K={}, {} requests covered",
 					degree, keptAtDegree, group.size(),
 					String.format("%.1f%%", keptAtDegree * 100.0 / group.size()),
-					requestsCovered);
+					effectiveK, requestsCovered);
 		}
 
 		log.info("Post-extension pruning complete: {} -> {} rides ({} removed, {} reduction)",

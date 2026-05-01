@@ -548,7 +548,14 @@ public final class BamasEngine {
 					case ABS_SAVINGS -> PostExtensionPruner.ABS_SAVINGS;
 					case RATIO_SAVINGS -> PostExtensionPruner.RATIO_SAVINGS;
 				};
-				return PostExtensionPruner.coverageTopK(cfg.getPruningCoverageK(), metric);
+				java.util.Map<Integer, Integer> kByDegree = cfg.getPruningCoverageKByDegree();
+				if (kByDegree.isEmpty()) {
+					return PostExtensionPruner.coverageTopK(cfg.getPruningCoverageK(), metric);
+				} else {
+					int defaultK = cfg.getPruningCoverageK();
+					return PostExtensionPruner.coverageTopK(
+							d -> kByDegree.getOrDefault(d, defaultK), metric);
+				}
 			default:
 				throw new IllegalStateException("Unknown pruning mode: " + cfg.getPruningMode());
 		}

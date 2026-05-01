@@ -29,20 +29,53 @@ public final class MemoryProfiler {
 
 	private static final Logger log = LogManager.getLogger(MemoryProfiler.class);
 
+	public record HeapSample(
+			String stage,
+			long usedBytes,
+			long committedBytes,
+			long maxBytes,
+			long gcMillis) {
+
+		public double usedGiB() {
+			return toGiB(usedBytes);
+		}
+
+		public double committedGiB() {
+			return toGiB(committedBytes);
+		}
+
+		public double maxGiB() {
+			return maxBytes < 0 ? -1.0 : toGiB(maxBytes);
+		}
+	}
+
 	private MemoryProfiler() {}
+
+	public static HeapSample captureHeapSample(String stage, boolean runGc) {
+		long gcMs = 0L;
+		if (runGc) {
+			long t0 = System.nanoTime();
+			System.gc();
+			gcMs = (System.nanoTime() - t0) / 1_000_000L;
+		}
+
+		MemoryUsage heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
+		return new HeapSample(stage, heap.getUsed(), heap.getCommitted(), heap.getMax(), gcMs);
+	}
 
 	/**
 	 * Log heap usage at a stage boundary. Prefer {@link #snapshotAtEndOfDegree} at
 	 * end-of-degree so the GC happens *before* sampling — that gives a stable
 	 * "rides retained" number rather than a noisy peak.
 	 */
-	public static void snapshot(String stage) {
-		MemoryUsage heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
+	public static HeapSample snapshot(String stage) {
+		HeapSample sample = captureHeapSample(stage, false);
 		log.info("[MEM] {}: used={} committed={} max={}",
-				stage,
-				formatGiB(heap.getUsed()),
-				formatGiB(heap.getCommitted()),
-				formatGiB(heap.getMax()));
+				sample.stage(),
+				formatGiB(sample.usedBytes()),
+				formatGiB(sample.committedBytes()),
+				formatGiB(sample.maxBytes()));
+		return sample;
 	}
 
 	/**
@@ -50,21 +83,23 @@ public final class MemoryProfiler {
 	 * so the {@code used} value reflects rides retained for the next iteration —
 	 * critical for the R1↔R2↔R3 memory comparison.
 	 */
-	public static void snapshotAtEndOfDegree(int degree, int rideCount) {
-		long t0 = System.nanoTime();
-		System.gc();
-		long gcMs = (System.nanoTime() - t0) / 1_000_000L;
-		MemoryUsage heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
+	public static HeapSample snapshotAtEndOfDegree(int degree, int rideCount) {
+		HeapSample sample = captureHeapSample("degree=" + degree, true);
 		log.info("[MEM] degree={} rides={} used={} committed={} max={} (post-gc, gc={}ms)",
 				degree, rideCount,
-				formatGiB(heap.getUsed()),
-				formatGiB(heap.getCommitted()),
-				formatGiB(heap.getMax()),
-				gcMs);
+				formatGiB(sample.usedBytes()),
+				formatGiB(sample.committedBytes()),
+				formatGiB(sample.maxBytes()),
+				sample.gcMillis());
+		return sample;
+	}
+
+	private static double toGiB(long bytes) {
+		return bytes / (1024.0 * 1024.0 * 1024.0);
 	}
 
 	private static String formatGiB(long bytes) {
 		if (bytes < 0) return "n/a";
-		return String.format(java.util.Locale.ROOT, "%.2fGB", bytes / (1024.0 * 1024.0 * 1024.0));
+		return String.format(java.util.Locale.ROOT, "%.2fGB", toGiB(bytes));
 	}
 }
