@@ -25,6 +25,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.exmas.ExMasReferenceEngine;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCacheTestFixture;
+import org.matsim.contrib.demand_extraction.algorithm.profiling.ReferenceProgressCheckpointWriter;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
@@ -146,8 +147,13 @@ class ExMasLyonR1R2FastComparisonTest {
 		boolean skipR2 = Boolean.getBoolean("skipR2");
 		boolean runR3 = Boolean.getBoolean("runR3");
 		boolean runR4 = Boolean.getBoolean("runR4");
+		String r1CheckpointCsv = System.getProperty("r1CheckpointCsv");
+		boolean allowR1OomForProfiling = Boolean.getBoolean("allowR1OomForProfiling");
+		long r1CheckpointIntervalMs = Long.getLong("r1CheckpointIntervalMs", 30_000L);
+		boolean r1ProfilingMode = r1CheckpointCsv != null && !r1CheckpointCsv.isBlank();
 		Path r1Csv = outputDir.resolve("r1_rides.csv");
 		int r1MaxDegree = 0;
+		boolean r1Completed = true;
 
 		if (!skipR1) {
 			// ── 6. R1: ExMAS reference, parallel ─────────────────────────────────────
@@ -160,16 +166,56 @@ class ExMasLyonR1R2FastComparisonTest {
 					exMasConfig.getAlgorithm(), exMasConfig.getAlgorithmProcessCount(), exMasConfig.getMaxPoolingDegree(),
 					exMasConfig.getPruningDistanceSavingsLogScale(), exMasConfig.getPruningMode(),
 					exMasConfig.getPruningCoverageK(), exMasConfig.getInterDegreeKeepFraction());
+			ExMasReferenceEngine engine = null;
 
-			List<Ride> r1Rides = new ExMasReferenceEngine(
-					cache, validator,
-					exMasConfig.getSearchHorizon(),
-					exMasConfig.getMaxPoolingDegree(),
-					exMasConfig)
-					.run(new ArrayList<>(requests));
-			r1MaxDegree = r1Rides.stream().mapToInt(Ride::getDegree).max().orElse(0);
-			log.info("R1: {} total rides", r1Rides.size());
-			ExMasCsvWriter.writeRides(r1Csv.toString(), r1Rides);
+			try (ReferenceProgressCheckpointWriter checkpointWriter = r1ProfilingMode
+					? new ReferenceProgressCheckpointWriter(Path.of(r1CheckpointCsv))
+					: null) {
+				try {
+					engine = r1ProfilingMode
+							? new ExMasReferenceEngine(
+									cache, validator,
+									exMasConfig.getSearchHorizon(),
+									exMasConfig.getMaxPoolingDegree(),
+									exMasConfig,
+									"r1",
+									checkpointWriter,
+									r1CheckpointIntervalMs)
+							: new ExMasReferenceEngine(
+									cache, validator,
+									exMasConfig.getSearchHorizon(),
+									exMasConfig.getMaxPoolingDegree(),
+									exMasConfig);
+
+					List<Ride> r1Rides = engine.run(new ArrayList<>(requests));
+					r1MaxDegree = r1Rides.stream().mapToInt(Ride::getDegree).max().orElse(0);
+					log.info("R1: {} total rides", r1Rides.size());
+					ExMasCsvWriter.writeRides(r1Csv.toString(), r1Rides);
+				} catch (OutOfMemoryError error) {
+					r1Completed = false;
+					if (r1ProfilingMode && allowR1OomForProfiling) {
+						boolean wrotePartialRides = false;
+						if (engine != null) {
+							try {
+								wrotePartialRides = engine.writePartialRideSnapshot(r1Csv.toString());
+							} catch (RuntimeException snapshotError) {
+								log.warn("Failed to write partial R1 rides snapshot to {} after OOM", r1Csv, snapshotError);
+							}
+						}
+
+						if (wrotePartialRides) {
+							log.warn(
+									"R1 terminated with OOM in profiling mode; partial rides CSV preserved at {} and checkpoint CSV preserved at {}",
+									r1Csv,
+									r1CheckpointCsv);
+						} else {
+							log.warn("R1 terminated with OOM in profiling mode; checkpoint CSV preserved at {}", r1CheckpointCsv);
+						}
+					} else {
+						throw error;
+					}
+				}
+			}
 		} else {
 			log.info("R1 skipped (-DskipR1=true) — running R2 (BAMAS) only");
 		}
@@ -223,11 +269,10 @@ class ExMasLyonR1R2FastComparisonTest {
 		}
 
 		if (runR4) {
-			// ── 7c. R4: BAMAS production-default pruning (distance gate + top-K coverage).
-			// Adds the second pruning layer on top of R3 and is the profile fed to the
-			// Python MIP optimiser. Re-applies the profile after R3 so the post-extension
-			// pruner is explicitly restored when running both in one JVM.
-			AlgorithmProfile.R4.apply(config);
+			// ── 7c. R6: BAMAS production profile (distance gate scale=0.25 + top-K K=20).
+			// Fed to the Python MIP optimiser. Re-applies to restore post-extension pruner
+			// when running after R3 in one JVM.
+			AlgorithmProfile.R6.apply(config);
 			if (maxPoolingDegreeR4 > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeR4);
 			exMasConfig.setAlgorithmProcessCount(-1);
 			log.info("R4 config: algorithm={}, processCount={}, maxPoolingDegree={}, distScale={}, pruningMode={}, K={}, keepFrac={}",
@@ -246,11 +291,13 @@ class ExMasLyonR1R2FastComparisonTest {
 			ExMasCsvWriter.writeRides(r4Csv.toString(), r4Rides);
 		}
 
-		if (!skipR1 && !skipR2) {
+		if (!skipR1 && !skipR2 && r1Completed) {
 			// ── 8. Compare canonical ride sets ───────────────────────────────────────
 			// relTol=1e-9: with identical SpeedyALT routing and a shared cache, distances
 			// for the same canonical set must be bit-identical between R1 and R2.
 			GoldenAsserter.assertEquivalent(r1Csv, r2Csv, 1e-9, r1MaxDegree);
+		} else if (!skipR1 && !skipR2 && !r1Completed) {
+			log.info("Skipping R1/R2 canonical equality assert because R1 ended with OOM in profiling mode.");
 		}
 	}
 

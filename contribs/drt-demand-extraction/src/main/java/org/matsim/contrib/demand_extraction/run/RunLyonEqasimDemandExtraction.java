@@ -141,7 +141,9 @@ public class RunLyonEqasimDemandExtraction {
 					case "R2" -> AlgorithmProfile.R2;
 					case "R3" -> AlgorithmProfile.R3;
 					case "R4" -> AlgorithmProfile.R4;
-					default -> throw new IllegalArgumentException("Unknown profile: " + args[i] + " (expected r1|r2|r3|r4)");
+					case "R5" -> AlgorithmProfile.R5;
+					case "R6" -> AlgorithmProfile.R6;
+					default -> throw new IllegalArgumentException("Unknown profile: " + args[i] + " (expected r1|r2|r3|r4|r5|r6)");
 				};
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}

@@ -29,7 +29,7 @@ class AlgorithmProfileTest {
 	}
 
 	@Test
-	void r4AddsTopKPostExtensionPruningOnTopOfDistancePruning() {
+	void r4IsSweetSpotDistanceGate() {
 		Config config = ConfigUtils.createConfig(new ExMasConfigGroup());
 
 		AlgorithmProfile.R4.apply(config);
@@ -37,7 +37,37 @@ class AlgorithmProfileTest {
 		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		assertEquals(Algorithm.BAMAS, exMas.getAlgorithm());
 		assertTrue(exMas.isHeuristicPruningEnabled());
-		assertEquals(0.15, exMas.getPruningDistanceSavingsLogScale());
+		assertEquals(0.25, exMas.getPruningDistanceSavingsLogScale());
+		assertEquals(PruningMode.RATIO_THRESHOLD, exMas.getPruningMode());
+		assertEquals(1.0, exMas.getInterDegreeKeepFraction());
+		assertFalse(exMas.isCalcPredecessors());
+	}
+
+	@Test
+	void r5IsAggressiveDistanceGateCeiling() {
+		Config config = ConfigUtils.createConfig(new ExMasConfigGroup());
+
+		AlgorithmProfile.R5.apply(config);
+
+		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
+		assertEquals(Algorithm.BAMAS, exMas.getAlgorithm());
+		assertTrue(exMas.isHeuristicPruningEnabled());
+		assertEquals(0.30, exMas.getPruningDistanceSavingsLogScale());
+		assertEquals(PruningMode.RATIO_THRESHOLD, exMas.getPruningMode());
+		assertEquals(1.0, exMas.getInterDegreeKeepFraction());
+		assertFalse(exMas.isCalcPredecessors());
+	}
+
+	@Test
+	void r6IsProductionProfileWithTopKCompression() {
+		Config config = ConfigUtils.createConfig(new ExMasConfigGroup());
+
+		AlgorithmProfile.R6.apply(config);
+
+		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
+		assertEquals(Algorithm.BAMAS, exMas.getAlgorithm());
+		assertTrue(exMas.isHeuristicPruningEnabled());
+		assertEquals(0.25, exMas.getPruningDistanceSavingsLogScale());
 		assertEquals(PruningMode.COVERAGE_TOPK, exMas.getPruningMode());
 		assertEquals(20, exMas.getPruningCoverageK());
 		assertTrue(exMas.isCalcPredecessors());
