@@ -214,7 +214,7 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// - scale > 0 : require additional distance savings that increases with degree
 	private double pruningDistanceSavingsLogScale = 0.0;
 	// Clamp for requiredSaving(d) to avoid impossible constraints at high degrees.
-	private double pruningDistanceSavingsMax = 0.9;
+	private double pruningDistanceSavingsMax = 0.75;
 	// Apply distance-savings pruning only for rides with degree >= this value.
 	// Default 3 ensures paired rides (degree 2) are not removed, which is important
 	// for shareability graph connectivity.

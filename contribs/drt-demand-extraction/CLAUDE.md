@@ -53,7 +53,8 @@ mvn clean install
 
 # Tests
 mvn test                                                              # default (Kelheim cells, all unit tests)
-mvn test -Djunit.groups=scenario-lyon -Djunit.excludedGroups=         # Lyon cells (needs LYON_* env vars below)
+mvn test -Pscenario-lyon                                              # Lyon cells with 100 GB heap (needs LYON_* env vars below)
+mvn test -Djunit.groups=scenario-lyon -Djunit.excludedGroups=         # Lyon cells, default heap (not recommended for R1 OOM profiling)
 mvn test -Djunit.groups=regression    -Djunit.excludedGroups=         # ExMAS port regression vs main golden
 mvn test -Dtest=ExMasAlgorithmE2ETest                                  # Parameterised matrix of Paper 1 profiles on Kelheim
 mvn test -Dtest=ExMasKelheimE2ETest                                    # Kelheim (runner default profile)

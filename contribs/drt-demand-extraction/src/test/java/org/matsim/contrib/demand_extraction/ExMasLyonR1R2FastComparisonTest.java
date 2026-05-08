@@ -269,10 +269,11 @@ class ExMasLyonR1R2FastComparisonTest {
 		}
 
 		if (runR4) {
-			// ── 7c. R6: BAMAS production profile (distance gate scale=0.25 + top-K K=20).
-			// Fed to the Python MIP optimiser. Re-applies to restore post-extension pruner
-			// when running after R3 in one JVM.
+			// ── 7c. R4 paper profile: distance gate scale=0.25 + post-extension COVERAGE_TOPK K=20.
+			// Uses R6 config (same gate + K) but disables predecessor routing — predecessors are
+			// only needed by the Python MIP pipeline, not for paper comparison runs.
 			AlgorithmProfile.R6.apply(config);
+			exMasConfig.setCalcPredecessors(false); // R6.apply() sets true; override for comparison
 			if (maxPoolingDegreeR4 > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeR4);
 			exMasConfig.setAlgorithmProcessCount(-1);
 			log.info("R4 config: algorithm={}, processCount={}, maxPoolingDegree={}, distScale={}, pruningMode={}, K={}, keepFrac={}",

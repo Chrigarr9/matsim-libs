@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -85,11 +86,22 @@ public class DemandExtractionListener implements ShutdownListener {
 		DrtBudgetConfigurator.configureDrtForBudgetCalculation(config, exMasConfig);
 		log.info("DRT configured to maximum service quality");
 
-		// 1. Cache Modes (with mode availability filtering based on person attributes)
+		// 1. Cache Modes (pre-filtered to persons who have at least one trip in the DRT area)
 		log.info("");
 		log.info("STEP 1: Caching mode alternatives");
 		log.info("----------------------------------------------------------------------");
-		modeRoutingCache.cacheModes(population);
+		TripSpatialPreFilter spatialPreFilter = new TripSpatialPreFilter(exMasConfig);
+		java.util.Collection<? extends org.matsim.api.core.v01.population.Person> personsToCache;
+		if (spatialPreFilter.isActive()) {
+			personsToCache = population.getPersons().values().stream()
+					.filter(spatialPreFilter::isPersonEligible)
+					.collect(Collectors.toList());
+			log.info("Spatial pre-filter: {}/{} persons have at least one trip in the DRT area",
+					personsToCache.size(), population.getPersons().size());
+		} else {
+			personsToCache = population.getPersons().values();
+		}
+		modeRoutingCache.cacheModes(personsToCache);
 
 		// 2. Identify Chains (hierarchical subtours with private vehicle detection)
 		log.info("");

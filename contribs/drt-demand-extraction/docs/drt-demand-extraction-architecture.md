@@ -353,7 +353,7 @@ sequenceDiagram
 
 ## 7. Pruning Mechanisms Summary
 
-All pruning mechanisms ordered by when they apply during set evaluation. The six admissibility-preserving mechanisms (P5/P10 = Check A on both phases; P6 = minIn LB cut; P8/P11 = distance B&B; P9 = structural infeasibility; P12 = delay-window) are the methodological core. P4 is the DAG topological filter (information reuse, also admissibility-preserving). P3 is part of the DegreeGraph extension index (cross-degree information reuse). P15 (in-DFS distance gate) and P19 (post-extension pruner) are the two **optional planner-tunable** filters that are NOT admissibility-preserving.
+All pruning mechanisms ordered by when they apply during set evaluation. The six admissibility-preserving mechanisms (P5/P10 = Check A on both phases; P6 = minIn LB cut; P8/P11 = distance B&B; P9 = structural infeasibility; P12 = delay-window) are the methodological core. P4 is the DAG topological filter (information reuse, also admissibility-preserving). P3 is part of the DegreeGraph extension index (cross-degree information reuse). P15 (in-DFS shared-ride-efficiency gate) and P19 (post-extension pruner) are the two **optional planner-tunable** filters that are NOT admissibility-preserving.
 
 ```mermaid
 flowchart TD
@@ -381,7 +381,7 @@ flowchart TD
     end
 
     subgraph "Evaluation Phase"
-        P15["In-DFS distance-savings gate<br/>OPTIONAL (pruningDistanceSavingsLogScale)"]
+        P15["In-DFS shared-ride-efficiency gate<br/>OPTIONAL (pruningDistanceSavingsLogScale)"]
         P16["Delay optimization feasibility"]
         P17["BudgetValidator<br/>holistic per-passenger validation"]
         P18["Bound tightening on VALID only<br/>bestValidDist[0] ← ride.distance"]
@@ -397,6 +397,24 @@ flowchart TD
     P14 --> P15 --> P16 --> P17 --> P18
     P18 --> P19
 ```
+
+P15 evaluates the same quantity used in Paper 1 under the reader-facing
+name **shared-ride efficiency**:
+
+`eta = 1 - rideDistance / sum(directDistance_i)`
+
+The gate keeps a candidate of degree `d` only if
+`eta >= min(maxSaving, scale * log2(d))`. Older notes in this repo call
+the same quantity "distance savings"; the semantics are identical. The
+intent is to cut the large tail of rides that are poolable but save
+little vehicle-kilometre, while tightening the minimum acceptable
+efficiency with degree until capped.
+
+P19 solves a different problem. After a ride survives P15 and holistic
+validation, `COVERAGE_TOPK` preserves per-request variety within each
+degree by keeping rides in descending savings order until every request
+still has enough options. Production R4 uses `COVERAGE_TOPK(K=20,
+ABS_SAVINGS)` on top of the P15 gate.
 
 ### Pruning effectiveness (historical 10% Bavaria, 21k requests)
 

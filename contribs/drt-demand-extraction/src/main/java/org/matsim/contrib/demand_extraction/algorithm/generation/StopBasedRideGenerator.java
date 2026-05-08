@@ -124,7 +124,7 @@ public final class StopBasedRideGenerator {
 					ConversionCandidate candidate = convertToStopBased(doorToDoor);
 
 					int processed = processedCount.incrementAndGet();
-					if (isPowerOfTwo(processed) || processed == total) {
+					if (processed == total || (int)(100.0 * processed / total) > (int)(100.0 * (processed - 1) / total)) {
 						double percent = (processed * 100.0) / total;
 						log.info("  Stop-based conversion progress: {}/{} ({}%)",
 								processed, total, String.format("%.1f", percent));
@@ -398,9 +398,6 @@ public final class StopBasedRideGenerator {
 		}
 	}
 
-	private static boolean isPowerOfTwo(int n) {
-		return n > 0 && (n & (n - 1)) == 0;
-	}
 
 	/**
 	 * Intermediate candidate holding conversion data before index assignment.

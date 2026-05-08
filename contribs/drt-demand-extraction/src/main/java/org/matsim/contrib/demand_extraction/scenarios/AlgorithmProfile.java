@@ -23,6 +23,13 @@ import org.matsim.core.config.ConfigUtils;
  *   <li><b>R6</b> = BAMAS + distance gate (scale=0.25) + post-extension
  *       COVERAGE_TOPK K=20. Production profile fed to the Python MIP optimiser.
  *       Adds the final compression layer on top of R4.</li>
+ *   <li><b>R7</b> = BAMAS + distance gate (scale=0.30) + post-extension
+ *       COVERAGE_TOPK K=20. Production profile for the 100% Lyon run where
+ *       scale=0.25 OOMs at d4.</li>
+ *   <li><b>R8</b> = BAMAS + distance gate (scale=0.20) + post-extension
+ *       COVERAGE_TOPK K=20. Production profile for the 25% Lyon run:
+ *       lighter gate than R6 (0.25) to recover coverage lost at the smaller
+ *       sample, combined with K=20 compression for MIP tractability.</li>
  * </ul>
  *
  * <p>Gate formula: {@code requiredSaving(d) = min(max, max(0, heuristicScale * log2(d)))}.
@@ -67,6 +74,12 @@ public record AlgorithmProfile(
 			new AlgorithmProfile("R5", Algorithm.BAMAS, true, 0.30, false, 0, false, Integer.MAX_VALUE);
 	public static final AlgorithmProfile R6 =
 			new AlgorithmProfile("R6", Algorithm.BAMAS, true, 0.25, true, 20, true, Integer.MAX_VALUE);
+	/** scale=0.30 + COVERAGE_TOPK K=20. Production profile at 100% scale where scale=0.25 OOMs. */
+	public static final AlgorithmProfile R7 =
+			new AlgorithmProfile("R7", Algorithm.BAMAS, true, 0.30, true, 20, true, Integer.MAX_VALUE);
+	/** scale=0.20 + COVERAGE_TOPK K=20. Production profile for the 25% Lyon run. */
+	public static final AlgorithmProfile R8 =
+			new AlgorithmProfile("R8", Algorithm.BAMAS, true, 0.20, true, 20, true, Integer.MAX_VALUE);
 
 	/**
 	 * Apply this profile to {@code config}. Idempotent across sequential calls on

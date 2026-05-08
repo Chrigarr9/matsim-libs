@@ -78,17 +78,21 @@ public class ModeRoutingCache {
     }
 
     public void cacheModes(Population population) {
+        cacheModes(population.getPersons().values());
+    }
+
+    public void cacheModes(java.util.Collection<? extends Person> persons) {
 		log.info("Starting mode caching for {} persons (adapter: {}, opportunityCost: {}, adapterIncludesOC: {})...",
-				population.getPersons().size(), adapter.getName(),
+				persons.size(), adapter.getName(),
 				exMasConfig.getOpportunityCostModel(), adapter.includesOpportunityCost());
 		long startTime = System.currentTimeMillis();
 
 		// Thread-safe progress tracking
 		AtomicInteger processedPersons = new AtomicInteger(0);
-		int totalPersons = population.getPersons().size();
+		int totalPersons = persons.size();
 		int logInterval = Math.max(1, totalPersons / 10); // Log every 10%
 
-		var personStream = population.getPersons().values().stream();
+		var personStream = persons.stream();
 		if (!exMasConfig.isUseDeterministicNetworkRouting()) {
 			personStream = personStream.parallel();
 		}

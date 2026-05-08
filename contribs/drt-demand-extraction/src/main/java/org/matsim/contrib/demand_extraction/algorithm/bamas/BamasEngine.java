@@ -145,6 +145,7 @@ public final class BamasEngine {
 		log.info("PHASE 4: Iterative Ride Extension");
 		log.info("======================================================================");
 		int nextRideIndex = allRides.size();
+		int extensionStartIdx = nextRideIndex; // first index of extension rides in allRides
 		DegreeGraph prevDegreeGraph = null;
 		for (int degree = 2; degree < maxDegree; degree++) {
 			BamasRideExtender extender = new BamasRideExtender(network, graph, budgetValidator,
@@ -161,19 +162,31 @@ public final class BamasEngine {
 				break;
 			}
 
-			// Inter-degree pruning: delegates to PostExtensionPruner. Mode selected from config:
-			//   RATIO_THRESHOLD — legacy per-degree top-X% by savingsRatio (gated by interDegreeKeepFraction<1)
-			//   COVERAGE_TOPK   — per-request top-K by quality metric (default, always active)
-			// Survivors become base sets for next degree AND final output.
+			// RATIO_THRESHOLD inter-degree pruning only (legacy keep-fraction gate).
+			// COVERAGE_TOPK is applied once after the full cascade — see post-loop block below.
 			int generatedCount = extended.size();
-			PostExtensionPruner pruner = buildPruner(exMasConfig);
-			if (pruner != null) {
-				extended = pruner.prune(extended);
+			if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.RATIO_THRESHOLD) {
+				PostExtensionPruner pruner = buildPruner(exMasConfig);
+				if (pruner != null) {
+					extended = pruner.prune(extended);
+				}
 			}
 
 			nextRideIndex += generatedCount; // index space reserved for all generated rides
 			allRides.addAll(extended);
 			currentDegreeRides = extended;
+		}
+
+		// Post-extension COVERAGE_TOPK pruning: applied once to all extension rides after the
+		// cascade terminates, so the full cascade runs unimpeded and K compression is a final step.
+		if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.COVERAGE_TOPK) {
+			PostExtensionPruner pruner = buildPruner(exMasConfig);
+			if (pruner != null) {
+				List<Ride> extensionRides = new java.util.ArrayList<>(allRides.subList(extensionStartIdx, allRides.size()));
+				extensionRides = pruner.prune(extensionRides);
+				allRides = new java.util.ArrayList<>(allRides.subList(0, extensionStartIdx));
+				allRides.addAll(extensionRides);
+			}
 		}
 
 		// If extension skipped per-ordering budget validation, populate remainingBudgets now.

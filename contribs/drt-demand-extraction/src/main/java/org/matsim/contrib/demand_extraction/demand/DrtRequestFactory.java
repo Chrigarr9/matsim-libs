@@ -1,19 +1,13 @@
 package org.matsim.contrib.demand_extraction.demand;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.geotools.api.feature.simple.SimpleFeature;
-import org.locationtech.jts.geom.Geometry;
-import org.locationtech.jts.geom.GeometryFactory;
-import org.locationtech.jts.geom.Point;
 import org.matsim.api.core.v01.Coord;
-import org.matsim.core.utils.gis.GeoFileReader;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
@@ -98,43 +92,11 @@ public class DrtRequestFactory {
 			log.info("Excluded trip modes: {}", excludedTripModes);
 		}
 
-		// Trip-level exclusion zone: union shapefile polygons into a single geometry,
-		// then drop trips where BOTH O and D lie inside it.
-		boolean hasExclusionZone = exmasConfig.hasTripExclusionZone();
-		Geometry exclusionZone = null;
-		GeometryFactory exclusionGf = null;
-		if (hasExclusionZone) {
-			String shapePath = exmasConfig.getTripFilterExclusionShapefilePath();
-			Collection<SimpleFeature> features = GeoFileReader.getAllFeatures(shapePath);
-			Geometry union = null;
-			for (SimpleFeature feature : features) {
-				Geometry geom = (Geometry) feature.getDefaultGeometry();
-				if (geom != null) {
-					union = (union == null) ? geom : union.union(geom);
-				}
-			}
-			exclusionZone = union;
-			exclusionGf = new GeometryFactory();
-			log.info("Trip exclusion zone loaded from {}: {} feature(s), union geom type={}",
-					shapePath, features.size(), exclusionZone != null ? exclusionZone.getGeometryType() : "null");
-		}
-
-		// Trip-level spatial filter: only extract trips where both O and D are inside radius
-		boolean hasSpatialFilter = exmasConfig.hasTripSpatialFilter();
-		double spatialCenterX = 0, spatialCenterY = 0, spatialRadiusSq = 0;
-		if (hasSpatialFilter) {
-			spatialCenterX = exmasConfig.getTripFilterCenterX();
-			spatialCenterY = exmasConfig.getTripFilterCenterY();
-			double r = exmasConfig.getTripFilterRadiusKm() * 1000.0;
-			spatialRadiusSq = r * r;
-			log.info("Trip spatial filter: {}km around ({}, {})",
-					exmasConfig.getTripFilterRadiusKm(), spatialCenterX, spatialCenterY);
-		}
+		TripSpatialPreFilter spatialFilter = new TripSpatialPreFilter(exmasConfig);
 
 		List<DrtRequest> requests = new ArrayList<>();
 		int filteredByCommute = 0;
 		int filteredBySpatial = 0;
-		int filteredByExclusionZone = 0;
 		int filteredByExcludedMode = 0;
 
 		int processedPersons = 0;
@@ -239,33 +201,13 @@ public class DrtRequestFactory {
 					continue;
 				}
 
-				// Trip-level spatial filter: skip if O or D is outside radius
-				if (hasSpatialFilter) {
+				// Trip-level spatial filter: skip if O or D is outside radius, or both inside exclusion zone
+				if (spatialFilter.isActive()) {
 					Coord oCoord = trip.getOriginActivity().getCoord();
 					Coord dCoord = trip.getDestinationActivity().getCoord();
-					if (oCoord == null || dCoord == null) {
+					if (!spatialFilter.isTripEligible(oCoord, dCoord)) {
 						filteredBySpatial++;
 						continue;
-					}
-					double dxO = oCoord.getX() - spatialCenterX, dyO = oCoord.getY() - spatialCenterY;
-					double dxD = dCoord.getX() - spatialCenterX, dyD = dCoord.getY() - spatialCenterY;
-					if ((dxO * dxO + dyO * dyO) > spatialRadiusSq || (dxD * dxD + dyD * dyD) > spatialRadiusSq) {
-						filteredBySpatial++;
-						continue;
-					}
-				}
-
-				// Trip-level exclusion zone: drop trips where BOTH O and D are inside polygon
-				if (hasExclusionZone && exclusionZone != null) {
-					Coord oCoord = trip.getOriginActivity().getCoord();
-					Coord dCoord = trip.getDestinationActivity().getCoord();
-					if (oCoord != null && dCoord != null) {
-						Point oPt = exclusionGf.createPoint(new org.locationtech.jts.geom.Coordinate(oCoord.getX(), oCoord.getY()));
-						Point dPt = exclusionGf.createPoint(new org.locationtech.jts.geom.Coordinate(dCoord.getX(), dCoord.getY()));
-						if (exclusionZone.contains(oPt) && exclusionZone.contains(dPt)) {
-							filteredByExclusionZone++;
-							continue;
-						}
 					}
 				}
 
@@ -295,9 +237,9 @@ public class DrtRequestFactory {
 		long elapsed = System.currentTimeMillis() - startTime;
 		double seconds = elapsed / 1000.0;
 		log.info("Request building complete: {} requests from {} persons in {}s "
-				+ "(filtered {} by commute filter, {} by spatial filter, {} by exclusion zone, {} by excluded mode)",
+				+ "(filtered {} by commute filter, {} by spatial/exclusion-zone filter, {} by excluded mode)",
 				requests.size(), totalPersons, String.format("%.1f", seconds),
-				filteredByCommute, filteredBySpatial, filteredByExclusionZone, filteredByExcludedMode);
+				filteredByCommute, filteredBySpatial, filteredByExcludedMode);
 
 		return requests;
 	}

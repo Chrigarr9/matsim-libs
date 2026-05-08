@@ -103,7 +103,7 @@ public final class PairGenerator {
 		List<PairCandidate> candidates = requestStream
 				.mapToObj(i -> {
 					int processed = processedRequests.incrementAndGet();
-					if (isPowerOfTwo(processed) || processed == total) {
+					if (processed == total || (int)(100.0 * processed / total) > (int)(100.0 * (processed - 1) / total)) {
 						double percent = (processed * 100.0) / total;
 						long now = System.currentTimeMillis();
 						double elapsedSeconds = Math.max(0.001, (now - startTime) / 1000.0);
@@ -149,9 +149,6 @@ public final class PairGenerator {
 		return pairs;
 	}
 
-	private static boolean isPowerOfTwo(int value) {
-		return value > 0 && (value & (value - 1)) == 0;
-	}
 
 	private static String formatDuration(double seconds) {
 		long totalSeconds = Math.max(0L, Math.round(seconds));

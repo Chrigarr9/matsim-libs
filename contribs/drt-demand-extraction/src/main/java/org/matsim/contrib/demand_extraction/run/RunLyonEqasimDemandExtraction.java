@@ -71,6 +71,9 @@ public class RunLyonEqasimDemandExtraction {
 		 *  pair generation entirely (drt_requests.csv + singles only — fast path for
 		 *  regenerating the requests CSV). */
 		public final int maxPoolingDegree;
+		/** Override predecessorsFilterTime (seconds). NaN = keep config default (unbounded).
+		 *  Set to e.g. 7200 to limit successor search to a 2h window — required for 100% scale. */
+		public final double predecessorsFilterTime;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
@@ -78,7 +81,7 @@ public class RunLyonEqasimDemandExtraction {
 				ExMasConfigGroup.Algorithm algorithm, AlgorithmProfile profile,
 				double tripFilterRadiusKm, boolean noExclusionZone,
 				boolean noPredecessors, boolean noShapley, boolean deterministicRouting,
-				int maxPoolingDegree) {
+				int maxPoolingDegree, double predecessorsFilterTime) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -96,6 +99,7 @@ public class RunLyonEqasimDemandExtraction {
 			this.noShapley = noShapley;
 			this.deterministicRouting = deterministicRouting;
 			this.maxPoolingDegree = maxPoolingDegree;
+			this.predecessorsFilterTime = predecessorsFilterTime;
 		}
 	}
 
@@ -117,6 +121,7 @@ public class RunLyonEqasimDemandExtraction {
 		boolean noShapley = false;
 		boolean deterministicRouting = false;
 		int maxPoolingDegree = -1;
+		double predecessorsFilterTime = Double.NaN;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -136,6 +141,7 @@ public class RunLyonEqasimDemandExtraction {
 				case "--no-shapley" -> noShapley = true;
 				case "--deterministic-routing" -> deterministicRouting = true;
 				case "--max-pooling-degree" -> maxPoolingDegree = Integer.parseInt(args[++i]);
+				case "--predecessors-filter-time" -> predecessorsFilterTime = Double.parseDouble(args[++i]);
 				case "--profile" -> profile = switch (args[++i].toUpperCase()) {
 					case "R1" -> AlgorithmProfile.R1;
 					case "R2" -> AlgorithmProfile.R2;
@@ -143,7 +149,9 @@ public class RunLyonEqasimDemandExtraction {
 					case "R4" -> AlgorithmProfile.R4;
 					case "R5" -> AlgorithmProfile.R5;
 					case "R6" -> AlgorithmProfile.R6;
-					default -> throw new IllegalArgumentException("Unknown profile: " + args[i] + " (expected r1|r2|r3|r4|r5|r6)");
+					case "R7" -> AlgorithmProfile.R7;
+					case "R8" -> AlgorithmProfile.R8;
+					default -> throw new IllegalArgumentException("Unknown profile: " + args[i] + " (expected r1|r2|r3|r4|r5|r6|r7|r8)");
 				};
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
@@ -151,7 +159,7 @@ public class RunLyonEqasimDemandExtraction {
 		return new ParsedArgs(sample, scenarioDir, prefix, travelTimesPath, outputDir,
 				searchHorizon, maxDetourFactor, minDrtCostPerKm, pruningCoverageK, algorithm, profile,
 				tripFilterRadiusKm, noExclusionZone, noPredecessors, noShapley, deterministicRouting,
-				maxPoolingDegree);
+				maxPoolingDegree, predecessorsFilterTime);
 	}
 
 	public static void main(String[] args) throws Exception {
@@ -237,6 +245,10 @@ public class RunLyonEqasimDemandExtraction {
 		if (p.maxPoolingDegree > 0) {
 			log.info("  Override: maxPoolingDegree = {}", p.maxPoolingDegree);
 			exMas.setMaxPoolingDegree(p.maxPoolingDegree);
+		}
+		if (!Double.isNaN(p.predecessorsFilterTime)) {
+			log.info("  Override: predecessorsFilterTime = {}s", p.predecessorsFilterTime);
+			exMas.setPredecessorsFilterTime(p.predecessorsFilterTime);
 		}
 	}
 }

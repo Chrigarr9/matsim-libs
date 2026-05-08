@@ -275,7 +275,7 @@ public final class RidePostProcessor {
         // Forward search: For each ride i, find successors j
         stream.forEach(i -> {
 			int done = processed.incrementAndGet();
-			if (done == total || ((done & (done - 1)) == 0)) {
+			if (done == total || (int)(100.0 * done / total) > (int)(100.0 * (done - 1) / total)) {
 				double elapsedSeconds = (System.nanoTime() - routingStartNanos) / 1e9;
 				double remainingSeconds = done <= 0 ? 0.0 : (elapsedSeconds / done) * (total - done);
 				double percent = 100.0 * done / total;

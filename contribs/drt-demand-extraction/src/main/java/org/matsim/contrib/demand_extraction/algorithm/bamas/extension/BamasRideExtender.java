@@ -13,6 +13,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -146,6 +147,7 @@ public final class BamasRideExtender {
 		ConcurrentHashMap<Long, Ride> resultBySetHash = new ConcurrentHashMap<>();
 		AtomicInteger setsProcessed = new AtomicInteger();
 		AtomicInteger resultsFound = new AtomicInteger();
+		AtomicLong lastProgressLogTime = new AtomicLong(System.currentTimeMillis());
 		ConcurrentHashMap<Long, EnumerationStats> threadStatsMap = new ConcurrentHashMap<>();
 
 		BlockingQueue<ExtensionTask> queue = new ArrayBlockingQueue<>(Math.max(16, parallelism * 4));
@@ -176,9 +178,11 @@ public final class BamasRideExtender {
 						resultsFound.incrementAndGet();
 					}
 
-					// Progress log at power-of-two milestones
-					if (Integer.bitCount(done) == 1 && done >= 256) {
-						double elapsed = (System.currentTimeMillis() - phaseStartTime) / 1000.0;
+					// Progress log every 30 seconds (total unknown upfront — producer/consumer)
+					long now = System.currentTimeMillis();
+					long prev = lastProgressLogTime.get();
+					if (now - prev >= 30_000 && lastProgressLogTime.compareAndSet(prev, now)) {
+						double elapsed = (now - phaseStartTime) / 1000.0;
 						double rate = done / Math.max(0.001, elapsed);
 						log.info("  Progress: {} sets processed ({} results), {} sets/s",
 								done, resultsFound.get(), String.format("%.0f", rate));

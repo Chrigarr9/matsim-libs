@@ -203,6 +203,7 @@ public final class ReferenceRideExtender {
 							for (int[] pairRides : allPairRideCombinations) {
 								long t0 = System.nanoTime();
 								Ride ext = tryExtend(base, addedRequest, pairRides, 0);
+								if (stats != null) stats.orderingsEvaluated.increment();
 								if (stats != null) stats.rideConstructionCpuNs.add(System.nanoTime() - t0);
 								if (ext == null) {
 									if (stats != null) stats.tryExtendFailed.increment();
@@ -285,8 +286,9 @@ public final class ReferenceRideExtender {
 		long elapsed = System.currentTimeMillis() - startTime;
 		double seconds = elapsed / 1000.0;
 		stats.logTimeBreakdown(/* threads= */ 1, elapsed, setsProcessed);
-		log.info("Extension complete: {} rides extended to degree {} in {}s ({} request sets)",
-				allExtended.size(), targetDegree, String.format("%.1f", seconds), setsProcessed);
+		log.info("Extension complete: {} rides extended to degree {} in {}s ({} request sets, {} orderings evaluated)",
+				allExtended.size(), targetDegree, String.format("%.1f", seconds), setsProcessed,
+				stats.orderingsEvaluated.sum());
 		MemoryProfiler.HeapSample completionSample = MemoryProfiler.snapshotAtEndOfDegree(targetDegree, allExtended.size());
 		emitCheckpoint(
 				targetDegree,
@@ -353,6 +355,10 @@ public final class ReferenceRideExtender {
 		private final LongAdder distanceSavingsPrunedEarly = new LongAdder();
 		private final LongAdder candidatesAdded = new LongAdder();
 		private final LongAdder prunedByTopNPerBase = new LongAdder();
+
+		// Total orderings tried (= calls to tryExtend), regardless of outcome.
+		// Matches R2's "Orderings evaluated" so both can appear on the same figure axis.
+		private final LongAdder orderingsEvaluated = new LongAdder();
 
 		// Time accumulators (nanoseconds), matched to R2's EnumerationStats labels for
 		// apples-to-apples R1↔R2 comparison. R1 ReferenceRideExtender is single-threaded

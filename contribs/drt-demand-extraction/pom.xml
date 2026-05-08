@@ -79,6 +79,7 @@
 		     An empty <groups> value means "no group filter" (untagged tests run). -->
 		<junit.groups></junit.groups>
 		<junit.excludedGroups>scenario-lyon,regression</junit.excludedGroups>
+		<surefire.jvm.args></surefire.jvm.args>
 	</properties>
 
 	<build>
@@ -98,8 +99,39 @@
 				<configuration>
 					<groups>${junit.groups}</groups>
 					<excludedGroups>${junit.excludedGroups}</excludedGroups>
+					<argLine>${surefire.jvm.args}</argLine>
 				</configuration>
 			</plugin>
 		</plugins>
 	</build>
+
+	<profiles>
+		<!-- Activate with -Pscenario-lyon to run Lyon scenario tests with 100 GB heap,
+		     R1 OOM profiling enabled, and checkpoint snapshots written to a fixed path.
+		     Equivalent to manually passing:
+		         -Djunit.groups=scenario-lyon -Djunit.excludedGroups=
+		         -Xmx100g -DallowR1OomForProfiling=true -Dr1CheckpointCsv=<fixed path> -->
+		<profile>
+			<id>scenario-lyon</id>
+			<properties>
+				<junit.groups>scenario-lyon</junit.groups>
+				<junit.excludedGroups></junit.excludedGroups>
+				<surefire.jvm.args>-Xmx100g</surefire.jvm.args>
+			</properties>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-surefire-plugin</artifactId>
+						<configuration>
+							<systemPropertyVariables>
+								<allowR1OomForProfiling>true</allowR1OomForProfiling>
+								<r1CheckpointCsv>test/output/lyon-r1r2-fast-comparison/r1-progress.csv</r1CheckpointCsv>
+							</systemPropertyVariables>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 </project>
