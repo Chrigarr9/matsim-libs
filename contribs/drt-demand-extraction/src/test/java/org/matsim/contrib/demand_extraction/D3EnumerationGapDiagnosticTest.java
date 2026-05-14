@@ -30,7 +30,6 @@ import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
-import org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile;
 import org.matsim.contrib.demand_extraction.scenarios.LyonEqasimScenarioFixture;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
@@ -162,11 +161,18 @@ class D3EnumerationGapDiagnosticTest {
 					String.format("%.0f", r.getPositiveDelayRelComponent()));
 		}
 
-		// ── 4. ExMasConfigGroup with R2 profile (no pruning) ──────────────────
+		// ── 4. ExMasConfigGroup with R2 setup (BAMAS, no pruning) ─────────────
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
-		exMasConfig.setCalcPredecessors(false);
 		exMasConfig.setCalcShapleyValues(false);
-		AlgorithmProfile.R2.apply(config);
+		// R2 = BAMAS, no pruning.
+		exMasConfig.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
+		exMasConfig.setHeuristicPruningEnabled(false);
+		exMasConfig.setPruningDistanceSavingsLogScale(-1.0);
+		exMasConfig.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
+		exMasConfig.setInterDegreeKeepFraction(1.0);
+		exMasConfig.clearPruningCoverageKByDegree();
+		exMasConfig.setCalcPredecessors(false);
+		exMasConfig.setMaxPoolingDegree(Integer.MAX_VALUE);
 		exMasConfig.setAlgorithmProcessCount(1);
 
 		BudgetValidator validator = new ExMasLyonR1R2FastComparisonTestPassthroughValidator(

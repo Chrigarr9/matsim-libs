@@ -40,7 +40,7 @@ Two stage-1 algorithms co-exist, selected by `--algorithm=exmas|bamas` (default 
 - **`algorithm/exmas/`** — reference ExMAS, ported from `main` branch, **frozen**. Used by Paper 1 R1 (vanilla ExMAS baseline). Verified equivalent to `main`'s binary on Kelheim by `ExMasReferencePortRegressionTest`.
 - **`algorithm/bamas/`** — Budget-Aware Matching of Autonomous Shared-rides (the active algorithm). Used by Paper 1 R2 (BAMAS no-pruning), R3 (distance-only pruning / heuristic-only ablation), and R4 (full production pruning: distance gate + post-extension COVERAGE_TOPK).
 
-Paper 1 R1/R2/R3/R4 profiles live in `org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile` and form a strict-subset progression R2 ⊂ R3 ⊂ R4 by enabled gates. Per-scenario setup is in `scenarios/{Kelheim,LyonEqasim}ScenarioFixture` so runners and tests share the same configuration.
+Paper 1 algorithm/pruning settings are driven by the orthogonal triple `--algorithm`/`--gate-scale`/`--coverage-k` on `RunLyonEqasimDemandExtraction` (and via direct `ExMasConfigGroup` setters in tests). The legacy `AlgorithmProfile` R1..R8 bundle was retired in task A6. R2 ⊂ R3 ⊂ R4 remains the conceptual strict-subset progression by enabled gates. Per-scenario setup is in `scenarios/{Kelheim,LyonEqasim}ScenarioFixture` so runners and tests share the same configuration.
 
 See `docs/plans/2026-04-21-exmas-reference-fork-design.md` for the architecture.
 

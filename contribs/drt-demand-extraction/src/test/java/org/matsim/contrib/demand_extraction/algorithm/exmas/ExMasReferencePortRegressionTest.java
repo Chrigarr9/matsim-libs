@@ -5,10 +5,11 @@ import java.nio.file.Path;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.scenarios.GoldenAsserter;
 import org.matsim.contrib.demand_extraction.scenarios.KelheimScenarioFixture;
 import org.matsim.core.config.Config;
+import org.matsim.core.config.ConfigUtils;
 
 /**
  * Regression guard for the R1 ExMAS port (algorithm/exmas/).
@@ -33,7 +34,18 @@ public class ExMasReferencePortRegressionTest {
 		KelheimScenarioFixture fixture = new KelheimScenarioFixture();
 
 		Config config = fixture.createConfig(outputDir);
-		fixture.configureAlgorithm(config, AlgorithmProfile.R1);
+		fixture.configureAlgorithm(config, cfg -> {
+			ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(cfg, ExMasConfigGroup.class);
+			// R1 = vanilla ExMAS reference, no pruning.
+			exMas.setAlgorithm(ExMasConfigGroup.Algorithm.EXMAS);
+			exMas.setHeuristicPruningEnabled(false);
+			exMas.setPruningDistanceSavingsLogScale(-1.0);
+			exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
+			exMas.setInterDegreeKeepFraction(1.0);
+			exMas.clearPruningCoverageKByDegree();
+			exMas.setCalcPredecessors(false);
+			exMas.setMaxPoolingDegree(Integer.MAX_VALUE);
+		});
 		fixture.runDemandExtraction(fixture.createControler(config));
 
 		String runId = config.controller().getRunId();

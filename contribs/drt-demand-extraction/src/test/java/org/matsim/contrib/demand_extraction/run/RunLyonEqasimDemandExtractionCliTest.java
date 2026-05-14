@@ -1,7 +1,6 @@
 package org.matsim.contrib.demand_extraction.run;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 import org.junit.jupiter.api.Test;
 
@@ -36,7 +35,6 @@ class RunLyonEqasimDemandExtractionCliTest {
         assertEquals("bamas", args.algorithm);
         assertEquals(-1.0, args.gateScale);
         assertEquals(0, args.coverageK);
-        assertNull(args.profile);
     }
 
     @Test

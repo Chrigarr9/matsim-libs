@@ -33,7 +33,6 @@ import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.contrib.demand_extraction.io.ExMasCsvWriter;
-import org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile;
 import org.matsim.contrib.demand_extraction.scenarios.LyonEqasimScenarioFixture;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
@@ -166,8 +165,15 @@ class LyonKScheduleSweepTest {
 			log.info("SWEEP: {} (defaultK={}, perDegreeK={})", label, schedule.defaultK(), schedule.perDegreeK());
 			log.info("======================================================================");
 
-			// R6 profile: distance gate scale=0.25 + COVERAGE_TOPK K=20 base — clearPruningCoverageKByDegree called inside
-			AlgorithmProfile.R6.apply(config);
+			// R6 setup: BAMAS + distance gate scale=0.25 + COVERAGE_TOPK K=20, predecessors on.
+			exMasConfig.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
+			exMasConfig.setHeuristicPruningEnabled(true);
+			exMasConfig.setPruningDistanceSavingsLogScale(0.25);
+			exMasConfig.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
+			exMasConfig.setPruningCoverageK(20);
+			exMasConfig.clearPruningCoverageKByDegree();
+			exMasConfig.setCalcPredecessors(true);
+			exMasConfig.setMaxPoolingDegree(Integer.MAX_VALUE);
 			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
 
 			// Override flat K and per-degree schedule

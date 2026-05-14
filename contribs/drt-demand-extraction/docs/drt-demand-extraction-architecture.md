@@ -5,7 +5,7 @@ Documentation of the MATSim DRT demand extraction pipeline. The Stage-2 ride-mat
 - **`algorithm/exmas/`** — frozen reference port of the original ExMAS algorithm (Kucharski & Cats 2020), used as the R1 baseline. Verified equivalent to `main@54d611e854d` on Kelheim by `ExMasReferencePortRegressionTest`.
 - **`algorithm/bamas/`** — Budget-Aware Matching of Autonomous Shared-rides (BAMAS), the active algorithm used in profiles R2/R3/R4. **This document describes BAMAS unless otherwise noted.**
 
-Selection at the CLI: `--algorithm=exmas|bamas` (default `bamas`). Per-scenario fixtures (`scenarios/KelheimScenarioFixture`, `scenarios/LyonEqasimScenarioFixture`) and `scenarios/AlgorithmProfile` (R1/R2/R3/R4) configure the choice for runners and tests.
+Selection at the CLI: `--algorithm=exmas|bamas` (default `bamas`). Per-scenario fixtures (`scenarios/KelheimScenarioFixture`, `scenarios/LyonEqasimScenarioFixture`) configure the choice for runners and tests; pruning is driven by the orthogonal flags `--gate-scale` and `--coverage-k` (and direct `ExMasConfigGroup` setters in tests). The legacy `AlgorithmProfile` R1..R8 bundle was retired in task A6.
 
 > **Profile naming.** Paper and code now agree (rename completed 2026-04-28): the strict-subset progression is R2 ⊂ R3 ⊂ R4, where R3 adds the in-DFS distance gate and R4 adds the post-extension pruner (= production). Pre-2026-04-28 run artefacts on disk under `R3/` and `R4/` directory names refer to the pre-swap meaning (old-R3 ≡ new-R4 production; old-R4 ≡ new-R3 ablation).
 

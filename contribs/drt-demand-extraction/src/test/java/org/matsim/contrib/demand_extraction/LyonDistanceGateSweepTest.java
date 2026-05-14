@@ -33,7 +33,6 @@ import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
-import org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile;
 import org.matsim.contrib.demand_extraction.scenarios.LyonEqasimScenarioFixture;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
@@ -179,11 +178,19 @@ class LyonDistanceGateSweepTest {
 					gate.requiredSavingStr(4), gate.requiredSavingStr(6));
 			log.info("======================================================================");
 
-			// R3 profile: heuristic gate ON, post-extension pruner OFF (no per-degree K during enumeration)
-			AlgorithmProfile.R3.apply(config);
+			// R3 setup: BAMAS + heuristic gate ON, post-extension pruner OFF (no per-degree K during enumeration).
+			// (Scale is overridden below to the swept value; the base value here is irrelevant.)
+			exMasConfig.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
+			exMasConfig.setHeuristicPruningEnabled(true);
+			exMasConfig.setPruningDistanceSavingsLogScale(0.15);
+			exMasConfig.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
+			exMasConfig.setInterDegreeKeepFraction(1.0);
+			exMasConfig.clearPruningCoverageKByDegree();
+			exMasConfig.setCalcPredecessors(false);
+			exMasConfig.setMaxPoolingDegree(Integer.MAX_VALUE);
 			if (maxPoolingDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeOverride);
 
-			// Override gate parameters (AlgorithmProfile.R3.apply sets scale=0.15 and leaves max at fixture default)
+			// Override gate parameters (the R3 setup above sets scale=0.15 and leaves max at fixture default).
 			exMasConfig.setPruningDistanceSavingsLogScale(gate.scale());
 			exMasConfig.setPruningDistanceSavingsMax(gate.max());
 			exMasConfig.setPruningDistanceSavingsMinDegree(2); // match Lyon fixture (filter pairs too)

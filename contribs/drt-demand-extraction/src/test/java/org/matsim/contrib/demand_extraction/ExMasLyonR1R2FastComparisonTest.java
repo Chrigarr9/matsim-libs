@@ -30,7 +30,6 @@ import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.contrib.demand_extraction.io.ExMasCsvWriter;
-import org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile;
 import org.matsim.contrib.demand_extraction.scenarios.GoldenAsserter;
 import org.matsim.contrib.demand_extraction.scenarios.LyonEqasimScenarioFixture;
 import org.matsim.core.config.Config;
@@ -69,6 +68,54 @@ import org.matsim.core.trafficmonitoring.FreeSpeedTravelTime;
 class ExMasLyonR1R2FastComparisonTest {
 
 	private static final Logger log = LogManager.getLogger(ExMasLyonR1R2FastComparisonTest.class);
+
+	/** R1 = vanilla ExMAS reference, no pruning. */
+	private static void applyR1(ExMasConfigGroup exMas) {
+		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.EXMAS);
+		exMas.setHeuristicPruningEnabled(false);
+		exMas.setPruningDistanceSavingsLogScale(-1.0);
+		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
+		exMas.setInterDegreeKeepFraction(1.0);
+		exMas.clearPruningCoverageKByDegree();
+		exMas.setCalcPredecessors(false);
+		exMas.setMaxPoolingDegree(Integer.MAX_VALUE);
+	}
+
+	/** R2 = BAMAS, no pruning. */
+	private static void applyR2(ExMasConfigGroup exMas) {
+		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
+		exMas.setHeuristicPruningEnabled(false);
+		exMas.setPruningDistanceSavingsLogScale(-1.0);
+		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
+		exMas.setInterDegreeKeepFraction(1.0);
+		exMas.clearPruningCoverageKByDegree();
+		exMas.setCalcPredecessors(false);
+		exMas.setMaxPoolingDegree(Integer.MAX_VALUE);
+	}
+
+	/** R3 = BAMAS + heuristic distance gate (scale=0.15), no post-extension pruning. */
+	private static void applyR3(ExMasConfigGroup exMas) {
+		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
+		exMas.setHeuristicPruningEnabled(true);
+		exMas.setPruningDistanceSavingsLogScale(0.15);
+		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
+		exMas.setInterDegreeKeepFraction(1.0);
+		exMas.clearPruningCoverageKByDegree();
+		exMas.setCalcPredecessors(false);
+		exMas.setMaxPoolingDegree(Integer.MAX_VALUE);
+	}
+
+	/** R6 = BAMAS + distance gate (scale=0.25) + COVERAGE_TOPK (K=20), predecessors on. */
+	private static void applyR6(ExMasConfigGroup exMas) {
+		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
+		exMas.setHeuristicPruningEnabled(true);
+		exMas.setPruningDistanceSavingsLogScale(0.25);
+		exMas.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
+		exMas.setPruningCoverageK(20);
+		exMas.clearPruningCoverageKByDegree();
+		exMas.setCalcPredecessors(true);
+		exMas.setMaxPoolingDegree(Integer.MAX_VALUE);
+	}
 
 	@Test
 	void r1AndR2ProduceIdenticalCanonicalRideSets() throws Exception {
@@ -157,8 +204,8 @@ class ExMasLyonR1R2FastComparisonTest {
 
 		if (!skipR1) {
 			// ── 6. R1: ExMAS reference, parallel ─────────────────────────────────────
-			AlgorithmProfile.R1.apply(config);
-			// Re-apply maxPoolingDegree override AFTER profile.apply() — the profile resets
+			applyR1(exMasConfig);
+			// Re-apply maxPoolingDegree override AFTER applyR1 — the R1 setup resets
 			// maxPoolingDegree to Integer.MAX_VALUE, which would otherwise wipe the cap.
 			if (maxPoolingDegreeR1 > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeR1);
 			exMasConfig.setAlgorithmProcessCount(-1); // -1 = all cores; parallel SpeedyALT is byte-deterministic
@@ -225,7 +272,7 @@ class ExMasLyonR1R2FastComparisonTest {
 			// ── 7. R2: BAMAS no-pruning, parallel ────────────────────────────────────
 			// Shares the warmed-up routing cache from R1 — identical routing for any
 			// segment already computed; new segments use thread-local SpeedyALT instances.
-			AlgorithmProfile.R2.apply(config);
+			applyR2(exMasConfig);
 			if (maxPoolingDegreeR2 > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeR2);
 			exMasConfig.setAlgorithmProcessCount(-1);
 			log.info("R2 config: algorithm={}, processCount={}, maxPoolingDegree={}, distScale={}, pruningMode={}, K={}, keepFrac={}",
@@ -249,7 +296,7 @@ class ExMasLyonR1R2FastComparisonTest {
 			// ── 7b. R3: BAMAS distance-only / heuristic-only pruning (heuristic gate ON,
 			// post-extension OFF). This is the first pruning layer after R2, isolating
 			// the in-DFS distance gate before adding the top-K post-extension pruner.
-			AlgorithmProfile.R3.apply(config);
+			applyR3(exMasConfig);
 			if (maxPoolingDegreeR3 > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeR3);
 			exMasConfig.setAlgorithmProcessCount(-1);
 			log.info("R3 config: algorithm={}, processCount={}, maxPoolingDegree={}, distScale={}, pruningMode={}, K={}, keepFrac={}",
@@ -272,8 +319,8 @@ class ExMasLyonR1R2FastComparisonTest {
 			// ── 7c. R4 paper profile: distance gate scale=0.25 + post-extension COVERAGE_TOPK K=20.
 			// Uses R6 config (same gate + K) but disables predecessor routing — predecessors are
 			// only needed by the Python MIP pipeline, not for paper comparison runs.
-			AlgorithmProfile.R6.apply(config);
-			exMasConfig.setCalcPredecessors(false); // R6.apply() sets true; override for comparison
+			applyR6(exMasConfig);
+			exMasConfig.setCalcPredecessors(false); // applyR6 sets true; override for comparison
 			if (maxPoolingDegreeR4 > 0) exMasConfig.setMaxPoolingDegree(maxPoolingDegreeR4);
 			exMasConfig.setAlgorithmProcessCount(-1);
 			log.info("R4 config: algorithm={}, processCount={}, maxPoolingDegree={}, distScale={}, pruningMode={}, K={}, keepFrac={}",

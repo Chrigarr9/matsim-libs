@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Regenerates src/test/resources/golden/exmas-kelheim/{exmas_rides,drt_requests}.csv
-# by running this branch's R1 profile (ExMasAlgorithmE2ETest with AlgorithmProfile.R1).
+# by running this branch's R1 cell (ExMasAlgorithmE2ETest, ExMAS reference algorithm,
+# unpruned).
 #
 # After the 2026-04-22 fix (getAllPairRideCombinations — full 2^n extension
 # enumeration per paper Algorithm 2), the golden represents the corrected R1
@@ -31,7 +32,7 @@ if [[ -e "$GOLDEN_DIR/exmas_rides.csv" && $FORCE -eq 0 ]]; then
 fi
 
 cd "$CONTRIB_DIR"
-echo "Running ExMasAlgorithmE2ETest with AlgorithmProfile.R1 (Kelheim)..."
+echo "Running ExMasAlgorithmE2ETest R1 cell (Kelheim, ExMAS reference, unpruned)..."
 mvn test -Dtest="ExMasAlgorithmE2ETest#kelheimAlgorithmRunsEndToEnd[Kelheim + R1]" \
     -Denforcer.skip=true
 
@@ -55,7 +56,7 @@ Golden CSVs for ExMasReferencePortRegressionTest.
 source_branch=feature/exmas-reference-fork
 source_sha=$BRANCH_SHA
 generated_at=$(date -Iseconds)
-generator=ExMasAlgorithmE2ETest (kelheim + AlgorithmProfile.R1)
+generator=ExMasAlgorithmE2ETest (kelheim + ExMAS reference algorithm, unpruned; pre-A6 named "R1")
 generator_invocation=mvn test -Dtest="ExMasAlgorithmE2ETest#kelheimAlgorithmRunsEndToEnd[Kelheim + R1]"
 java=$(java -version 2>&1 | head -1)
 scenario=matsim-examples kelheim-mini (1% sample)

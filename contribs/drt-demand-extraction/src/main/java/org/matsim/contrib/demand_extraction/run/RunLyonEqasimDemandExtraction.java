@@ -5,7 +5,6 @@ import java.nio.file.Path;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
-import org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile;
 import org.matsim.contrib.demand_extraction.scenarios.FocusRegistry;
 import org.matsim.contrib.demand_extraction.scenarios.LyonEqasimScenarioFixture;
 import org.matsim.core.config.Config;
@@ -27,17 +26,15 @@ import org.matsim.core.controler.Controler;
  *                --prefix lyon_drt_10pct_ \
  *                --travel-times ../../../matsim_scenarios/eqasim-france/output_fullregion_10pct/travel_times.tsv \
  *                --output-dir ../../../outputs/R2 \
- *                --profile r2" \
+ *                --algorithm bamas" \
  *   -Denforcer.skip=true
  * </pre>
  *
- * <p>Use {@code --profile r1|r2|r3|r4} to apply the Paper 1 {@link AlgorithmProfile}
- * (sets both algorithm and pruning knobs). R1 = ExMAS reference, R2 = BAMAS no
- * pruning, R3 = BAMAS distance-only pruning (heuristic gate ON, post-extension
- * OFF), R4 = BAMAS production defaults (heuristic gate ON + post-extension
- * COVERAGE_TOPK with K=20). The profiles form a strict-subset progression
- * R2 ⊂ R3 ⊂ R4 by enabled gates. Overrides {@code --algorithm} when both are
- * specified.
+ * <p>Drive algorithm + pruning via the orthogonal triple
+ * {@code --algorithm bamas|exmas}, {@code --gate-scale <f>} (heuristic
+ * distance gate; {@code -1} disables) and {@code --coverage-k <int>}
+ * (post-extension COVERAGE_TOPK budget; {@code 0} disables). The legacy
+ * {@code --profile R1..R8} bundle was retired in task A6.
  */
 public class RunLyonEqasimDemandExtraction {
 
@@ -62,8 +59,6 @@ public class RunLyonEqasimDemandExtraction {
 		public final double minDrtCostPerKm;
 		public final int pruningCoverageK;
 		public final ExMasConfigGroup.Algorithm algorithm;
-		/** Paper 1 profile (R1/R2/R3/R4). When set, overrides algorithm + all pruning knobs. */
-		public final AlgorithmProfile profile;
 		/** Override trip-filter radius (km). NaN = keep fixture default. */
 		public final double tripFilterRadiusKm;
 		/** When true, clears the exclusion-zone shapefile path set by the fixture. */
@@ -87,7 +82,7 @@ public class RunLyonEqasimDemandExtraction {
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
 				double minDrtCostPerKm, int pruningCoverageK,
-				ExMasConfigGroup.Algorithm algorithm, AlgorithmProfile profile,
+				ExMasConfigGroup.Algorithm algorithm,
 				double tripFilterRadiusKm, boolean noExclusionZone,
 				boolean noPredecessors, boolean noShapley, boolean deterministicRouting,
 				int maxPoolingDegree, double predecessorsFilterTime) {
@@ -101,7 +96,6 @@ public class RunLyonEqasimDemandExtraction {
 			this.minDrtCostPerKm = minDrtCostPerKm;
 			this.pruningCoverageK = pruningCoverageK;
 			this.algorithm = algorithm;
-			this.profile = profile;
 			this.tripFilterRadiusKm = tripFilterRadiusKm;
 			this.noExclusionZone = noExclusionZone;
 			this.noPredecessors = noPredecessors;
@@ -123,7 +117,6 @@ public class RunLyonEqasimDemandExtraction {
 		double minDrtCostPerKm = Double.NaN;
 		int pruningCoverageK = -1;
 		ExMasConfigGroup.Algorithm algorithm = ExMasConfigGroup.Algorithm.BAMAS;
-		AlgorithmProfile profile = null;
 		double tripFilterRadiusKm = Double.NaN;
 		boolean noExclusionZone = false;
 		boolean noPredecessors = false;
@@ -151,31 +144,20 @@ public class RunLyonEqasimDemandExtraction {
 				case "--deterministic-routing" -> deterministicRouting = true;
 				case "--max-pooling-degree" -> maxPoolingDegree = Integer.parseInt(args[++i]);
 				case "--predecessors-filter-time" -> predecessorsFilterTime = Double.parseDouble(args[++i]);
-				case "--profile" -> profile = switch (args[++i].toUpperCase()) {
-					case "R1" -> AlgorithmProfile.R1;
-					case "R2" -> AlgorithmProfile.R2;
-					case "R3" -> AlgorithmProfile.R3;
-					case "R4" -> AlgorithmProfile.R4;
-					case "R5" -> AlgorithmProfile.R5;
-					case "R6" -> AlgorithmProfile.R6;
-					case "R7" -> AlgorithmProfile.R7;
-					case "R8" -> AlgorithmProfile.R8;
-					default -> throw new IllegalArgumentException("Unknown profile: " + args[i] + " (expected r1|r2|r3|r4|r5|r6|r7|r8)");
-				};
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
 		return new ParsedArgs(sample, scenarioDir, prefix, travelTimesPath, outputDir,
-				searchHorizon, maxDetourFactor, minDrtCostPerKm, pruningCoverageK, algorithm, profile,
+				searchHorizon, maxDetourFactor, minDrtCostPerKm, pruningCoverageK, algorithm,
 				tripFilterRadiusKm, noExclusionZone, noPredecessors, noShapley, deterministicRouting,
 				maxPoolingDegree, predecessorsFilterTime);
 	}
 
 	/**
-	 * Orthogonal CLI surface introduced for the paper-1 pruning pipeline refactor
-	 * (Phase A). Exposes {@code --algorithm}, {@code --gate-scale}, {@code --coverage-k}
-	 * alongside the legacy {@code --profile} flag; the latter is still honored by
-	 * {@link #main(String[])} via {@link #parseArgs(String[])} until task A6 retires it.
+	 * Orthogonal CLI surface for the paper-1 pruning pipeline. Exposes
+	 * {@code --algorithm}, {@code --gate-scale}, {@code --coverage-k} as the
+	 * sole way to drive algorithm + pruning since task A6 retired the legacy
+	 * {@code --profile R1..R8} bundle.
 	 */
 	public static final class CliArgs {
 		/** Algorithm name in lowercase. Default: {@code "bamas"}. */
@@ -184,8 +166,6 @@ public class RunLyonEqasimDemandExtraction {
 		public double gateScale = -1.0;
 		/** Post-extension COVERAGE_TOPK budget. {@code 0} = pruning disabled (default). */
 		public int coverageK = 0;
-		/** Legacy paper-1 profile string (e.g. {@code "r2"}); {@code null} when unset. */
-		public String profile = null;
 		/** Short focus name resolved by {@link org.matsim.contrib.demand_extraction.scenarios.FocusRegistry}.
 		 *  Default {@code "loyettes-3communes"} preserves pre-A2 behaviour. */
 		public String tripFilterFocus = "loyettes-3communes";
@@ -208,7 +188,6 @@ public class RunLyonEqasimDemandExtraction {
 					case "--algorithm" -> out.algorithm = args[++i].toLowerCase();
 					case "--gate-scale" -> out.gateScale = Double.parseDouble(args[++i]);
 					case "--coverage-k" -> out.coverageK = Integer.parseInt(args[++i]);
-					case "--profile" -> out.profile = args[++i];
 					case "--trip-filter-focus" -> out.tripFilterFocus = args[++i];
 					case "--trip-filter-center-x" -> out.tripFilterCenterX = Double.parseDouble(args[++i]);
 					case "--trip-filter-center-y" -> out.tripFilterCenterY = Double.parseDouble(args[++i]);
@@ -251,7 +230,7 @@ public class RunLyonEqasimDemandExtraction {
 		if (p.sample < 0 || p.scenarioDir == null || p.travelTimesPath == null) {
 			System.err.println("Usage: --sample <N> --scenario-dir <path> [--prefix <s>] "
 					+ "--travel-times <path> [--output-dir <path>] "
-					+ "[--profile r1|r2|r3|r4] [--algorithm bamas|exmas] "
+					+ "[--algorithm bamas|exmas] "
 					+ "[--gate-scale <f>] [--coverage-k <int>] "
 					+ "[--search-horizon <s>] [--max-detour-factor <f>] "
 					+ "[--min-drt-cost-per-km <eur>] [--pruning-coverage-k <int>] "
@@ -273,17 +252,10 @@ public class RunLyonEqasimDemandExtraction {
 		Config config = fixture.createConfig(outDir);
 
 		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
-		if (p.profile != null) {
-			// Legacy --profile path: profile sets algorithm + all pruning knobs;
-			// individual --algorithm flag is ignored. Retired in task A6.
-			log.info("Applying AlgorithmProfile.{} (legacy --profile path)", p.profile);
-			p.profile.apply(config);
-		} else {
-			// New orthogonal-flag path: --algorithm + --gate-scale + --coverage-k.
-			log.info("Applying orthogonal flags: algorithm={}, gateScale={}, coverageK={}",
-					cli.algorithm, cli.gateScale, cli.coverageK);
-			applyAlgorithmAndPruning(config, cli);
-		}
+		// Orthogonal-flag path: --algorithm + --gate-scale + --coverage-k.
+		log.info("Applying orthogonal flags: algorithm={}, gateScale={}, coverageK={}",
+				cli.algorithm, cli.gateScale, cli.coverageK);
+		applyAlgorithmAndPruning(config, cli);
 		applyCliOverrides(exMas, p);
 
 		Controler controler = fixture.createControler(config);
@@ -335,11 +307,10 @@ public class RunLyonEqasimDemandExtraction {
 	/**
 	 * Routes the orthogonal paper-1 CLI triple ({@code --algorithm},
 	 * {@code --gate-scale}, {@code --coverage-k}) into {@link ExMasConfigGroup}
-	 * setters. Mirrors the <em>pruning</em> portion of
-	 * {@link AlgorithmProfile#apply(Config)} only; {@code calcPredecessors} and
-	 * {@code maxPoolingDegree} remain whatever the scenario fixture sets unless
-	 * the caller passes {@code --no-predecessors} / {@code --max-pooling-degree}
-	 * (those flags are still consumed by {@code applyCliOverrides}).
+	 * setters. {@code calcPredecessors} and {@code maxPoolingDegree} remain
+	 * whatever the scenario fixture sets unless the caller passes
+	 * {@code --no-predecessors} / {@code --max-pooling-degree} (those flags
+	 * are still consumed by {@code applyCliOverrides}).
 	 *
 	 * <p>Idempotent: every relevant knob is written in BOTH directions so
 	 * repeated calls do not leave stale state from a previous configuration.

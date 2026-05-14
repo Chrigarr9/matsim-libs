@@ -249,8 +249,8 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 		exMas.setAlgorithmProcessCount(-1);
 		exMas.setHeuristicsProcessCount(-1);
 
-		// Heuristic pruning (Bavaria 30km baseline). AlgorithmProfile may
-		// override these — apply runs after this method.
+		// Heuristic pruning (Bavaria 30km baseline). Algorithm configurators
+		// applied after this method may override these.
 		exMas.setHeuristicPruningEnabled(true);
 		exMas.setPruningDistanceSavingsLogScale(0.15);
 		exMas.setPruningDistanceSavingsMax(0.75);
@@ -260,7 +260,7 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 		exMas.setDeferExtensionBudgetValidation(true);
 
 		// Post-extension pruning (Pareto-minimal coverage TopK; cascade analysis
-		// 2026-04-17). AlgorithmProfile may override.
+		// 2026-04-17). Algorithm configurators applied after this method may override.
 		exMas.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
 		exMas.setPruningCoverageK(20);
 		exMas.setPruningQualityMetric(ExMasConfigGroup.PruningQualityMetric.ABS_SAVINGS);

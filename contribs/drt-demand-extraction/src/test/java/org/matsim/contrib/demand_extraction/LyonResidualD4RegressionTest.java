@@ -28,7 +28,6 @@ import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
-import org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile;
 import org.matsim.contrib.demand_extraction.scenarios.LyonEqasimScenarioFixture;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
@@ -67,6 +66,30 @@ class LyonResidualD4RegressionTest {
 	private static final int[] BROAD_R2_ONLY_D4_SET = { 1232, 3729, 4395, 7480 };
 	private static final int[] R2_ONLY_D3_DELAY_BOUNDARY_SET = { 21, 484, 1098 };
 
+	/** R1 (vanilla ExMAS reference, no pruning) configurator. */
+	private static void applyR1(ExMasConfigGroup exMas) {
+		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.EXMAS);
+		exMas.setHeuristicPruningEnabled(false);
+		exMas.setPruningDistanceSavingsLogScale(-1.0);
+		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
+		exMas.setInterDegreeKeepFraction(1.0);
+		exMas.clearPruningCoverageKByDegree();
+		exMas.setCalcPredecessors(false);
+		exMas.setMaxPoolingDegree(Integer.MAX_VALUE);
+	}
+
+	/** R2 (BAMAS, no pruning) configurator. */
+	private static void applyR2(ExMasConfigGroup exMas) {
+		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
+		exMas.setHeuristicPruningEnabled(false);
+		exMas.setPruningDistanceSavingsLogScale(-1.0);
+		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
+		exMas.setInterDegreeKeepFraction(1.0);
+		exMas.clearPruningCoverageKByDegree();
+		exMas.setCalcPredecessors(false);
+		exMas.setMaxPoolingDegree(Integer.MAX_VALUE);
+	}
+
 	@Test
 	void bamasReconstructsPostFixResidualD4Sets() throws Exception {
 		String requestsCsv = System.getenv(LYON_REQUESTS_CSV_ENV);
@@ -96,7 +119,7 @@ class LyonResidualD4RegressionTest {
 				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
 
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
-		AlgorithmProfile.R2.apply(config);
+		applyR2(exMasConfig);
 		exMasConfig.setCalcPredecessors(false);
 		exMasConfig.setCalcShapleyValues(false);
 		exMasConfig.setMaxPoolingDegree(4);
@@ -178,7 +201,7 @@ class LyonResidualD4RegressionTest {
 			targetRequests.add(request);
 		}
 
-		AlgorithmProfile.R1.apply(config);
+		applyR1(exMasConfig);
 		exMasConfig.setMaxPoolingDegree(4);
 		exMasConfig.setAlgorithmProcessCount(1);
 		List<Ride> referenceRides = new ExMasReferenceEngine(
@@ -189,7 +212,7 @@ class LyonResidualD4RegressionTest {
 				exMasConfig)
 				.run(targetRequests);
 
-		AlgorithmProfile.R2.apply(config);
+		applyR2(exMasConfig);
 		exMasConfig.setCalcPredecessors(false);
 		exMasConfig.setCalcShapleyValues(false);
 		exMasConfig.setMaxPoolingDegree(4);
@@ -253,7 +276,7 @@ class LyonResidualD4RegressionTest {
 			targetRequests.add(request);
 		}
 
-		AlgorithmProfile.R1.apply(config);
+		applyR1(exMasConfig);
 		exMasConfig.setMaxPoolingDegree(3);
 		exMasConfig.setAlgorithmProcessCount(1);
 		List<Ride> referenceRides = new ExMasReferenceEngine(
@@ -264,7 +287,7 @@ class LyonResidualD4RegressionTest {
 				exMasConfig)
 				.run(targetRequests);
 
-		AlgorithmProfile.R2.apply(config);
+		applyR2(exMasConfig);
 		exMasConfig.setCalcPredecessors(false);
 		exMasConfig.setCalcShapleyValues(false);
 		exMasConfig.setMaxPoolingDegree(3);

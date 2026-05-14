@@ -31,7 +31,6 @@ import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
-import org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile;
 import org.matsim.contrib.demand_extraction.scenarios.LyonEqasimScenarioFixture;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
@@ -124,9 +123,16 @@ class D3VsD4FeasibilityComparisonTest {
 
 		// ── Config + validator + pair generator ──
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
-		exMasConfig.setCalcPredecessors(false);
 		exMasConfig.setCalcShapleyValues(false);
-		AlgorithmProfile.R2.apply(config);
+		// R2 = BAMAS, no pruning.
+		exMasConfig.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
+		exMasConfig.setHeuristicPruningEnabled(false);
+		exMasConfig.setPruningDistanceSavingsLogScale(-1.0);
+		exMasConfig.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
+		exMasConfig.setInterDegreeKeepFraction(1.0);
+		exMasConfig.clearPruningCoverageKByDegree();
+		exMasConfig.setCalcPredecessors(false);
+		exMasConfig.setMaxPoolingDegree(Integer.MAX_VALUE);
 		exMasConfig.setAlgorithmProcessCount(1);
 		BudgetValidator validator = new PassthroughValidator(exMasConfig, config);
 

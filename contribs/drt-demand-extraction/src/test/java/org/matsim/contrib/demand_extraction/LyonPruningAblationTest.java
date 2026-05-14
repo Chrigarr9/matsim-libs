@@ -31,7 +31,6 @@ import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.contrib.demand_extraction.io.ExMasCsvWriter;
-import org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile;
 import org.matsim.contrib.demand_extraction.scenarios.LyonEqasimScenarioFixture;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
@@ -80,6 +79,54 @@ import org.matsim.core.trafficmonitoring.FreeSpeedTravelTime;
 class LyonPruningAblationTest {
 
 	private static final Logger log = LogManager.getLogger(LyonPruningAblationTest.class);
+
+	/** R3 = BAMAS + heuristic distance gate (scale=0.15), no post-extension pruning. */
+	private static void applyR3(ExMasConfigGroup exMas) {
+		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
+		exMas.setHeuristicPruningEnabled(true);
+		exMas.setPruningDistanceSavingsLogScale(0.15);
+		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
+		exMas.setInterDegreeKeepFraction(1.0);
+		exMas.clearPruningCoverageKByDegree();
+		exMas.setCalcPredecessors(false);
+		exMas.setMaxPoolingDegree(Integer.MAX_VALUE);
+	}
+
+	/** R4 = BAMAS + heuristic distance gate (scale=0.25), no post-extension pruning. */
+	private static void applyR4(ExMasConfigGroup exMas) {
+		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
+		exMas.setHeuristicPruningEnabled(true);
+		exMas.setPruningDistanceSavingsLogScale(0.25);
+		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
+		exMas.setInterDegreeKeepFraction(1.0);
+		exMas.clearPruningCoverageKByDegree();
+		exMas.setCalcPredecessors(false);
+		exMas.setMaxPoolingDegree(Integer.MAX_VALUE);
+	}
+
+	/** R5 = BAMAS + heuristic distance gate (scale=0.30), no post-extension pruning. */
+	private static void applyR5(ExMasConfigGroup exMas) {
+		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
+		exMas.setHeuristicPruningEnabled(true);
+		exMas.setPruningDistanceSavingsLogScale(0.30);
+		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
+		exMas.setInterDegreeKeepFraction(1.0);
+		exMas.clearPruningCoverageKByDegree();
+		exMas.setCalcPredecessors(false);
+		exMas.setMaxPoolingDegree(Integer.MAX_VALUE);
+	}
+
+	/** R6 = BAMAS + distance gate (scale=0.25) + COVERAGE_TOPK (K=20), predecessors on. */
+	private static void applyR6(ExMasConfigGroup exMas) {
+		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
+		exMas.setHeuristicPruningEnabled(true);
+		exMas.setPruningDistanceSavingsLogScale(0.25);
+		exMas.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
+		exMas.setPruningCoverageK(20);
+		exMas.clearPruningCoverageKByDegree();
+		exMas.setCalcPredecessors(true);
+		exMas.setMaxPoolingDegree(Integer.MAX_VALUE);
+	}
 
 	@Test
 	void ablationR3toR6() throws Exception {
@@ -140,7 +187,7 @@ class LyonPruningAblationTest {
 		if (skipR3) {
 			log.info("R3 skipped (-DskipR3=true). Data in test/output/lyon-dist-gate-sweep/s015_m075_rides.csv");
 		} else {
-			AlgorithmProfile.R3.apply(config);
+			applyR3(exMasConfig);
 			if (maxDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxDegreeOverride);
 			logConfig("R3", exMasConfig);
 			long start = System.currentTimeMillis();
@@ -157,7 +204,7 @@ class LyonPruningAblationTest {
 		if (skipR4) {
 			log.info("R4 skipped (-DskipR4=true). Data in test/output/lyon-dist-gate-sweep/s025_m075_rides.csv");
 		} else {
-			AlgorithmProfile.R4.apply(config);
+			applyR4(exMasConfig);
 			if (maxDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxDegreeOverride);
 			logConfig("R4", exMasConfig);
 			long start = System.currentTimeMillis();
@@ -174,7 +221,7 @@ class LyonPruningAblationTest {
 		if (skipR5) {
 			log.info("R5 skipped (-DskipR5=true). Data in test/output/lyon-dist-gate-sweep/s030_m075_rides.csv");
 		} else {
-			AlgorithmProfile.R5.apply(config);
+			applyR5(exMasConfig);
 			if (maxDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxDegreeOverride);
 			logConfig("R5", exMasConfig);
 			long start = System.currentTimeMillis();
@@ -191,7 +238,7 @@ class LyonPruningAblationTest {
 		if (skipR6) {
 			log.info("R6 skipped (-DskipR6=true).");
 		} else {
-			AlgorithmProfile.R6.apply(config);
+			applyR6(exMasConfig);
 			if (maxDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxDegreeOverride);
 			logConfig("R6", exMasConfig);
 			long start = System.currentTimeMillis();
