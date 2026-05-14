@@ -217,7 +217,7 @@ public class RunLyonEqasimDemandExtraction {
 			return out;
 		}
 
-		// TODO(A4): unify with parseArgs' flag list to remove the drift risk between the two parsers.
+		// TODO(post-A6): unify with parseArgs' flag list to remove the drift risk between the two parsers.
 		// Flags already handled by switch cases in parse() above (e.g. --trip-filter-radius-km,
 		// --trip-filter-focus, --exclusion-zone) need not appear here, but harmlessly may; the
 		// authoritative list is parseArgs(String[]).
@@ -284,9 +284,11 @@ public class RunLyonEqasimDemandExtraction {
 	/**
 	 * Routes the orthogonal paper-1 CLI triple ({@code --algorithm},
 	 * {@code --gate-scale}, {@code --coverage-k}) into {@link ExMasConfigGroup}
-	 * setters. Mirrors the semantics that {@link AlgorithmProfile#apply(Config)}
-	 * previously bundled, so a caller passing equivalent flags is equivalent to
-	 * applying the matching R-profile.
+	 * setters. Mirrors the <em>pruning</em> portion of
+	 * {@link AlgorithmProfile#apply(Config)} only; {@code calcPredecessors} and
+	 * {@code maxPoolingDegree} remain whatever the scenario fixture sets unless
+	 * the caller passes {@code --no-predecessors} / {@code --max-pooling-degree}
+	 * (those flags are still consumed by {@code applyCliOverrides}).
 	 *
 	 * <p>Idempotent: every relevant knob is written in BOTH directions so
 	 * repeated calls do not leave stale state from a previous configuration.
