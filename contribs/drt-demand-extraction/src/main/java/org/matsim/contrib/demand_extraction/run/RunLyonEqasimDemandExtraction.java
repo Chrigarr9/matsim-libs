@@ -177,6 +177,18 @@ public class RunLyonEqasimDemandExtraction {
 		public int coverageK = 0;
 		/** Legacy paper-1 profile string (e.g. {@code "r2"}); {@code null} when unset. */
 		public String profile = null;
+		/** Short focus name resolved by {@link org.matsim.contrib.demand_extraction.scenarios.FocusRegistry}.
+		 *  Default {@code "loyettes-3communes"} preserves pre-A2 behaviour. */
+		public String tripFilterFocus = "loyettes-3communes";
+		/** Explicit override of the focus x-coordinate (EPSG:2154). {@code null} = use the focus registry. */
+		public Double tripFilterCenterX = null;
+		/** Explicit override of the focus y-coordinate (EPSG:2154). {@code null} = use the focus registry. */
+		public Double tripFilterCenterY = null;
+		/** Trip-filter radius in km. {@link Double#NaN} = keep fixture/config default (mirrors {@link ParsedArgs#tripFilterRadiusKm}). */
+		public double tripFilterRadiusKm = Double.NaN;
+		/** Exclusion-zone identifier (e.g. {@code "metropole_lyon"} or {@code "none"}).
+		 *  Default {@code "metropole_lyon"} preserves pre-A2 behaviour. {@code "none"} disables the exclusion. */
+		public String exclusionZone = "metropole_lyon";
 
 		public static CliArgs parse(String[] args) {
 			CliArgs out = new CliArgs();
@@ -186,6 +198,12 @@ public class RunLyonEqasimDemandExtraction {
 					case "--gate-scale" -> out.gateScale = Double.parseDouble(args[++i]);
 					case "--coverage-k" -> out.coverageK = Integer.parseInt(args[++i]);
 					case "--profile" -> out.profile = args[++i];
+					case "--trip-filter-focus" -> out.tripFilterFocus = args[++i];
+					case "--trip-filter-center-x" -> out.tripFilterCenterX = Double.parseDouble(args[++i]);
+					case "--trip-filter-center-y" -> out.tripFilterCenterY = Double.parseDouble(args[++i]);
+					case "--trip-filter-radius-km" -> out.tripFilterRadiusKm = Double.parseDouble(args[++i]);
+					case "--exclusion-zone" -> out.exclusionZone = args[++i];
+					case "--no-exclusion-zone" -> out.exclusionZone = "none"; // legacy boolean flag, equivalent to --exclusion-zone none
 					default -> {
 						// Skip non-orthogonal flags; full parsing happens in parseArgs(String[]).
 						// Consume the value for known value-bearing flags so we don't misread it
@@ -199,12 +217,17 @@ public class RunLyonEqasimDemandExtraction {
 			return out;
 		}
 
+		// TODO(A4): unify with parseArgs' flag list to remove the drift risk between the two parsers.
+		// Flags already handled by switch cases in parse() above (e.g. --trip-filter-radius-km,
+		// --trip-filter-focus, --exclusion-zone) need not appear here, but harmlessly may; the
+		// authoritative list is parseArgs(String[]).
 		private static boolean isValueBearingLegacyFlag(String flag) {
 			return switch (flag) {
 				case "--sample", "--scenario-dir", "--prefix", "--travel-times", "--output-dir",
 						"--search-horizon", "--max-detour-factor", "--min-drt-cost-per-km",
 						"--pruning-coverage-k", "--trip-filter-radius-km", "--max-pooling-degree",
-						"--predecessors-filter-time" -> true;
+						"--predecessors-filter-time", "--trip-filter-focus", "--trip-filter-center-x",
+						"--trip-filter-center-y", "--exclusion-zone" -> true;
 				default -> false;
 			};
 		}

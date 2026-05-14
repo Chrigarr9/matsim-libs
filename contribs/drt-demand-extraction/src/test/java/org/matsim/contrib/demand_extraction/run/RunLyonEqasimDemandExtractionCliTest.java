@@ -38,4 +38,21 @@ class RunLyonEqasimDemandExtractionCliTest {
         assertEquals(0, args.coverageK);
         assertNull(args.profile);
     }
+
+    @Test
+    void parsesFocusAndExclusionZone() {
+        RunLyonEqasimDemandExtraction.CliArgs args = RunLyonEqasimDemandExtraction.CliArgs.parse(new String[] {
+                "--trip-filter-focus", "saint-vulbas",
+                "--trip-filter-radius-km", "25",
+                "--exclusion-zone", "none",
+                "--sample", "10",
+                "--scenario-dir", "/tmp/x",
+                "--prefix", "lyon_drt_area_",
+                "--travel-times", "/tmp/y",
+                "--output-dir", "/tmp/z"
+        });
+        assertEquals("saint-vulbas", args.tripFilterFocus);
+        assertEquals(25.0, args.tripFilterRadiusKm);
+        assertEquals("none", args.exclusionZone);
+    }
 }
