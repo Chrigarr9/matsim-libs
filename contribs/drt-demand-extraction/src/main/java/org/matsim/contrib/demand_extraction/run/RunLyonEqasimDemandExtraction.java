@@ -162,7 +162,56 @@ public class RunLyonEqasimDemandExtraction {
 				maxPoolingDegree, predecessorsFilterTime);
 	}
 
+	/**
+	 * Orthogonal CLI surface introduced for the paper-1 pruning pipeline refactor
+	 * (Phase A). Exposes {@code --algorithm}, {@code --gate-scale}, {@code --coverage-k}
+	 * alongside the legacy {@code --profile} flag; the latter is still honored by
+	 * {@link #main(String[])} via {@link #parseArgs(String[])} until task A6 retires it.
+	 */
+	public static final class CliArgs {
+		/** Algorithm name in lowercase. Default: {@code "bamas"}. */
+		public String algorithm = "bamas";
+		/** Heuristic distance gate scale. {@code -1.0} = gate disabled (default). */
+		public double gateScale = -1.0;
+		/** Post-extension COVERAGE_TOPK budget. {@code 0} = pruning disabled (default). */
+		public int coverageK = 0;
+		/** Legacy paper-1 profile string (e.g. {@code "r2"}); {@code null} when unset. */
+		public String profile = null;
+
+		public static CliArgs parse(String[] args) {
+			CliArgs out = new CliArgs();
+			for (int i = 0; i < args.length; i++) {
+				switch (args[i]) {
+					case "--algorithm" -> out.algorithm = args[++i].toLowerCase();
+					case "--gate-scale" -> out.gateScale = Double.parseDouble(args[++i]);
+					case "--coverage-k" -> out.coverageK = Integer.parseInt(args[++i]);
+					case "--profile" -> out.profile = args[++i];
+					default -> {
+						// Skip non-orthogonal flags; full parsing happens in parseArgs(String[]).
+						// Consume the value for known value-bearing flags so we don't misread it
+						// as the next flag name on the following iteration.
+						if (isValueBearingLegacyFlag(args[i])) {
+							i++;
+						}
+					}
+				}
+			}
+			return out;
+		}
+
+		private static boolean isValueBearingLegacyFlag(String flag) {
+			return switch (flag) {
+				case "--sample", "--scenario-dir", "--prefix", "--travel-times", "--output-dir",
+						"--search-horizon", "--max-detour-factor", "--min-drt-cost-per-km",
+						"--pruning-coverage-k", "--trip-filter-radius-km", "--max-pooling-degree",
+						"--predecessors-filter-time" -> true;
+				default -> false;
+			};
+		}
+	}
+
 	public static void main(String[] args) throws Exception {
+		CliArgs.parse(args); // exposed for the upcoming notebook pipeline; legacy parseArgs still drives main.
 		ParsedArgs p = parseArgs(args);
 
 		if (p.sample < 0 || p.scenarioDir == null || p.travelTimesPath == null) {
