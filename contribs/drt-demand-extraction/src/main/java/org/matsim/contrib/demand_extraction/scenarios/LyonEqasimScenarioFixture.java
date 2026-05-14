@@ -66,7 +66,9 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 	// The service is designed for rural↔urban access, not intra-metropolitan rides.
 	// Shapefile = union of 58 communes with EPCI 200046977 (EPSG:2154).
 	// Path is relative to scenarioDir (e.g. output_lyon_drt_1pct/lyon_drt_area/); ../../ navigates to eqasim-france/.
-	private static final String EXCLUSION_ZONE_SHAPEFILE = "../../data/cutter/metropole_lyon.shp";
+	// Exposed so RunLyonEqasimDemandExtraction can reference the same canonical
+	// relative path when building a FilterConfig for --exclusion-zone metropole_lyon.
+	public static final String EXCLUSION_ZONE_SHAPEFILE = "../../data/cutter/metropole_lyon.shp";
 
 	// 15-minute bins matching RunExportTravelTimes
 	private static final int TRAVEL_TIME_BIN_SIZE = 900;

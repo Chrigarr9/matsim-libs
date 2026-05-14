@@ -6,6 +6,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.scenarios.AlgorithmProfile;
+import org.matsim.contrib.demand_extraction.scenarios.FocusRegistry;
 import org.matsim.contrib.demand_extraction.scenarios.LyonEqasimScenarioFixture;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
@@ -41,6 +42,14 @@ import org.matsim.core.controler.Controler;
 public class RunLyonEqasimDemandExtraction {
 
 	private static final Logger log = LogManager.getLogger(RunLyonEqasimDemandExtraction.class);
+
+	/**
+	 * Default location of the focus registry, relative to the repo root (which is the
+	 * working directory when {@link #main(String[])} is invoked by the notebook
+	 * pipeline / Maven exec from {@code Dissertation/}).
+	 */
+	private static final Path DEFAULT_FOCUS_REGISTRY = Path.of(
+			"matsim_scenarios/eqasim-france/scenario-selection/data/foci.json");
 
 	public static final class ParsedArgs {
 		public final int sample;
@@ -184,8 +193,10 @@ public class RunLyonEqasimDemandExtraction {
 		public Double tripFilterCenterX = null;
 		/** Explicit override of the focus y-coordinate (EPSG:2154). {@code null} = use the focus registry. */
 		public Double tripFilterCenterY = null;
-		/** Trip-filter radius in km. {@link Double#NaN} = keep fixture/config default (mirrors {@link ParsedArgs#tripFilterRadiusKm}). */
-		public double tripFilterRadiusKm = Double.NaN;
+		/** Trip-filter radius in km. Default {@code 40.0} matches the historical Lyon
+		 *  fixture default; the orthogonal CliArgs path always seeds the
+		 *  {@link LyonEqasimScenarioFixture.FilterConfig} from this value. */
+		public double tripFilterRadiusKm = 40.0;
 		/** Exclusion-zone identifier (e.g. {@code "metropole_lyon"} or {@code "none"}).
 		 *  Default {@code "metropole_lyon"} preserves pre-A2 behaviour. {@code "none"} disables the exclusion. */
 		public String exclusionZone = "metropole_lyon";
@@ -256,7 +267,8 @@ public class RunLyonEqasimDemandExtraction {
 		Path outDir = Path.of(outputDir);
 
 		LyonEqasimScenarioFixture fixture = new LyonEqasimScenarioFixture(
-				p.sample, p.scenarioDir, p.prefix, p.travelTimesPath);
+				p.sample, p.scenarioDir, p.prefix, p.travelTimesPath,
+				buildFilterConfig(cli, DEFAULT_FOCUS_REGISTRY));
 
 		Config config = fixture.createConfig(outDir);
 
@@ -279,6 +291,45 @@ public class RunLyonEqasimDemandExtraction {
 
 		log.info("\n=== Lyon eqasim DRT demand extraction complete ===");
 		log.info("Output: {}", outDir.toAbsolutePath());
+	}
+
+	/**
+	 * Resolves {@code --trip-filter-focus} / {@code --trip-filter-center-x|-y} /
+	 * {@code --trip-filter-radius-km} / {@code --exclusion-zone} into a
+	 * {@link LyonEqasimScenarioFixture.FilterConfig}.
+	 *
+	 * <p>Explicit {@code centerX}/{@code centerY} override the focus registry.
+	 * {@code --exclusion-zone none} (case-insensitive) clears the exclusion
+	 * shapefile; any other value is resolved via {@link #resolveExclusionShapefile}.
+	 *
+	 * <p>The returned {@code exclusionShapefilePath} is a path relative to
+	 * {@code scenarioDir} (matching the legacy 4-arg fixture constructor); the
+	 * fixture itself joins and normalises it in {@code applyExMasDefaults}.
+	 */
+	static LyonEqasimScenarioFixture.FilterConfig buildFilterConfig(CliArgs args, Path registryPath) {
+		double cx;
+		double cy;
+		if (args.tripFilterCenterX != null && args.tripFilterCenterY != null) {
+			cx = args.tripFilterCenterX;
+			cy = args.tripFilterCenterY;
+		} else {
+			FocusRegistry.Coords c = FocusRegistry.load(registryPath).resolve(args.tripFilterFocus);
+			cx = c.x();
+			cy = c.y();
+		}
+		String exclusion = "none".equalsIgnoreCase(args.exclusionZone)
+				? null
+				: resolveExclusionShapefile(args.exclusionZone);
+		return new LyonEqasimScenarioFixture.FilterConfig(cx, cy, args.tripFilterRadiusKm, exclusion);
+	}
+
+	private static String resolveExclusionShapefile(String zoneName) {
+		if ("metropole_lyon".equals(zoneName)) {
+			// Relative to scenarioDir; LyonEqasimScenarioFixture.applyExMasDefaults
+			// resolves+normalises it against scenarioDir at config-build time.
+			return LyonEqasimScenarioFixture.EXCLUSION_ZONE_SHAPEFILE;
+		}
+		throw new IllegalArgumentException("Unknown exclusion zone: " + zoneName);
 	}
 
 	/**
