@@ -72,17 +72,34 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 	private static final int TRAVEL_TIME_BIN_SIZE = 900;
 	private static final int TRAVEL_TIME_END = 36 * 3600;
 
+	/**
+	 * Parametric filter configuration for trip-filter focus, radius, and
+	 * (optional) exclusion shapefile. A {@code null} {@code exclusionShapefilePath}
+	 * means no exclusion zone is applied.
+	 */
+	public record FilterConfig(double centerX, double centerY, double radiusKm,
+			String exclusionShapefilePath) {}
+
 	private final int samplePct;
 	private final String scenarioDir;
 	private final String prefix;
 	private final String travelTimesPath;
+	private final FilterConfig filter;
 
 	public LyonEqasimScenarioFixture(int samplePct, String scenarioDir, String prefix,
 			String travelTimesPath) {
+		this(samplePct, scenarioDir, prefix, travelTimesPath,
+				new FilterConfig(FILTER_CENTER_X, FILTER_CENTER_Y, TRIP_FILTER_RADIUS_KM,
+						EXCLUSION_ZONE_SHAPEFILE));
+	}
+
+	public LyonEqasimScenarioFixture(int samplePct, String scenarioDir, String prefix,
+			String travelTimesPath, FilterConfig filter) {
 		this.samplePct = samplePct;
 		this.scenarioDir = scenarioDir;
 		this.prefix = prefix;
 		this.travelTimesPath = travelTimesPath;
+		this.filter = filter;
 	}
 
 	/**
@@ -197,7 +214,7 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 		config.scoring().setPerforming_utils_hr(0.0);
 	}
 
-	private void applyExMasDefaults(Config config) {
+	public void applyExMasDefaults(Config config) {
 		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		exMas.setDrtMode("drt");
 		exMas.setBaseModes(new HashSet<>(Set.of("car", "pt", "walk", "bike")));
@@ -251,18 +268,23 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 		// the baseline score meaningless.
 		exMas.setExcludedTripModes(Set.of("car_passenger"));
 
-		exMas.setTripFilterRadiusKm(TRIP_FILTER_RADIUS_KM);
-		exMas.setTripFilterCenterX(FILTER_CENTER_X);
-		exMas.setTripFilterCenterY(FILTER_CENTER_Y);
+		exMas.setTripFilterRadiusKm(filter.radiusKm());
+		exMas.setTripFilterCenterX(filter.centerX());
+		exMas.setTripFilterCenterY(filter.centerY());
 
-		String exclusionShapefile = java.nio.file.Path.of(scenarioDir)
-				.resolve(EXCLUSION_ZONE_SHAPEFILE).normalize().toString();
-		exMas.setTripFilterExclusionShapefilePath(exclusionShapefile);
+		String exclusionShapefile;
+		if (filter.exclusionShapefilePath() == null) {
+			exclusionShapefile = null;
+		} else {
+			exclusionShapefile = java.nio.file.Path.of(scenarioDir)
+					.resolve(filter.exclusionShapefilePath()).normalize().toString();
+			exMas.setTripFilterExclusionShapefilePath(exclusionShapefile);
+		}
 
 		exMas.setScoringAdapter("eqasim");
 
 		log.info("Demand extraction: scoringAdapter=eqasim, tripFilter={}km around ({}, {}), exclusionZone={}",
-				TRIP_FILTER_RADIUS_KM, FILTER_CENTER_X, FILTER_CENTER_Y, exclusionShapefile);
+				filter.radiusKm(), filter.centerX(), filter.centerY(), exclusionShapefile);
 	}
 
 	@Override
