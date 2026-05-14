@@ -234,13 +234,14 @@ public class RunLyonEqasimDemandExtraction {
 	}
 
 	public static void main(String[] args) throws Exception {
-		CliArgs.parse(args); // exposed for the upcoming notebook pipeline; legacy parseArgs still drives main.
+		CliArgs cli = CliArgs.parse(args);
 		ParsedArgs p = parseArgs(args);
 
 		if (p.sample < 0 || p.scenarioDir == null || p.travelTimesPath == null) {
 			System.err.println("Usage: --sample <N> --scenario-dir <path> [--prefix <s>] "
 					+ "--travel-times <path> [--output-dir <path>] "
 					+ "[--profile r1|r2|r3|r4] [--algorithm bamas|exmas] "
+					+ "[--gate-scale <f>] [--coverage-k <int>] "
 					+ "[--search-horizon <s>] [--max-detour-factor <f>] "
 					+ "[--min-drt-cost-per-km <eur>] [--pruning-coverage-k <int>] "
 					+ "[--trip-filter-radius-km <km>] [--no-exclusion-zone] "
@@ -261,12 +262,15 @@ public class RunLyonEqasimDemandExtraction {
 
 		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		if (p.profile != null) {
-			// Profile sets algorithm + all pruning knobs; individual --algorithm flag ignored.
-			log.info("Applying AlgorithmProfile.{}", p.profile);
+			// Legacy --profile path: profile sets algorithm + all pruning knobs;
+			// individual --algorithm flag is ignored. Retired in task A6.
+			log.info("Applying AlgorithmProfile.{} (legacy --profile path)", p.profile);
 			p.profile.apply(config);
 		} else {
-			exMas.setAlgorithm(p.algorithm);
-			log.info("Stage-1 algorithm: {}", p.algorithm);
+			// New orthogonal-flag path: --algorithm + --gate-scale + --coverage-k.
+			log.info("Applying orthogonal flags: algorithm={}, gateScale={}, coverageK={}",
+					cli.algorithm, cli.gateScale, cli.coverageK);
+			applyAlgorithmAndPruning(config, cli);
 		}
 		applyCliOverrides(exMas, p);
 
@@ -275,6 +279,40 @@ public class RunLyonEqasimDemandExtraction {
 
 		log.info("\n=== Lyon eqasim DRT demand extraction complete ===");
 		log.info("Output: {}", outDir.toAbsolutePath());
+	}
+
+	/**
+	 * Routes the orthogonal paper-1 CLI triple ({@code --algorithm},
+	 * {@code --gate-scale}, {@code --coverage-k}) into {@link ExMasConfigGroup}
+	 * setters. Mirrors the semantics that {@link AlgorithmProfile#apply(Config)}
+	 * previously bundled, so a caller passing equivalent flags is equivalent to
+	 * applying the matching R-profile.
+	 *
+	 * <p>Idempotent: every relevant knob is written in BOTH directions so
+	 * repeated calls do not leave stale state from a previous configuration.
+	 */
+	static void applyAlgorithmAndPruning(Config config, CliArgs args) {
+		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
+
+		exMas.setAlgorithm("exmas".equalsIgnoreCase(args.algorithm)
+				? ExMasConfigGroup.Algorithm.EXMAS
+				: ExMasConfigGroup.Algorithm.BAMAS);
+
+		// BamasEngine's distance-savings gate condition is `scale >= 0`.
+		// gateScale=-1 (default) disables; gateScale>=0 enables with the value.
+		boolean gateOn = args.gateScale >= 0.0;
+		exMas.setHeuristicPruningEnabled(gateOn);
+		exMas.setPruningDistanceSavingsLogScale(gateOn ? args.gateScale : -1.0);
+
+		if (args.coverageK > 0) {
+			exMas.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
+			exMas.setPruningCoverageK(args.coverageK);
+			exMas.clearPruningCoverageKByDegree();
+		} else {
+			exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
+			exMas.setInterDegreeKeepFraction(1.0);
+			exMas.clearPruningCoverageKByDegree();
+		}
 	}
 
 	private static void applyCliOverrides(ExMasConfigGroup exMas, ParsedArgs p) {
