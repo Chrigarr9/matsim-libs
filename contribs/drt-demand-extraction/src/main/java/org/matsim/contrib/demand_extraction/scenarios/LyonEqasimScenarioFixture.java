@@ -60,7 +60,9 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 	// EPSG:2154 / Lambert-93. Centroid produced by build_cutter_polygon.py.
 	private static final double FILTER_CENTER_X = 870540.4;
 	private static final double FILTER_CENTER_Y = 6526302.7;
-	private static final double TRIP_FILTER_RADIUS_KM = 40.0;
+	/** Default trip-filter radius (km). Exposed so RunLyonEqasimDemandExtraction.CliArgs
+	 *  can seed its own default to the same canonical value, avoiding duplicated literals. */
+	public static final double TRIP_FILTER_RADIUS_KM = 40.0;
 
 	// Exclusion zone: drop trips whose O AND D both lie within the Métropole de Lyon.
 	// The service is designed for rural↔urban access, not intra-metropolitan rides.

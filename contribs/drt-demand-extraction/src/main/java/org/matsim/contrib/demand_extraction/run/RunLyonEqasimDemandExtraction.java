@@ -193,10 +193,10 @@ public class RunLyonEqasimDemandExtraction {
 		public Double tripFilterCenterX = null;
 		/** Explicit override of the focus y-coordinate (EPSG:2154). {@code null} = use the focus registry. */
 		public Double tripFilterCenterY = null;
-		/** Trip-filter radius in km. Default {@code 40.0} matches the historical Lyon
-		 *  fixture default; the orthogonal CliArgs path always seeds the
+		/** Trip-filter radius in km. Default matches the historical Lyon fixture
+		 *  default; the orthogonal CliArgs path always seeds the
 		 *  {@link LyonEqasimScenarioFixture.FilterConfig} from this value. */
-		public double tripFilterRadiusKm = 40.0;
+		public double tripFilterRadiusKm = LyonEqasimScenarioFixture.TRIP_FILTER_RADIUS_KM;
 		/** Exclusion-zone identifier (e.g. {@code "metropole_lyon"} or {@code "none"}).
 		 *  Default {@code "metropole_lyon"} preserves pre-A2 behaviour. {@code "none"} disables the exclusion. */
 		public String exclusionZone = "metropole_lyon";
