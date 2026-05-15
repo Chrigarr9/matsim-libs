@@ -493,21 +493,31 @@ public final class BamasEngine {
 					afterDedup, initial, dedupRemoved);
 		}
 
-		// --- Pass 2: Distance-savings gate (existing behavior) ---
+		// --- Pass 2: Distance-savings gate (linear or log) ---
 		double scale = exMasConfig.getPruningDistanceSavingsLogScale();
 		int minDegree = Math.max(2, exMasConfig.getPruningDistanceSavingsMinDegree());
-		if (scale >= 0 && minDegree <= 2) {
-			double maxSaving = Math.min(0.99, Math.max(0.0, exMasConfig.getPruningDistanceSavingsMax()));
-			double requiredSaving = computeRequiredSavingForDegree(2, scale, maxSaving, minDegree);
+		boolean linearGateActive = exMasConfig.hasLinearGate();
+		boolean logGateAppliesAtD2 = scale >= 0 && minDegree <= 2;
+		if (linearGateActive || logGateAppliesAtD2) {
 			int beforeGate = result.size();
+			final int degree = 2;
 			result = result.stream().filter(r -> {
 				double sumDistances = Arrays.stream(r.getRequests()).mapToDouble(DrtRequest::getDistance).sum();
 				if (!(sumDistances > 0)) return true;
-				return r.getRideDistance() <= (1.0 - requiredSaving) * sumDistances;
+				double maxRideDist = org.matsim.contrib.demand_extraction.algorithm.bamas.extension.BamasRideExtender
+						.computeMaxAllowedRideDistance(degree, sumDistances, exMasConfig);
+				return r.getRideDistance() <= maxRideDist;
 			}).collect(Collectors.toList());
-			log.info("Pair-ride distance-savings gate (after graph): kept {}/{} (removed {}); requiredSaving>={}%%",
+			double diagSum = result.isEmpty() ? 0
+					: Arrays.stream(result.get(0).getRequests()).mapToDouble(DrtRequest::getDistance).sum();
+			double diagGate = diagSum > 0
+					? org.matsim.contrib.demand_extraction.algorithm.bamas.extension.BamasRideExtender
+							.computeMaxAllowedRideDistance(degree, diagSum, exMasConfig) / diagSum
+					: Double.NaN;
+			log.info("Pair-ride distance-savings gate (after graph, shape={}): kept {}/{} (removed {}); gate(d=2) ratio threshold ~ {}",
+					linearGateActive ? "linear" : "log",
 					result.size(), beforeGate, beforeGate - result.size(),
-					String.format(java.util.Locale.ROOT, "%.1f", 100.0 * requiredSaving));
+					Double.isNaN(diagGate) ? "n/a" : String.format(java.util.Locale.ROOT, "%.3f", diagGate));
 		}
 
 		// --- Pass 3: Top-fraction filter by distance savings ---
@@ -590,18 +600,6 @@ public final class BamasEngine {
 		}
 
 		return new int[] { singles, pairs, higher };
-	}
-
-	private static double computeRequiredSavingForDegree(int degree, double scale, double maxSaving, int minDegree) {
-		if (scale < 0) {
-			return 0.0;
-		}
-		if (degree < Math.max(2, minDegree)) {
-			return 0.0;
-		}
-		double requiredSaving = scale * (Math.log(degree) / Math.log(2.0));
-		requiredSaving = Math.max(0.0, Math.min(Math.min(0.99, maxSaving), requiredSaving));
-		return requiredSaving;
 	}
 
 	public List<DrtRequest> getRequests() {

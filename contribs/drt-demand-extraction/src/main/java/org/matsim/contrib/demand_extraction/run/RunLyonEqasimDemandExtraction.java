@@ -162,8 +162,12 @@ public class RunLyonEqasimDemandExtraction {
 	public static final class CliArgs {
 		/** Algorithm name in lowercase. Default: {@code "bamas"}. */
 		public String algorithm = "bamas";
-		/** Heuristic distance gate scale. {@code -1.0} = gate disabled (default). */
+		/** Heuristic distance gate scale (log gate). {@code -1.0} = gate disabled (default). */
 		public double gateScale = -1.0;
+		/** Linear-gate intercept a in gate(d)=a+b·d. NaN = linear gate disabled. */
+		public double gateIntercept = Double.NaN;
+		/** Linear-gate slope b in gate(d)=a+b·d. NaN = linear gate disabled. */
+		public double gateSlope = Double.NaN;
 		/** Post-extension COVERAGE_TOPK budget. {@code 0} = pruning disabled (default). */
 		public int coverageK = 0;
 		/** Short focus name resolved by {@link org.matsim.contrib.demand_extraction.scenarios.FocusRegistry}.
@@ -187,6 +191,8 @@ public class RunLyonEqasimDemandExtraction {
 				switch (args[i]) {
 					case "--algorithm" -> out.algorithm = args[++i].toLowerCase();
 					case "--gate-scale" -> out.gateScale = Double.parseDouble(args[++i]);
+					case "--gate-intercept" -> out.gateIntercept = Double.parseDouble(args[++i]);
+					case "--gate-slope" -> out.gateSlope = Double.parseDouble(args[++i]);
 					case "--coverage-k" -> out.coverageK = Integer.parseInt(args[++i]);
 					case "--trip-filter-focus" -> out.tripFilterFocus = args[++i];
 					case "--trip-filter-center-x" -> out.tripFilterCenterX = Double.parseDouble(args[++i]);
@@ -217,7 +223,8 @@ public class RunLyonEqasimDemandExtraction {
 						"--search-horizon", "--max-detour-factor", "--min-drt-cost-per-km",
 						"--pruning-coverage-k", "--trip-filter-radius-km", "--max-pooling-degree",
 						"--predecessors-filter-time", "--trip-filter-focus", "--trip-filter-center-x",
-						"--trip-filter-center-y", "--exclusion-zone" -> true;
+						"--trip-filter-center-y", "--exclusion-zone", "--gate-intercept",
+						"--gate-slope" -> true;
 				default -> false;
 			};
 		}
@@ -231,7 +238,7 @@ public class RunLyonEqasimDemandExtraction {
 			System.err.println("Usage: --sample <N> --scenario-dir <path> [--prefix <s>] "
 					+ "--travel-times <path> [--output-dir <path>] "
 					+ "[--algorithm bamas|exmas] "
-					+ "[--gate-scale <f>] [--coverage-k <int>] "
+					+ "[--gate-scale <f> | --gate-intercept <a> --gate-slope <b>] [--coverage-k <int>] "
 					+ "[--search-horizon <s>] [--max-detour-factor <f>] "
 					+ "[--min-drt-cost-per-km <eur>] [--pruning-coverage-k <int>] "
 					+ "[--trip-filter-radius-km <km>] [--no-exclusion-zone] "
@@ -252,9 +259,9 @@ public class RunLyonEqasimDemandExtraction {
 		Config config = fixture.createConfig(outDir);
 
 		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
-		// Orthogonal-flag path: --algorithm + --gate-scale + --coverage-k.
-		log.info("Applying orthogonal flags: algorithm={}, gateScale={}, coverageK={}",
-				cli.algorithm, cli.gateScale, cli.coverageK);
+		// Orthogonal-flag path: --algorithm + (--gate-scale | --gate-intercept/--gate-slope) + --coverage-k.
+		log.info("Applying orthogonal flags: algorithm={}, gateScale={}, gateIntercept={}, gateSlope={}, coverageK={}",
+				cli.algorithm, cli.gateScale, cli.gateIntercept, cli.gateSlope, cli.coverageK);
 		applyAlgorithmAndPruning(config, cli);
 		applyCliOverrides(exMas, p);
 
@@ -322,11 +329,20 @@ public class RunLyonEqasimDemandExtraction {
 				? ExMasConfigGroup.Algorithm.EXMAS
 				: ExMasConfigGroup.Algorithm.BAMAS);
 
-		// BamasEngine's distance-savings gate condition is `scale >= 0`.
-		// gateScale=-1 (default) disables; gateScale>=0 enables with the value.
-		boolean gateOn = args.gateScale >= 0.0;
-		exMas.setHeuristicPruningEnabled(gateOn);
-		exMas.setPruningDistanceSavingsLogScale(gateOn ? args.gateScale : -1.0);
+		// Distance-savings gate: linear gate takes precedence if both intercept
+		// and slope are finite. Otherwise fall back to log gate via gate-scale.
+		boolean linearGate = Double.isFinite(args.gateIntercept) && Double.isFinite(args.gateSlope);
+		boolean logGateOn = args.gateScale >= 0.0;
+		exMas.setHeuristicPruningEnabled(linearGate || logGateOn);
+		if (linearGate) {
+			exMas.setPruningGateLinearIntercept(args.gateIntercept);
+			exMas.setPruningGateLinearSlope(args.gateSlope);
+			exMas.setPruningDistanceSavingsLogScale(-1.0);
+		} else {
+			exMas.setPruningGateLinearIntercept(Double.NaN);
+			exMas.setPruningGateLinearSlope(Double.NaN);
+			exMas.setPruningDistanceSavingsLogScale(logGateOn ? args.gateScale : -1.0);
+		}
 
 		if (args.coverageK > 0) {
 			exMas.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);

@@ -648,30 +648,12 @@ public final class BamasRideExtender {
 		if (exMasConfig == null) {
 			return true;
 		}
-		double scale = exMasConfig.getPruningDistanceSavingsLogScale();
-		if (scale < 0) {
-			return true;
-		}
-
 		int degree = ride.getRequests() != null ? ride.getRequests().length : 0;
-		int minDegree = Math.max(2, exMasConfig.getPruningDistanceSavingsMinDegree());
-		if (degree < minDegree) {
-			return true;
-		}
-
 		double sumDistances = sumRequestDistances(ride);
 		if (!(sumDistances > 0)) {
 			return true;
 		}
-
-		double maxSaving = exMasConfig.getPruningDistanceSavingsMax();
-		if (!(maxSaving >= 0)) {
-			maxSaving = 0.0;
-		}
-		maxSaving = Math.min(0.99, maxSaving);
-
-		double requiredSaving = requiredSavingForDegree(degree, scale, maxSaving, minDegree);
-		double maxRideDistance = (1.0 - requiredSaving) * sumDistances;
+		double maxRideDistance = computeMaxAllowedRideDistance(degree, sumDistances, exMasConfig);
 		return ride.getRideDistance() <= maxRideDistance;
 	}
 
@@ -682,35 +664,40 @@ public final class BamasRideExtender {
 	 * @return max ride distance in meters, or Double.MAX_VALUE if pruning disabled
 	 */
 	double computeMaxAllowedRideDistance(DrtRequest[] setRequests) {
-		if (exMasConfig == null || exMasConfig.getPruningDistanceSavingsLogScale() < 0) {
-			return Double.MAX_VALUE;
-		}
-		int degree = setRequests.length;
-		int minDegree = Math.max(2, exMasConfig.getPruningDistanceSavingsMinDegree());
-		if (degree < minDegree) return Double.MAX_VALUE;
+		if (exMasConfig == null) return Double.MAX_VALUE;
+		double sumDirectDistances = 0;
+		for (DrtRequest r : setRequests) sumDirectDistances += r.directDistance;
+		if (!(sumDirectDistances > 0)) return Double.MAX_VALUE;
+		return computeMaxAllowedRideDistance(setRequests.length, sumDirectDistances, exMasConfig);
+	}
 
-		double scale = exMasConfig.getPruningDistanceSavingsLogScale();
-		double maxSaving = exMasConfig.getPruningDistanceSavingsMax();
+	/**
+	 * Branch on gate shape: linear (intercept + slope*d) when configured, else
+	 * the log gate. Returns the maximum allowed ride distance for a pool at the
+	 * given degree, or {@link Double#MAX_VALUE} when the gate is disabled.
+	 */
+	public static double computeMaxAllowedRideDistance(int degree, double sumDistances,
+			org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg) {
+		if (cfg == null || !(sumDistances > 0)) return Double.MAX_VALUE;
+		double maxSaving = cfg.getPruningDistanceSavingsMax();
 		if (!(maxSaving >= 0)) maxSaving = 0.0;
 		maxSaving = Math.min(0.99, maxSaving);
 
-		double requiredSaving = requiredSavingForDegree(degree, scale, maxSaving, minDegree);
-		double sumDirectDistances = 0;
-		for (DrtRequest r : setRequests) sumDirectDistances += r.directDistance;
-
-		return (1.0 - requiredSaving) * sumDirectDistances;
-	}
-
-	private static double requiredSavingForDegree(int degree, double scale, double maxSaving, int minDegree) {
-		if (scale < 0) {
-			return 0.0;
+		if (cfg.hasLinearGate()) {
+			double gate = cfg.getPruningGateLinearIntercept() + cfg.getPruningGateLinearSlope() * degree;
+			// Floor at (1 - maxSaving) to bound how aggressive the gate can get at
+			// high degree. Gate > 1.0 is permitted (loose at low degree).
+			gate = Math.max(1.0 - maxSaving, gate);
+			return gate * sumDistances;
 		}
-		if (degree < Math.max(2, minDegree)) {
-			return 0.0;
-		}
+
+		double scale = cfg.getPruningDistanceSavingsLogScale();
+		if (scale < 0) return Double.MAX_VALUE;
+		int minDegree = Math.max(2, cfg.getPruningDistanceSavingsMinDegree());
+		if (degree < minDegree) return Double.MAX_VALUE;
 		double requiredSaving = scale * (Math.log(degree) / Math.log(2.0));
 		requiredSaving = Math.max(0.0, Math.min(Math.min(0.99, maxSaving), requiredSaving));
-		return requiredSaving;
+		return (1.0 - requiredSaving) * sumDistances;
 	}
 
 	private double sumRequestDistances(Ride r) {

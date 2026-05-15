@@ -220,6 +220,17 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// for shareability graph connectivity.
 	private int pruningDistanceSavingsMinDegree = 3;
 
+	// Alternative linear gate: gate(d) = intercept + slope * d, used in place of the
+	// log gate when intercept is finite (not NaN). Keep ride iff:
+	//   rideDistance <= gate(d) * sum(request distances)
+	// equivalent to requiredSaving(d) = 1 - gate(d) (can be negative when gate>1,
+	// in which case the gate accepts even rides with ratio > 1).
+	// The gate is floored at (1 - pruningDistanceSavingsMax) to avoid impossibly
+	// tight gates at high degrees. minDegree and the scale<0 disable rule do NOT
+	// apply to the linear gate — it is always-on once configured.
+	private double pruningGateLinearIntercept = Double.NaN;
+	private double pruningGateLinearSlope = Double.NaN;
+
 	// Post-graph pair pruning: keep top fraction of degree-2 rides (by distance savings)
 	// after the shareability graph is built. Applied AFTER best-per-set dedup and AFTER
 	// the distance-savings gate. 1.0 = disabled. 0.50 = keep top 50%.
@@ -858,6 +869,36 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.pruningDistanceSavingsMinDegree = pruningDistanceSavingsMinDegree;
 	}
 
+	@StringGetter("pruningGateLinearIntercept")
+	public double getPruningGateLinearIntercept() {
+		return pruningGateLinearIntercept;
+	}
+
+	@StringSetter("pruningGateLinearIntercept")
+	public void setPruningGateLinearIntercept(double pruningGateLinearIntercept) {
+		this.pruningGateLinearIntercept = pruningGateLinearIntercept;
+	}
+
+	@StringGetter("pruningGateLinearSlope")
+	public double getPruningGateLinearSlope() {
+		return pruningGateLinearSlope;
+	}
+
+	@StringSetter("pruningGateLinearSlope")
+	public void setPruningGateLinearSlope(double pruningGateLinearSlope) {
+		this.pruningGateLinearSlope = pruningGateLinearSlope;
+	}
+
+	/**
+	 * @return true iff the linear gate is configured (intercept is a finite number).
+	 * When true, callers should use {@code intercept + slope*d} as the gate;
+	 * when false, fall back to the log gate parameterised by
+	 * {@link #getPruningDistanceSavingsLogScale()}.
+	 */
+	public boolean hasLinearGate() {
+		return Double.isFinite(pruningGateLinearIntercept) && Double.isFinite(pruningGateLinearSlope);
+	}
+
 	@StringGetter("pairKeepTopFraction")
 	public double getPairKeepTopFraction() {
 		return pairKeepTopFraction;
@@ -1278,6 +1319,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Maximum requiredSaving(d) clamp for distance savings pruning (0-0.99). Default: 0.9");
 		map.put("pruningDistanceSavingsMinDegree",
 				"Minimum pooling degree for applying distance savings pruning. Default: 3 (do not prune paired rides). ");
+		map.put("pruningGateLinearIntercept",
+				"Linear gate intercept a in gate(d)=a+b*d. When both intercept and slope are finite, the linear "
+				+ "gate replaces the log gate (rides kept iff rideDistance <= gate(d)*sum(direct distances)). "
+				+ "Default: NaN (linear gate disabled).");
+		map.put("pruningGateLinearSlope",
+				"Linear gate slope b in gate(d)=a+b*d. See pruningGateLinearIntercept. Default: NaN.");
 		map.put("pairKeepTopFraction",
 				"Post-graph pair pruning: keep only the top fraction of degree-2 rides (by distance savings) "
 				+ "after the shareability graph is built and best-per-set dedup is applied. "
