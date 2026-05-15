@@ -262,9 +262,11 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private boolean calcPredecessors = true;
 
 	// Maximum time gap (seconds) between predecessor end and successor start.
-	// null/omitted => unbounded, -1 => unbounded (explicit).
+	// null/omitted => use this default (1800 s = 30 min), -1 => unbounded (explicit).
+	// 1800 s covers the realistic empty-vehicle redeployment window; at 100% an
+	// unbounded value balloons the connection cache to O(n²) and OOMs in practice.
 	// Set to match Python's path_cover_max_time_gap for complete connection cache coverage.
-	private Double predecessorsFilterTime = null;
+	private Double predecessorsFilterTime = 1800.0;
 
 	// Maximum connection distance as factor of predecessor ride distance.
 	// null/omitted => unbounded, -1 => unbounded (explicit).
@@ -1299,7 +1301,8 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Calculate predecessor/successor relationships between rides. When enabled, connection cache is automatically written. Default: true");
 		map.put("predecessorsFilterTime",
 				"Maximum time gap (seconds) between predecessor end and successor start. " +
-				"-1 or null/omitted => unbounded (all ride pairs considered, creates complete connection cache). " +
+				"Default: 1800 s (30 min) — covers realistic empty-vehicle redeployments and keeps the " +
+				"connection cache tractable at 100 %. Pass -1 to disable (unbounded — O(n²), OOMs at 100 %). " +
 				"Set to match Python's path_cover_max_time_gap for full cache coverage.");
 		map.put("predecessorsFilterDistanceFactor",
 				"Maximum connection distance as factor of predecessor ride distance. " +
