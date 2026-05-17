@@ -137,6 +137,79 @@ simwrapper (Vue.js)          → Interactive visualization
 - Predecessor/successor relationships
 - Network export for empty vehicle distances
 
+## Low-memory two-phase mode
+
+For scenarios that don't fit the Controler + algorithm into a single JVM (Lyon
+100% being the motivating case), use the two-phase mode. Phase 1 runs the eqasim
+Controler through STEP 3 (request construction), dumps to disk, and
+`System.exit(0)` — releasing the heap. Phase 2 spawns in a fresh JVM, reloads
+the dump, and runs the algorithm + post-processor without the Controler graph.
+
+Plan & design: `docs/plans/2026-05-17-drt-extraction-low-memory-mode-plan.md`.
+
+```bash
+# Orchestrator: one CLI command, two JVMs in sequence.
+mvn exec:java -Dexec.mainClass="org.matsim.contrib.demand_extraction.run.RunDemandExtractionTwoPhase" \
+  -Dexec.args="--sample 1 \
+               --scenario-dir ../../../matsim_scenarios/eqasim-france/output_lyon_drt_1pct/lyon_drt_area \
+               --prefix lyon_drt_1pct_ \
+               --travel-times ../../../matsim_scenarios/eqasim-france/output_fullregion_10pct/travel_times.tsv \
+               --output-dir ../../../outputs/lyon-twophase-1pct \
+               --algorithm bamas \
+               --phase1-heap 24g --phase2-heap 8g" \
+  -Denforcer.skip=true
+```
+
+Manual two-step (for debugging an individual phase):
+
+```bash
+# Phase 1 (single JVM, single dump-then-exit).
+mvn exec:java -Dexec.mainClass="org.matsim.contrib.demand_extraction.run.RunDemandExtractionPhase1" \
+  -Dexec.args="<same Lyon args> --phase1-dump-dir outputs/.../phase1_dump" \
+  -Denforcer.skip=true
+
+# Phase 2 (fresh JVM, algorithm + post-process).
+mvn exec:java -Dexec.mainClass="org.matsim.contrib.demand_extraction.run.RunDemandExtractionPhase2" \
+  -Dexec.args="--phase1-dir outputs/.../phase1_dump \
+               --network    matsim_scenarios/.../lyon_drt_1pct_network.xml.gz \
+               --travel-times matsim_scenarios/.../travel_times.tsv \
+               --output-dir outputs/lyon-twophase-1pct" \
+  -Denforcer.skip=true
+```
+
+### Dump layout (`<outputDir>/phase1_dump/`)
+
+| File | Contents |
+|---|---|
+| `drt_requests_phase1.csv` | DRT requests (additive-only schema, includes link-coord fields) |
+| `scoring_contexts.bin`    | Per-request scoring scalars + per-type activity table (binary) |
+| `phase1_meta.json`        | drtMode, walkSpeed, opportunity-cost model, run id, sample %, peak heap, wall time, eqasim scoring scalars |
+| `phase1_config.xml`       | Live MATSim Config snapshot — Phase 2 rebuilds `ExMasConfigGroup` + `MultiModeDrtConfigGroup` + `DvrpConfigGroup` from this file |
+
+### Restrictions
+
+- Eqasim adapter only: Phase 1 omits the eqasim scoring scalars when the live
+  adapter is `planCalcScore` or `dmc`; Phase 2 fails fast on those dumps.
+- Door-to-door only: stop-based + hyper-pool walk distances aren't persisted in
+  the dump. Enabling those in Phase 2 would silently produce wrong rides.
+- Lyon-only routing setup: Phase 2's routing mirrors `LyonEqasimScenarioFixture`
+  exactly (15-min travel-time bins, 36 h clamp, `OnlyTimeDependentTravelDisutilityFactory`,
+  `SpeedyALTFactory`). Other fixtures need their own Phase-2 wiring.
+
+### Validation gate
+
+After running two-phase, diff the output against a single-process baseline:
+
+```bash
+python ../../../scripts/compare_lowmem_runs.py \
+  --single-process outputs/lyon-singleproc-1pct \
+  --two-phase      outputs/lyon-twophase-1pct \
+  --run-id         lyon-drt-1pct-eqasim-exmas
+```
+
+Acceptance: drt_requests.csv SHA-256 match, exmas_rides.csv per-ride distance/
+time bit-equality, max-cost per passenger within 1e-6.
+
 ## Dependencies
 
 Parent: `org.matsim:contrib` (2026.0-SNAPSHOT). Direct: `matsim`, `drt`, `dvrp` contribs. Java 17+.
