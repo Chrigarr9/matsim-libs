@@ -49,7 +49,9 @@ public final class ExMasCsvWriter {
 					"originActivityType,destinationActivityType," +
 					"directTravelTime,directDistance,earliestDeparture,latestArrival," +
 					"maxTravelTime,maxPositiveDelay,maxNegativeDelay,baseModeScore,baseMode," +
-					"carTravelTime,ptTravelTime,ptAccessibility,maxCostPerKm");
+					"carTravelTime,ptTravelTime,ptAccessibility,maxCostPerKm," +
+					"originLinkCoordFromX,originLinkCoordFromY,originLinkCoordToX,originLinkCoordToY," +
+					"destinationLinkCoordFromX,destinationLinkCoordFromY,destinationLinkCoordToX,destinationLinkCoordToY");
 			writer.newLine();
 
 			for (DrtRequest req : requests) {
@@ -57,7 +59,8 @@ public final class ExMasCsvWriter {
 						? req.budget / (req.directDistance / 1000.0)
 						: Double.MAX_VALUE;
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%s,%s,%d,%b,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f,%.4f",
+						"%d,%s,%s,%d,%b,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f,%.4f,"
+								+ "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",
 						req.index, req.personId, req.groupId, req.tripIndex, req.isCommute, req.isEducation,
 						req.budget, req.requestTime,
 						req.originLinkId, req.destinationLinkId,
@@ -68,7 +71,11 @@ public final class ExMasCsvWriter {
 						req.earliestDeparture, req.latestArrival,
 						req.getMaxTravelTime(), req.getMaxPositiveDelay(), req.getMaxNegativeDelay(),
 						req.bestModeScore, req.bestMode != null ? req.bestMode : "",
-						req.carTravelTime, req.ptTravelTime, req.ptAccessibility, maxCostPerKm));
+						req.carTravelTime, req.ptTravelTime, req.ptAccessibility, maxCostPerKm,
+						req.originLinkCoordFromX, req.originLinkCoordFromY,
+						req.originLinkCoordToX, req.originLinkCoordToY,
+						req.destinationLinkCoordFromX, req.destinationLinkCoordFromY,
+						req.destinationLinkCoordToX, req.destinationLinkCoordToY));
 				writer.newLine();
 			}
 		} catch (IOException e) {
