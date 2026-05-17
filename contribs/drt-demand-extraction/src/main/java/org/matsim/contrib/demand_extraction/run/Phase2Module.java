@@ -148,7 +148,8 @@ public final class Phase2Module extends AbstractModule {
 		bind(MatsimNetworkCache.class).asEagerSingleton();
 		bind(BamasAlgorithm.class);
 		bind(ExMasReferenceAlgorithm.class);
-		bind(RidePostProcessor.class).asEagerSingleton();
+		// RidePostProcessor has no @Inject ctor in single-process (it's built by hand
+		// inside DemandExtractionListener) — wire it via @Provides instead.
 
 		// 7. DRT-specific router: shared with single-process to avoid drift.
 		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
@@ -184,6 +185,13 @@ public final class Phase2Module extends AbstractModule {
 	@Singleton
 	RidePostProcessor.MaxCostResolver provideMaxCostResolver(BudgetToConstraintsCalculator btc) {
 		return (budget, request, tt, dist) -> btc.budgetToMaxCost(budget, null, tt, dist, request);
+	}
+
+	@Provides
+	@Singleton
+	RidePostProcessor provideRidePostProcessor(ExMasConfigGroup exMas,
+			MatsimNetworkCache networkCache, RidePostProcessor.MaxCostResolver resolver) {
+		return new RidePostProcessor(exMas, networkCache, resolver);
 	}
 
 	/** Mirrors {@code LyonEqasimScenarioFixture.loadOfflineTravelTimes} verbatim — any drift
