@@ -52,10 +52,30 @@ public class BudgetValidator {
 			ScoringParametersForPerson scoringParametersForPerson,
 			ExMasConfigGroup exMasConfig,
 			Config config) {
+		this(adapter, scoringParametersForPerson, exMasConfig, ExMasConfigGroup.getWalkSpeed(config));
+	}
+
+	/**
+	 * Phase-2 ctor: no {@link ScoringParametersForPerson}. {@link #computeScoringContext}
+	 * is not callable on instances built this way — Phase 2 reloads pre-computed scoring
+	 * contexts from disk and never builds new ones.
+	 */
+	public BudgetValidator(
+			DemandExtractionScoringAdapter adapter,
+			ExMasConfigGroup exMasConfig,
+			double walkSpeed) {
+		this(adapter, null, exMasConfig, walkSpeed);
+	}
+
+	private BudgetValidator(
+			DemandExtractionScoringAdapter adapter,
+			ScoringParametersForPerson scoringParametersForPerson,
+			ExMasConfigGroup exMasConfig,
+			double walkSpeed) {
 		this.adapter = adapter;
 		this.scoringParametersForPerson = scoringParametersForPerson;
 		this.exMasConfig = exMasConfig;
-		this.walkSpeed = ExMasConfigGroup.getWalkSpeed(config);
+		this.walkSpeed = walkSpeed;
 	}
 
 	/**
@@ -174,6 +194,11 @@ public class BudgetValidator {
 	 * construction time by {@code DrtRequestFactory}.
 	 */
 	public DrtRequest.ScoringContext computeScoringContext(DrtRequest request, Person person) {
+		if (scoringParametersForPerson == null) {
+			throw new IllegalStateException(
+					"computeScoringContext is unavailable in Phase 2 (no ScoringParametersForPerson). "
+					+ "Scoring contexts are pre-built in Phase 1 and reloaded via the low-memory dump.");
+		}
 		double walkDist = exMasConfig.getMinDrtAccessEgressDistance();
 		double accessTime = walkDist / walkSpeed;
 		double egressTime = walkDist / walkSpeed;
