@@ -28,6 +28,11 @@ public final class PhaseOneDumpWriter {
 	 * Process-level metadata the Phase-2 runner consumes verbatim. Algorithm/pruning
 	 * knobs do <b>not</b> live here — Phase 2 reloads the full Phase-1 output config
 	 * XML via its own runner argument (kept out of this writer so it stays I/O-only).
+	 *
+	 * <p>{@code eqasimScoringParams} carries the frozen ModeParameters scalars
+	 * Phase 2 needs to score DRT directly without standing up the eqasim DI graph.
+	 * It is {@code null} for Phase-1 runs that used a non-eqasim adapter (those
+	 * dumps cannot drive Phase 2 without further work).
 	 */
 	public record Meta(
 			String drtMode,
@@ -37,7 +42,19 @@ public final class PhaseOneDumpWriter {
 			String runId,
 			int sampleSize,
 			long phase1WallTimeMs,
-			long phase1PeakHeapBytes) {}
+			long phase1PeakHeapBytes,
+			EqasimScoringParams eqasimScoringParams) {}
+
+	/** Six scalars harvested from the live eqasim {@code ModeParameters} during Phase 1.
+	 *  See {@link org.matsim.contrib.demand_extraction.io.lowmem.PhaseOneDumpReader.EqasimScoringParams}
+	 *  for the field-by-field consumer mapping. */
+	public record EqasimScoringParams(
+			double drtAlpha_u,
+			double drtBetaTravelTime_u_min,
+			double drtBetaAccessEgressTime_u_min,
+			double betaCost_u_MU,
+			double lambdaCostEuclideanDistance,
+			double referenceEuclideanDistance_km) {}
 
 	private PhaseOneDumpWriter() {}
 
@@ -127,7 +144,17 @@ public final class PhaseOneDumpWriter {
 			writeNumberField(bw, "sampleSize", meta.sampleSize, true);
 			writeNumberField(bw, "numRequests", numRequests, true);
 			writeNumberField(bw, "phase1WallTimeMs", meta.phase1WallTimeMs, true);
-			writeNumberField(bw, "phase1PeakHeapBytes", meta.phase1PeakHeapBytes, false);
+			boolean hasEqasim = meta.eqasimScoringParams != null;
+			writeNumberField(bw, "phase1PeakHeapBytes", meta.phase1PeakHeapBytes, hasEqasim);
+			if (hasEqasim) {
+				EqasimScoringParams p = meta.eqasimScoringParams;
+				writeNumberField(bw, "eqasim.drtAlpha_u", p.drtAlpha_u, true);
+				writeNumberField(bw, "eqasim.drtBetaTravelTime_u_min", p.drtBetaTravelTime_u_min, true);
+				writeNumberField(bw, "eqasim.drtBetaAccessEgressTime_u_min", p.drtBetaAccessEgressTime_u_min, true);
+				writeNumberField(bw, "eqasim.betaCost_u_MU", p.betaCost_u_MU, true);
+				writeNumberField(bw, "eqasim.lambdaCostEuclideanDistance", p.lambdaCostEuclideanDistance, true);
+				writeNumberField(bw, "eqasim.referenceEuclideanDistance_km", p.referenceEuclideanDistance_km, false);
+			}
 			bw.write("}\n");
 		}
 	}

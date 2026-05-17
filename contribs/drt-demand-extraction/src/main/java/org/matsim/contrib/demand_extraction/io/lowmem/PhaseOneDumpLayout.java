@@ -22,6 +22,7 @@ public final class PhaseOneDumpLayout {
 	public static final String REQUESTS_CSV = "drt_requests_phase1.csv";
 	public static final String SCORING_CONTEXTS_BIN = "scoring_contexts.bin";
 	public static final String META_JSON = "phase1_meta.json";
+	public static final String CONFIG_XML = "phase1_config.xml";
 
 	public static final int SCORING_CONTEXTS_MAGIC = 0xDE5C0DE1;
 	public static final int SCORING_CONTEXTS_VERSION = 1;
@@ -36,4 +37,5 @@ public final class PhaseOneDumpLayout {
 	public Path requestsCsv() { return root.resolve(REQUESTS_CSV); }
 	public Path scoringContextsBin() { return root.resolve(SCORING_CONTEXTS_BIN); }
 	public Path metaJson() { return root.resolve(META_JSON); }
+	public Path configXml() { return root.resolve(CONFIG_XML); }
 }

@@ -25,7 +25,7 @@ class PhaseOneDumpWriterTest {
 
 		PhaseOneDumpWriter.Meta meta = new PhaseOneDumpWriter.Meta(
 				"drt", 1.4, "LOG", 100.0,
-				"test-run-id", 1, 12345L, 67890L);
+				"test-run-id", 1, 12345L, 67890L, null);
 
 		PhaseOneDumpWriter.write(layout, requests, meta);
 

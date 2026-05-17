@@ -58,7 +58,26 @@ public final class PhaseOneDumpReader {
 			int sampleSize,
 			int numRequests,
 			long phase1WallTimeMs,
-			long phase1PeakHeapBytes) {}
+			long phase1PeakHeapBytes,
+			EqasimScoringParams eqasimScoringParams) {}
+
+	/**
+	 * Frozen scalar snapshot of the live eqasim ModeParameters needed by Phase 2's
+	 * DRT-only scoring path: alpha + betaTravelTime + betaAccessEgress drive
+	 * {@code EqasimScoringAdapter.scoreDrtDirectly}; betaCost + lambda + refDist drive
+	 * the distance-specific marginal utility of money used by
+	 * {@code BudgetToConstraintsCalculator.budgetToMaxCost}.
+	 *
+	 * <p>Required when Phase 1 ran with the eqasim adapter; absent otherwise (the
+	 * field is {@code null} in {@link Meta} for non-eqasim Phase-1 dumps).
+	 */
+	public record EqasimScoringParams(
+			double drtAlpha_u,
+			double drtBetaTravelTime_u_min,
+			double drtBetaAccessEgressTime_u_min,
+			double betaCost_u_MU,
+			double lambdaCostEuclideanDistance,
+			double referenceEuclideanDistance_km) {}
 
 	private PhaseOneDumpReader() {}
 
@@ -73,6 +92,16 @@ public final class PhaseOneDumpReader {
 
 	private static Meta readMeta(Path metaJson) throws IOException {
 		Map<String, String> kv = parseFlatJson(Files.readString(metaJson));
+		EqasimScoringParams eqasim = null;
+		if (kv.containsKey("eqasim.drtAlpha_u")) {
+			eqasim = new EqasimScoringParams(
+					Double.parseDouble(requireString(kv, "eqasim.drtAlpha_u")),
+					Double.parseDouble(requireString(kv, "eqasim.drtBetaTravelTime_u_min")),
+					Double.parseDouble(requireString(kv, "eqasim.drtBetaAccessEgressTime_u_min")),
+					Double.parseDouble(requireString(kv, "eqasim.betaCost_u_MU")),
+					Double.parseDouble(requireString(kv, "eqasim.lambdaCostEuclideanDistance")),
+					Double.parseDouble(requireString(kv, "eqasim.referenceEuclideanDistance_km")));
+		}
 		return new Meta(
 				requireString(kv, "drtMode"),
 				Double.parseDouble(requireString(kv, "walkSpeed")),
@@ -82,7 +111,8 @@ public final class PhaseOneDumpReader {
 				Integer.parseInt(requireString(kv, "sampleSize")),
 				Integer.parseInt(requireString(kv, "numRequests")),
 				Long.parseLong(requireString(kv, "phase1WallTimeMs")),
-				Long.parseLong(requireString(kv, "phase1PeakHeapBytes")));
+				Long.parseLong(requireString(kv, "phase1PeakHeapBytes")),
+				eqasim);
 	}
 
 	private static String requireString(Map<String, String> kv, String key) {

@@ -66,10 +66,53 @@ public final class EqasimRuntimeProbe {
 		}
 	}
 
+	/**
+	 * Read eqasim's DRT-direct utility parameters from a Guice injector. These are the
+	 * scalars {@code EqasimScoringAdapter.scoreDrtDirectly} consumes — alpha, betaTravelTime,
+	 * betaAccessEgressTime — read off the {@code modeParameters.drt} sub-object.
+	 *
+	 * @param injector the Guice injector (from MATSim's Controler)
+	 * @return the three DRT scalars
+	 * @throws IllegalStateException if eqasim or the {@code drt} sub-object is missing
+	 */
+	public static EqasimDrtParameters readDrtParameters(com.google.inject.Injector injector) {
+		try {
+			Class<?> modeParamsClass = Class.forName(MODE_PARAMETERS_CLASS);
+			Object modeParams = injector.getInstance(modeParamsClass);
+			Object drt = readObjectField(modeParams, "drt");
+			double alpha = readDoubleField(drt, "alpha_u");
+			double betaTravelTime = readDoubleField(drt, "betaTravelTime_u_min");
+			double betaAccessEgressTime = readDoubleField(drt, "betaAccessEgressTime_u_min");
+			log.info("Eqasim ModeParameters.drt found: alpha={}, betaTT={}, betaAE={}",
+					alpha, betaTravelTime, betaAccessEgressTime);
+			return new EqasimDrtParameters(alpha, betaTravelTime, betaAccessEgressTime);
+		} catch (ClassNotFoundException e) {
+			throw new IllegalStateException(
+					"Eqasim was detected but ModeParameters class not found: " + MODE_PARAMETERS_CLASS, e);
+		} catch (Exception e) {
+			throw new IllegalStateException(
+					"Eqasim was detected but could not read ModeParameters.drt fields. " +
+							"Check that eqasim version is compatible.", e);
+		}
+	}
+
+	private static Object readObjectField(Object obj, String fieldName) throws Exception {
+		Field field = obj.getClass().getField(fieldName);
+		return field.get(obj);
+	}
+
 	private static double readDoubleField(Object obj, String fieldName) throws Exception {
 		Field field = obj.getClass().getField(fieldName);
 		return field.getDouble(obj);
 	}
+
+	/**
+	 * Eqasim DRT utility parameters (scoreDrtDirectly inputs) read via reflection.
+	 */
+	public record EqasimDrtParameters(
+			double alpha_u,
+			double betaTravelTime_u_min,
+			double betaAccessEgressTime_u_min) {}
 
 	/**
 	 * Eqasim cost parameters read via reflection.

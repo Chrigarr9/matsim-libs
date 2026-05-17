@@ -35,9 +35,12 @@ class PhaseOneDumpRoundTripTest {
 				LowMemTestFixtures.buildRequest(0, "home", "work", 43200.0, 28800.0),
 				LowMemTestFixtures.buildRequest(1, "work", "home", 28800.0, 43200.0));
 
+		PhaseOneDumpWriter.EqasimScoringParams eqasim = new PhaseOneDumpWriter.EqasimScoringParams(
+				1.5, -0.05, -0.10, -0.08, 0.7, 4.0);
+
 		PhaseOneDumpWriter.Meta meta = new PhaseOneDumpWriter.Meta(
 				"drt", WALK_SPEED, "LOG", MIN_WALK,
-				"test-run-id", 1, 12345L, 67890L);
+				"test-run-id", 1, 12345L, 67890L, eqasim);
 
 		PhaseOneDumpWriter.write(layout, originals, meta);
 
@@ -54,6 +57,16 @@ class PhaseOneDumpRoundTripTest {
 		assertEquals(2, loadedMeta.numRequests());
 		assertEquals(12345L, loadedMeta.phase1WallTimeMs());
 		assertEquals(67890L, loadedMeta.phase1PeakHeapBytes());
+
+		// Eqasim scoring params round-trip
+		PhaseOneDumpReader.EqasimScoringParams loadedEqasim = loadedMeta.eqasimScoringParams();
+		assertNotNull(loadedEqasim, "eqasim scoring params should round-trip");
+		assertEquals(eqasim.drtAlpha_u(), loadedEqasim.drtAlpha_u(), 1e-12);
+		assertEquals(eqasim.drtBetaTravelTime_u_min(), loadedEqasim.drtBetaTravelTime_u_min(), 1e-12);
+		assertEquals(eqasim.drtBetaAccessEgressTime_u_min(), loadedEqasim.drtBetaAccessEgressTime_u_min(), 1e-12);
+		assertEquals(eqasim.betaCost_u_MU(), loadedEqasim.betaCost_u_MU(), 1e-12);
+		assertEquals(eqasim.lambdaCostEuclideanDistance(), loadedEqasim.lambdaCostEuclideanDistance(), 1e-12);
+		assertEquals(eqasim.referenceEuclideanDistance_km(), loadedEqasim.referenceEuclideanDistance_km(), 1e-12);
 
 		// Requests round-trip
 		List<DrtRequest> loadedRequests = loaded.requests();
