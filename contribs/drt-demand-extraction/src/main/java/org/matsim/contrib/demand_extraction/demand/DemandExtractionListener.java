@@ -8,6 +8,7 @@ import java.util.stream.Collectors;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.demand_extraction.algorithm.AlgorithmResult;
 import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithm;
@@ -127,7 +128,12 @@ public class DemandExtractionListener implements ShutdownListener {
 		List<Ride> rides = algorithmResult.rides();
 
 		// Post-process rides with advanced metrics (maxCost, Shapley, predecessors)
-		RidePostProcessor postProcessor = new RidePostProcessor(exMasConfig, networkCache, budgetToConstraintsCalculator, population);
+		RidePostProcessor.MaxCostResolver maxCostResolver = (budget, request, tt, dist) -> {
+			Person person = population.getPersons().get(request.personId);
+			if (person == null) return 0.0;
+			return budgetToConstraintsCalculator.budgetToMaxCost(budget, person, tt, dist, request);
+		};
+		RidePostProcessor postProcessor = new RidePostProcessor(exMasConfig, networkCache, maxCostResolver);
 		rides = postProcessor.process(rides);
 
 		// 5. Write DRT Requests Output

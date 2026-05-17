@@ -19,13 +19,10 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
-import org.matsim.api.core.v01.population.Person;
-import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
-import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
 /**
@@ -37,17 +34,25 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 public final class RidePostProcessor {
     private static final Logger log = LogManager.getLogger(RidePostProcessor.class);
 
+    /**
+     * Resolves the maximum acceptable fare (EUR) for one passenger of one ride.
+     * Phase 1 wires this from {@code BudgetToConstraintsCalculator.budgetToMaxCost(...)}
+     * with a Person lookup; Phase 2 wires it from cost parameters alone (no Population).
+     */
+    @FunctionalInterface
+    public interface MaxCostResolver {
+        double maxCost(double budget, DrtRequest request, double travelTime, double distance);
+    }
+
     private final ExMasConfigGroup config;
     private final MatsimNetworkCache networkCache;
-    private final BudgetToConstraintsCalculator budgetToConstraintsCalculator;
-    private final Population population;
+    private final MaxCostResolver maxCostResolver;
 
-    public RidePostProcessor(ExMasConfigGroup config, MatsimNetworkCache networkCache, 
-                            BudgetToConstraintsCalculator budgetToConstraintsCalculator, Population population) {
+    public RidePostProcessor(ExMasConfigGroup config, MatsimNetworkCache networkCache,
+                            MaxCostResolver maxCostResolver) {
         this.config = config;
         this.networkCache = networkCache;
-        this.budgetToConstraintsCalculator = budgetToConstraintsCalculator;
-        this.population = population;
+        this.maxCostResolver = maxCostResolver;
     }
 
     public List<Ride> process(List<Ride> rides) {
@@ -121,23 +126,9 @@ public final class RidePostProcessor {
 
             for (int i = 0; i < ride.getDegree(); i++) {
                 DrtRequest request = requests[i];
-                Person person = population.getPersons().get(request.personId);
                 double budget = (remainingBudgets != null && remainingBudgets.length > i) ? remainingBudgets[i] : 0.0;
 
-                if (person == null) {
-                    maxCosts[i] = 0.0;
-                    maxCostsPerKm[i] = 0.0;
-                    continue;
-                }
-
-                // Call budgetToMaxCost for each passenger (aligns with other budget methods)
-                maxCosts[i] = budgetToConstraintsCalculator.budgetToMaxCost(
-                    budget,
-                    person,
-                    travelTimes[i],
-                    distances[i],
-                    request
-                );
+                maxCosts[i] = maxCostResolver.maxCost(budget, request, travelTimes[i], distances[i]);
 
                 // Derive per-km cost (source of truth for Python optimization pipeline)
                 maxCostsPerKm[i] = distances[i] > 0
