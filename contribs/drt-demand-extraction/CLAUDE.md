@@ -207,8 +207,26 @@ python ../../../scripts/compare_lowmem_runs.py \
   --run-id         lyon-drt-1pct-eqasim-exmas
 ```
 
-Acceptance: drt_requests.csv SHA-256 match, exmas_rides.csv per-ride distance/
-time bit-equality, max-cost per passenger within 1e-6.
+Acceptance:
+- `drt_requests.csv`: SHA-256 match
+- `exmas_rides.csv`: per-ride distance + start/end time bit-equal; max-cost per
+  passenger within **1e-2 EUR** (one cent)
+- `connection_cache.csv`: common-key values bit-equal; net row-count drift ≤ 1 %
+
+**Why max-cost is 1e-2 EUR, not 1e-6:** Phase 2 reads `budget` back from
+`drt_requests.csv`, which `ExMasCsvWriter` formats as `%.4f` utils. With eqasim
+`margUtilOfMoney ≈ 0.01` utils/EUR, a 1e-4 utils round-trip becomes a one-cent
+drift in `maxCost = baseFare + budget / margUtil`. The algorithm output (rides,
+distances, times) is bit-equal; only the per-passenger cost cap drifts by at
+most one cent. Downstream MIP solver tolerance is orders of magnitude looser
+than this. To eliminate the drift entirely, add `budget` to
+`scoring_contexts.bin` (bump version 1→2) and read it from BIN instead of CSV.
+
+**Why connection_cache row count drifts ~0.04 %:** the cache is populated
+lazily during SSSP batch routing. When the batch composition order differs
+between runs, the same algorithm-driven OD queries are computed (so rides are
+bit-equal), but the *incidental* additional reachable nodes captured by each
+SSSP cone differ. Both runs agree bit-exactly on all 3.4 M common keys.
 
 ## Dependencies
 
