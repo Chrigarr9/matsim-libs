@@ -143,7 +143,8 @@ public final class Phase2Module extends AbstractModule {
 		// 6. Demand-extraction services that ExMasAlgorithmModule normally binds.
 		//    (We can't install that module standalone — it extends MATSim's
 		//    AbstractModule which needs the Controler's bootstrap injector.)
-		bind(BudgetValidator.class).asEagerSingleton();
+		//    BudgetValidator goes through @Provides so we pick the 3-arg Phase-2
+		//    constructor (no ScoringParametersForPerson, which Phase 2 doesn't have).
 		bind(BudgetToConstraintsCalculator.class).asEagerSingleton();
 		bind(MatsimNetworkCache.class).asEagerSingleton();
 		bind(BamasAlgorithm.class);
@@ -192,6 +193,16 @@ public final class Phase2Module extends AbstractModule {
 	RidePostProcessor provideRidePostProcessor(ExMasConfigGroup exMas,
 			MatsimNetworkCache networkCache, RidePostProcessor.MaxCostResolver resolver) {
 		return new RidePostProcessor(exMas, networkCache, resolver);
+	}
+
+	/** Use the Phase-2 3-arg BudgetValidator constructor (no ScoringParametersForPerson).
+	 *  Phase 2 reloads pre-computed scoring contexts from disk and never builds new ones,
+	 *  so the per-person scoring-parameters dependency the @Inject ctor takes is unnecessary. */
+	@Provides
+	@Singleton
+	BudgetValidator provideBudgetValidator(DemandExtractionScoringAdapter adapter,
+			ExMasConfigGroup exMas, Config config) {
+		return new BudgetValidator(adapter, exMas, ExMasConfigGroup.getWalkSpeed(config));
 	}
 
 	/** Mirrors {@code LyonEqasimScenarioFixture.loadOfflineTravelTimes} verbatim — any drift
