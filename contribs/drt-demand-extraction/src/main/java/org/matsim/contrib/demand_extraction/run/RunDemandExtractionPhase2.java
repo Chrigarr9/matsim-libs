@@ -114,6 +114,14 @@ public final class RunDemandExtractionPhase2 {
 		log.info("PHASE 2 STEP 3: running {} algorithm",
 				injector.getInstance(ExMasConfigGroup.class).getAlgorithm());
 		ExMasAlgorithm algorithm = injector.getInstance(ExMasAlgorithm.class);
+		// Take a heap snapshot RIGHT before the algorithm starts. Together with
+		// Phase 1's "Used heap at dump" line this gives the operator the
+		// memory-released-by-JVM-split metric:
+		//   gain = phase1_used_at_dump - phase2_used_at_algorithm_start
+		System.gc();   // Make the snapshot reflect live state, not garbage from setup.
+		long heapAtAlgStartBytes = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
+		log.info("PHASE 2 HEAP at algorithm start: {} MB (used)",
+				heapAtAlgStartBytes / (1024L * 1024L));
 		AlgorithmResult result = algorithm.run(requests);
 		List<Ride> rides = result.rides();
 		log.info("PHASE 2 STEP 3: algorithm produced {} rides", rides.size());
