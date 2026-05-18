@@ -176,13 +176,26 @@ public final class RunDemandExtractionTwoPhase {
 				classpath.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator)).length,
 				classpath.length());
 
+		// Windows' CreateProcess command-line limit is ~32 KiB; this project's
+		// classpath alone is ~33 KiB and growing. Write the classpath to a JVM
+		// argfile and pass `@argfile` instead of an inline `-cp <huge>`. The
+		// launcher expands the argfile internally so the OS-level command line
+		// stays short. Both phases share the same argfile.
+		//
+		// Argfile parsing treats backslashes as escape characters even inside
+		// double-quoted strings (per the Java launcher docs), so every `\` in
+		// a Windows path must be doubled to survive the round trip.
+		java.nio.file.Files.createDirectories(outDir);
+		java.nio.file.Path cpArgfile = outDir.resolve(".cp-argfile.txt");
+		String escapedCp = classpath.replace("\\", "\\\\").replace("\"", "\\\"");
+		java.nio.file.Files.writeString(cpArgfile, "-cp \"" + escapedCp + "\"\n");
+
 		// Phase 1: forward all non-orchestrator args plus the resolved dump-dir + output-dir.
 		String[] forwardedToPhase1 = stripOrchestratorFlags(args);
 		List<String> phase1Cmd = new ArrayList<>();
 		phase1Cmd.add(orch.javaBin);
 		phase1Cmd.add("-Xmx" + orch.phase1Heap);
-		phase1Cmd.add("-cp");
-		phase1Cmd.add(classpath);
+		phase1Cmd.add("@" + cpArgfile.toAbsolutePath());
 		phase1Cmd.add("org.matsim.contrib.demand_extraction.run.RunDemandExtractionPhase1");
 		phase1Cmd.addAll(Arrays.asList(forwardedToPhase1));
 		if (orch.phase1DumpDirOverride == null) {
@@ -214,7 +227,7 @@ public final class RunDemandExtractionTwoPhase {
 		List<String> phase2Cmd = List.of(
 				orch.javaBin,
 				"-Xmx" + orch.phase2Heap,
-				"-cp", classpath,
+				"@" + cpArgfile.toAbsolutePath(),
 				"org.matsim.contrib.demand_extraction.run.RunDemandExtractionPhase2",
 				"--phase1-dir", dumpDir.toString(),
 				"--network", networkPath,
