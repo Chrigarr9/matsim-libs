@@ -131,11 +131,14 @@ ExmasCommuters (Python)      → MIP optimization + SimWrapper export
 simwrapper (Vue.js)          → Interactive visualization
 ```
 
-### Outstanding Integration TODOs
-- `max_cost` per ride in rides CSV
-- Shapley values export
-- Predecessor/successor relationships
-- Network export for empty vehicle distances
+### Java → Python Integration Status
+- `max_cost` per ride — DONE (`maxCosts`, `maxCostsPerKm` columns)
+- Shapley values — DONE (`shapleyValues` column)
+- Successor edges — DONE (`successors` column; top-K capped per ride, see `RidePostProcessor.computePredecessors`)
+- `predecessors` column — DONE but **redundant** (reverse map of `successors`; Python `preprocessor.py:410` drops it on every load). Candidate for removal from Java emit; the post-MIP path cover recomputes successors dynamically over the MIP-selected ride set regardless.
+- Network export for empty vehicle distances — DONE (`connection_cache.csv`; populated as a side-effect of the successor enumeration pass)
+
+The path cover's edge-feasibility ladder requires the cache to cover handoff pairs `(last-destination of i, first-origin of j)` within the configured `predecessorsFilterTime` window (default 1800 s). The `connectionCacheExportMode` option chooses what to emit: `"all"` writes everything BAMAS routed (default, broadest); `"successors_only"` writes only the top-K-capped successor rows. A "handoffs" mode (write rows whose endpoints match any kept ride's last-destination × first-origin — the lookup domain of Python's `compute_dynamic_successors`) is implemented offline in `scripts/post_topk_prune.py --cache-mode handoffs`.
 
 ## Low-memory two-phase mode
 
