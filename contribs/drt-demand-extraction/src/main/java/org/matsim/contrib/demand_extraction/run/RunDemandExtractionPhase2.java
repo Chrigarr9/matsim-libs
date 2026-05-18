@@ -75,6 +75,29 @@ public final class RunDemandExtractionPhase2 {
 				Path.of(travelTimesTsv), Path.of(outputDir));
 	}
 
+	/** Publish the Phase-1 request dump under the canonical
+	 *  {@code <demandDir>/<runId>.drt_requests.csv} name expected by downstream
+	 *  Python tooling. Uses a hard link when the FS supports it (NTFS does
+	 *  within a single volume), falling back to a byte copy. Idempotent —
+	 *  overwrites an existing canonical file. */
+	public static java.nio.file.Path publishCanonicalRequestsCsv(
+			java.nio.file.Path phase1Dir, java.nio.file.Path demandDir, String runId) throws IOException {
+		java.nio.file.Path src = phase1Dir.resolve(
+				org.matsim.contrib.demand_extraction.io.lowmem.PhaseOneDumpLayout.REQUESTS_CSV);
+		java.nio.file.Path dst = demandDir.resolve(runId + ".drt_requests.csv");
+		if (!java.nio.file.Files.exists(src)) {
+			throw new IOException("Phase-1 requests CSV missing at " + src
+					+ "; Phase 1 did not complete normally");
+		}
+		java.nio.file.Files.deleteIfExists(dst);
+		try {
+			java.nio.file.Files.createLink(dst, src);
+		} catch (UnsupportedOperationException | java.nio.file.FileSystemException ex) {
+			java.nio.file.Files.copy(src, dst);
+		}
+		return dst;
+	}
+
 	public static void main(String[] args) throws IOException {
 		long overallStartMs = System.currentTimeMillis();
 		Phase2Args a;
@@ -137,6 +160,10 @@ public final class RunDemandExtractionPhase2 {
 		Path ridesCsv = demandDir.resolve(runId + ".exmas_rides.csv");
 		ExMasCsvWriter.writeRides(ridesCsv.toString(), rides);
 		log.info("PHASE 2 STEP 5: wrote {} rides to {}", rides.size(), ridesCsv);
+
+		java.nio.file.Path publishedRequests = publishCanonicalRequestsCsv(
+				a.phase1Dir, demandDir, runId);
+		log.info("PHASE 2 STEP 5: published canonical requests CSV to {}", publishedRequests);
 
 		ExMasConfigGroup exMas = injector.getInstance(ExMasConfigGroup.class);
 		if (exMas.isCalcPredecessors()) {
