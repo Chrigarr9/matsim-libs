@@ -99,6 +99,35 @@ public final class RunDemandExtractionTwoPhase {
 		return Path.of(javaHome, "bin", exe).toString();
 	}
 
+	/** Build the runtime classpath for a child JVM. Under {@code mvn exec:java}
+	 *  the system property {@code java.class.path} only contains the Maven boot
+	 *  classworlds jar — the project classpath is loaded through Plexus's
+	 *  {@code ClassRealm} (a {@link java.net.URLClassLoader}). Walk the
+	 *  classloader chain and union any URL-classloader URLs into a
+	 *  pathseparator-joined string. Falls back to the system property when no
+	 *  URL classloader is found (e.g. when this class is invoked directly via
+	 *  {@code java -cp ...}, which is how the orchestrator forks its own
+	 *  children). */
+	static String resolveRuntimeClasspath() {
+		java.util.LinkedHashSet<String> entries = new java.util.LinkedHashSet<>();
+		for (ClassLoader cl = RunDemandExtractionTwoPhase.class.getClassLoader();
+				cl != null; cl = cl.getParent()) {
+			if (cl instanceof java.net.URLClassLoader ucl) {
+				for (java.net.URL u : ucl.getURLs()) {
+					try {
+						entries.add(java.nio.file.Path.of(u.toURI()).toString());
+					} catch (java.net.URISyntaxException | IllegalArgumentException ex) {
+						entries.add(u.getPath());
+					}
+				}
+			}
+		}
+		if (!entries.isEmpty()) {
+			return String.join(java.io.File.pathSeparator, entries);
+		}
+		return System.getProperty("java.class.path");
+	}
+
 	/** Default Phase-2 {@code --network} path: {@code <scenarioDir>/<prefix>network.xml.gz}.
 	 *  Mirrors how the eqasim cut config wires the network internally. */
 	static String defaultNetworkPath(RunLyonEqasimDemandExtraction.ParsedArgs p) {
@@ -142,7 +171,10 @@ public final class RunDemandExtractionTwoPhase {
 		log.info("  java bin:      {}", orch.javaBin);
 		log.info("======================================================================");
 
-		String classpath = System.getProperty("java.class.path");
+		String classpath = resolveRuntimeClasspath();
+		log.info("  Resolved classpath: {} entries (length={} chars)",
+				classpath.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator)).length,
+				classpath.length());
 
 		// Phase 1: forward all non-orchestrator args plus the resolved dump-dir + output-dir.
 		String[] forwardedToPhase1 = stripOrchestratorFlags(args);
