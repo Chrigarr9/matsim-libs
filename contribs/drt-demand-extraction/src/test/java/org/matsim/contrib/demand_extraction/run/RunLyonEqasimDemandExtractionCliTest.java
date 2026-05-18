@@ -53,4 +53,27 @@ class RunLyonEqasimDemandExtractionCliTest {
         assertEquals(25.0, args.tripFilterRadiusKm);
         assertEquals("none", args.exclusionZone);
     }
+
+	@org.junit.jupiter.api.Test
+	void detectsLowMemoryFlagAndStripsIt() {
+		String[] args = {"--sample", "1", "--low-memory", "--scenario-dir", "/tmp/scn",
+				"--travel-times", "/tmp/tt"};
+		org.junit.jupiter.api.Assertions.assertTrue(
+				RunLyonEqasimDemandExtraction.hasLowMemoryFlag(args));
+		String[] stripped = RunLyonEqasimDemandExtraction.stripLowMemoryFlag(args);
+		java.util.List<String> kept = java.util.List.of(stripped);
+		org.junit.jupiter.api.Assertions.assertFalse(kept.contains("--low-memory"));
+		// Surrounding args still present, in original order.
+		org.junit.jupiter.api.Assertions.assertEquals(
+				java.util.List.of("--sample", "1", "--scenario-dir", "/tmp/scn",
+						"--travel-times", "/tmp/tt"),
+				kept);
+	}
+
+	@org.junit.jupiter.api.Test
+	void hasLowMemoryFlagReturnsFalseWhenAbsent() {
+		org.junit.jupiter.api.Assertions.assertFalse(
+				RunLyonEqasimDemandExtraction.hasLowMemoryFlag(
+						new String[] {"--sample", "1", "--scenario-dir", "/x"}));
+	}
 }

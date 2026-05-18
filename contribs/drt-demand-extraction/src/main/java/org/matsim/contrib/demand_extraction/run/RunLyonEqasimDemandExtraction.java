@@ -230,13 +230,41 @@ public class RunLyonEqasimDemandExtraction {
 		}
 	}
 
+	/** Returns true iff {@code args} contains the orchestrator-trigger flag. */
+	static boolean hasLowMemoryFlag(String[] args) {
+		for (String a : args) {
+			if ("--low-memory".equals(a)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Returns a copy of {@code args} with every {@code --low-memory} occurrence removed
+	 *  (boolean flag — no associated value to skip). */
+	static String[] stripLowMemoryFlag(String[] args) {
+		java.util.List<String> kept = new java.util.ArrayList<>(args.length);
+		for (String a : args) {
+			if (!"--low-memory".equals(a)) {
+				kept.add(a);
+			}
+		}
+		return kept.toArray(new String[0]);
+	}
+
 	public static void main(String[] args) throws Exception {
+		if (hasLowMemoryFlag(args)) {
+			log.info("--low-memory present — delegating to RunDemandExtractionTwoPhase orchestrator");
+			RunDemandExtractionTwoPhase.main(stripLowMemoryFlag(args));
+			return;
+		}
 		CliArgs cli = CliArgs.parse(args);
 		ParsedArgs p = parseArgs(args);
 
 		if (p.sample < 0 || p.scenarioDir == null || p.travelTimesPath == null) {
 			System.err.println("Usage: --sample <N> --scenario-dir <path> [--prefix <s>] "
 					+ "--travel-times <path> [--output-dir <path>] "
+					+ "[--low-memory] "
 					+ "[--algorithm bamas|exmas] "
 					+ "[--gate-scale <f> | --gate-intercept <a> --gate-slope <b>] [--coverage-k <int>] "
 					+ "[--search-horizon <s>] [--max-detour-factor <f>] "
