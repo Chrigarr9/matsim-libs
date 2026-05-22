@@ -373,6 +373,27 @@ public class ExMasKelheimHyperPoolE2ETest {
 							Assertions.assertTrue(walk <= 500.0, "Walk distance should be <= maxWalkDistance (500m)");
 						}
 					}
+
+					// B4 per-pax total walk invariant:
+					// accessWalk[i] + egressWalk[i] <= 2 * maxWalkDistanceMeters
+					// Stage 1 (stop-based) caps each side; Stage 2 (hyper-pool) inherits those walks.
+					// This assertion documents the end-to-end budget contract.
+					double maxTotalWalk = 2.0 * exMasConfig.getMaxWalkDistanceMeters(); // 2 * 500 = 1000 m
+					int paxCount = Math.min(accessWalks.length, egressWalks.length);
+					for (int paxIdx = 0; paxIdx < paxCount; paxIdx++) {
+						String aStr = accessWalks[paxIdx].trim();
+						String eStr = egressWalks[paxIdx].trim();
+						if (!aStr.isEmpty() && !eStr.isEmpty()) {
+							double accessWalk = Double.parseDouble(aStr);
+							double egressWalk = Double.parseDouble(eStr);
+							double totalWalk = accessWalk + egressWalk;
+							Assertions.assertTrue(totalWalk <= maxTotalWalk + 1e-9,
+								String.format(
+									"Per-pax total walk (%.2f m) should be <= 2*maxWalkDistance (%.2f m)" +
+									" for variant=%s, pax[%d]",
+									totalWalk, maxTotalWalk, variant, paxIdx));
+						}
+					}
 				}
 
 				// Store ride for comparison
