@@ -154,6 +154,32 @@ public class BudgetToConstraintsCalculator {
 	}
 
 	/**
+	 * Find max walk distance for a pooled-ride context.
+	 * Holds the pooled ride's actual travel time / distance / delay fixed,
+	 * binary-searches over symmetric walk distances (access = egress = mid).
+	 * 2·mid would be the total walk budget; callers split as needed.
+	 */
+	public double budgetToMaxWalkDistance(double remainingBudget, Person person, DrtRequest request,
+			double actualTT, double actualDist, double delay) {
+		if (remainingBudget <= 0) {
+			return exMasConfig.getMinDrtAccessEgressDistance();
+		}
+		double lo = 0;
+		double hi = MAX_WALK_UPPER_BOUND_METERS;
+		while (hi - lo > BINARY_SEARCH_TOLERANCE_METERS) {
+			double mid = (lo + hi) / 2.0;
+			double score = scoreDrtTripWithWalks(request, actualTT, actualDist, mid, mid, delay);
+			if (score >= request.bestModeScore) { lo = mid; } else { hi = mid; }
+		}
+		return Math.max(lo, exMasConfig.getMinDrtAccessEgressDistance());
+	}
+
+	/** Accessor for test assertions. */
+	public double getMinDrtAccessEgressDistance() {
+		return exMasConfig.getMinDrtAccessEgressDistance();
+	}
+
+	/**
 	 * Compute maximum acceptable fare from remaining budget.
 	 * This is the only constraint that still needs {@code margUtilMoney} explicitly.
 	 */

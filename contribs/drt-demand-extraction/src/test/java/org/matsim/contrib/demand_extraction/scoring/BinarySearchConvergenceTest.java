@@ -279,6 +279,65 @@ class BinarySearchConvergenceTest {
 				"Zero budget should return zero max waiting time");
 	}
 
+	/**
+	 * Build a request with a scoring context using the given direct travel time/distance.
+	 * Budget is set to 2.0 utils so that both the ideal and pooled walk caps are well below
+	 * MAX_WALK_UPPER_BOUND_METERS (5000 m) — i.e. the binary search terminates meaningfully.
+	 */
+	private DrtRequest buildRequest(double directTT, double directDist) {
+		double idealScore = -2.5; // DRT leg score at 600s/5km with no walk, no wait (see testBudgetToMaxWalkDistance)
+		double budget = 2.0;
+		double bestModeScore = idealScore - budget; // = -4.5
+		return buildRequestWithContext(DrtRequest.builder()
+				.index(0)
+				.personId(Id.createPersonId("test"))
+				.groupId("g1")
+				.tripIndex(0)
+				.budget(budget)
+				.bestModeScore(bestModeScore)
+				.bestMode(TransportMode.car)
+				.originLinkId(Id.createLinkId("link1"))
+				.destinationLinkId(Id.createLinkId("link2"))
+				.originX(0.0).originY(0.0)
+				.destinationX(directDist).destinationY(0.0)
+				.requestTime(28800.0)
+				.earliestDeparture(28500.0)
+				.latestArrival(30600.0)
+				.directTravelTime(directTT)
+				.directDistance(directDist)
+				.maxDetourFactor(3.0));
+	}
+
+	@Test
+	void pooledRideWalkOverload_tightensWhenDetourPresent() {
+		DrtRequest request = buildRequest(/* directTT */ 600, /* directDist */ 5000);
+
+		double budget = 2.0;
+
+		double idealCap = calculator.budgetToMaxWalkDistance(budget, testPerson, request);
+		double pooledCap = calculator.budgetToMaxWalkDistance(
+				budget, testPerson, request,
+				/* actualTT */ 900,     // 300 s detour
+				/* actualDist */ 6500,
+				/* delay */ 60);        // 60 s wait
+
+		assertTrue(pooledCap < idealCap,
+				"Pooled cap should be tighter than ideal cap. pooled=" + pooledCap + ", ideal=" + idealCap);
+		assertTrue(pooledCap >= calculator.getMinDrtAccessEgressDistance(),
+				"Pooled cap should be >= floor. pooled=" + pooledCap + ", floor=" + calculator.getMinDrtAccessEgressDistance());
+	}
+
+	@Test
+	void pooledRideWalkOverload_returnsFloorWhenBudgetNonPositive() {
+		DrtRequest request = buildRequest(600, 5000);
+
+		double cap = calculator.budgetToMaxWalkDistance(
+				/* remainingBudget */ -10.0, testPerson, request, 900, 6500, 60);
+
+		assertEquals(calculator.getMinDrtAccessEgressDistance(), cap,
+				"Non-positive budget should return floor (minDrtAccessEgressDistance)");
+	}
+
 	@Test
 	void testNegativeBudgetReturnsZero() {
 		DrtRequest request = buildRequestWithContext(DrtRequest.builder()
