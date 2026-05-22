@@ -154,7 +154,8 @@ public final class ExMasReferenceEngine {
 		log.info("PHASE 2: Pair Ride Generation");
 		log.info("======================================================================");
 		int algorithmProcessCount = exMasConfig.getAlgorithmProcessCount();
-		PairGenerator pairGen = new PairGenerator(network, budgetValidator, horizon, algorithmProcessCount);
+		PairGenerator pairGen = new PairGenerator(network, budgetValidator, horizon, algorithmProcessCount,
+				exMasConfig.isEnableBudgetAwareConstraints());
         List<Ride> pairRides = pairGen.generatePairs(reqArray);
 		allRides.addAll(pairRides);
 

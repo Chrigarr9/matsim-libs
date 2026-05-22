@@ -35,14 +35,20 @@ public final class PairGenerator {
 	private final BudgetValidator budgetValidator;
 	private final double horizon;
 	private final boolean useParallel;
+	private final boolean budgetAwareConstraints;
 	private static final double EPSILON = 1e-9;
 	private final AtomicLong beelineRejected = new AtomicLong();
 
 	public PairGenerator(MatsimNetworkCache network, BudgetValidator budgetValidator, double horizon, int algorithmProcessCount) {
+		this(network, budgetValidator, horizon, algorithmProcessCount, false);
+	}
+
+	public PairGenerator(MatsimNetworkCache network, BudgetValidator budgetValidator, double horizon, int algorithmProcessCount, boolean budgetAwareConstraints) {
 		this.network = network;
 		this.budgetValidator = budgetValidator;
 		this.horizon = horizon;
 		this.useParallel = algorithmProcessCount != 1;
+		this.budgetAwareConstraints = budgetAwareConstraints;
 	}
 
 	/**
@@ -308,6 +314,10 @@ public final class PairGenerator {
 		double[] adjusted = optimizeDelays(delays, effMaxNeg, effMaxPos);
 		if (adjusted == null) return null;
 
+		// Budget-aware wait filter: reject if reqJ's optimised delay exceeds its budget-derived cap.
+		// Guard on flag so that flag-off path is bit-identical to pre-Phase-C behaviour.
+		if (budgetAwareConstraints && adjusted[1] > j.maxWaitTime) return null;
+
 		// FIFO: pickup order [i, j], dropoff order [i, j]
 		return new PairCandidate(
 				i, j, RideKind.FIFO,
@@ -352,6 +362,9 @@ public final class PairGenerator {
 
 		double[] adjusted = optimizeDelays(delays, effMaxNeg, effMaxPos);
 		if (adjusted == null) return null;
+
+		// Budget-aware wait filter: reject if reqJ's optimised delay exceeds its budget-derived cap.
+		if (budgetAwareConstraints && adjusted[1] > j.maxWaitTime) return null;
 
 		// LIFO: pickup order [i, j], dropoff order [j, i]
 		return new PairCandidate(

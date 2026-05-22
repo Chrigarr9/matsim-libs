@@ -122,7 +122,8 @@ public final class BamasEngine {
 		log.info("");
 		log.info("PHASE 2: Pair Ride Generation");
 		log.info("======================================================================");
-		PairGenerator pairGen = new PairGenerator(network, budgetValidator, horizon, algorithmProcessCount);
+		PairGenerator pairGen = new PairGenerator(network, budgetValidator, horizon, algorithmProcessCount,
+				exMasConfig.isEnableBudgetAwareConstraints());
         List<Ride> pairRides = pairGen.generatePairs(reqArray);
 
         if (maxDegree <= 2) {
