@@ -374,6 +374,19 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	 */
 	private boolean hyperPoolEnableDirectionalFilter = false;
 
+	// ===========================================
+	// Budget-Aware Constraints Settings
+	// ===========================================
+
+	/**
+	 * Master switch for budget-derived walk and wait caps.
+	 * Default: false — preserves current pipeline exactly.
+	 * When true: later tasks derive per-passenger walk and wait caps from their
+	 * utility budget, tightening the DRT service envelope to what each person
+	 * can actually afford.
+	 */
+	private boolean enableBudgetAwareConstraints = false;
+
     public ExMasConfigGroup() {
         super(GROUP_NAME);
     }
@@ -1241,6 +1254,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.hyperPoolEnableDirectionalFilter = hyperPoolEnableDirectionalFilter;
 	}
 
+	@StringGetter("enableBudgetAwareConstraints")
+	public boolean isEnableBudgetAwareConstraints() {
+		return enableBudgetAwareConstraints;
+	}
+
+	@StringSetter("enableBudgetAwareConstraints")
+	public void setEnableBudgetAwareConstraints(boolean v) {
+		this.enableBudgetAwareConstraints = v;
+	}
+
     @Override
     public Map<String, String> getComments() {
         Map<String, String> map = super.getComments();
@@ -1400,6 +1423,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Enable stop relocation (merging nearby stops). Default: false (matches original ExMAS/HyperPool). If true: Production optimization that merges nearby stops using weighted centroid to reduce route complexity.");
 		map.put("hyperPoolEnableDirectionalFilter",
 				"Enable directional compatibility filter (rejects rides moving opposite directions). Default: false (matches original ExMAS/HyperPool). If true: Production optimization that filters incompatible ride pairs early.");
+
+		// Budget-Aware Constraints comments
+		map.put("enableBudgetAwareConstraints",
+				"Master switch for budget-derived walk and wait caps. Default: false (preserves current pipeline). "
+				+ "When true: per-passenger walk and wait caps are derived from each person's utility budget, "
+				+ "tightening the DRT service envelope to what they can actually afford.");
 
         return map;
     }
