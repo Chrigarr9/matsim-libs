@@ -191,6 +191,38 @@ public class BudgetToConstraintsCalculator {
 		return Math.max(lo, exMasConfig.getMinDrtAccessEgressDistance());
 	}
 
+	/**
+	 * Find maximum acceptable waiting time for a pooled ride, given the ride's actual
+	 * (travelTime, distance) and access/egress walk distances already committed.
+	 *
+	 * <p>Binary-searches the delay while holding actual TT, distance, and walks fixed.
+	 * The boundary is where
+	 * {@code score(actualTT, actualDist, accessWalk, egressWalk, delay) == request.bestModeScore},
+	 * i.e. where the passenger's remaining budget is fully consumed by the wait.
+	 *
+	 * <p>The {@code remainingBudget} arg is used only for the early-return guard
+	 * at {@code remainingBudget <= 0}; the binary search itself derives the
+	 * boundary from {@code request.bestModeScore} alone.
+	 */
+	public double budgetToMaxWaitingTime(double remainingBudget, Person person, DrtRequest request,
+			double actualTT, double actualDist, double accessWalk, double egressWalk) {
+		if (remainingBudget <= 0) {
+			return 0.0;
+		}
+		double lo = 0;
+		double hi = MAX_WAIT_UPPER_BOUND_SECONDS;
+		while (hi - lo > BINARY_SEARCH_TOLERANCE_SECONDS) {
+			double mid = (lo + hi) / 2.0;
+			double score = scoreDrtTripWithWalks(request, actualTT, actualDist, accessWalk, egressWalk, mid);
+			if (score >= request.bestModeScore) {
+				lo = mid;
+			} else {
+				hi = mid;
+			}
+		}
+		return lo;
+	}
+
 	/** Returns the minimum DRT access/egress walk distance floor (metres) from {@link ExMasConfigGroup}. */
 	public double getMinDrtAccessEgressDistance() {
 		return exMasConfig.getMinDrtAccessEgressDistance();

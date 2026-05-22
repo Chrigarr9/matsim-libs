@@ -339,6 +339,37 @@ class BinarySearchConvergenceTest {
 	}
 
 	@Test
+	void pooledRideWaitOverload_tightensWhenWalksPresent() {
+		DrtRequest request = buildRequest(/* directTT */ 600, /* directDist */ 5000);
+
+		double budget = 2.0;
+
+		double idealCap = calculator.budgetToMaxWaitingTime(budget, testPerson, request);
+		double pooledCap = calculator.budgetToMaxWaitingTime(
+				budget, testPerson, request,
+				/* actualTT */ 900,        // 300 s detour
+				/* actualDist */ 6500,
+				/* accessWalk */ 200.0,
+				/* egressWalk */ 150.0);
+
+		assertTrue(pooledCap < idealCap,
+				"Pooled wait cap should be tighter than ideal cap. pooled=" + pooledCap + ", ideal=" + idealCap);
+		assertTrue(pooledCap >= 0.0,
+				"Pooled wait cap should be >= 0. pooled=" + pooledCap);
+	}
+
+	@Test
+	void pooledRideWaitOverload_returnsZeroWhenBudgetNonPositive() {
+		DrtRequest request = buildRequest(600, 5000);
+
+		double cap = calculator.budgetToMaxWaitingTime(
+				/* remainingBudget */ -10.0, testPerson, request, 900, 6500, 200.0, 150.0);
+
+		assertEquals(0.0, cap,
+				"Non-positive budget should return 0.0 (no wait allowed)");
+	}
+
+	@Test
 	void testNegativeBudgetReturnsZero() {
 		DrtRequest request = buildRequestWithContext(DrtRequest.builder()
 				.index(0)
