@@ -181,6 +181,99 @@ public class ExMasKelheimHyperPoolE2ETest {
 	}
 
 	/**
+	 * B4 (Phase B, budget-aware path):
+	 * End-to-end integration test for ExMAS demand extraction with HyperPool
+	 * AND {@code enableBudgetAwareConstraints=true}.
+	 *
+	 * <p>This exercises the Phase B code paths that are dead in the flag-off variant:
+	 * <ul>
+	 *   <li>{@code HyperPoolGenerator.computePerWrapperMaxReloc} — computes per-pax relocation budget caps</li>
+	 *   <li>cap-array forwarding through {@code generateStopSequence} to {@code findMergedStop}</li>
+	 *   <li>budget-aware relocator enforcement: stops that would violate the per-pax walk cap are rejected</li>
+	 * </ul>
+	 *
+	 * <p>The per-pax total walk assertion
+	 * ({@code accessWalk[i] + egressWalk[i] ≤ 2 * maxWalkDistanceMeters}) is non-trivial
+	 * here because the budget-aware code actively constrains merges; in the flag-off variant
+	 * it is auto-satisfied by the independent per-side Stage 1 caps.
+	 */
+	@Test
+	void testDemandExtractionWithKelheimScenarioAndHyperPoolBudgetAware() throws IOException {
+		// Use separate output directory so both tests can run independently
+		Path testOutputDir = Path.of("test/output/exmas-kelheim-hyperpool-budget-aware-e2e-test");
+		Files.createDirectories(testOutputDir);
+
+		// 1. Load Kelheim config
+		URL scenarioUrl = ExamplesUtils.getTestScenarioURL("kelheim");
+		Config config = ConfigUtils.loadConfig(
+				new URL(scenarioUrl, "config.xml").toString(),
+				new ExMasConfigGroup());
+
+		// 2. Override output directory and run settings
+		config.controller().setOutputDirectory(testOutputDir.toString());
+		config.controller()
+				.setOverwriteFileSetting(OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
+		config.controller().setLastIteration(0);
+
+		// 3. Configure scoring
+		configureScoring(config);
+
+		// 4. Configure ExMas with HyperPool AND budget-aware constraints ON
+		configureExMasWithHyperPool(config);
+		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
+		// Enable budget-aware constraints — activates Phase B code paths:
+		// computePerWrapperMaxReloc + cap-array forwarding + relocator enforcement
+		exMasConfig.setEnableBudgetAwareConstraints(true);
+		// Enable stop relocation so the per-pax cap enforcement in findMergedStop is exercised.
+		// The base configureExMasWithHyperPool sets this to false (research mode); flip it here
+		// so that cluster stop-merging actually happens and the budget caps are enforced.
+		exMasConfig.setHyperPoolEnableStopRelocation(true);
+
+		// 5. Validate and prepare configurations
+		DemandExtractionConfigValidator.prepareConfigForDemandExtraction(config);
+
+		// 6. Create scenario
+		Scenario scenario = DrtControlerCreator.createScenarioWithDrtRouteFactory(config);
+		ScenarioUtils.loadScenario(scenario);
+
+		// Filter freight agents
+		scenario.getPopulation().getPersons().values()
+				.removeIf(person -> person.getSelectedPlan().getPlanElements().stream()
+						.filter(org.matsim.api.core.v01.population.Activity.class::isInstance)
+						.map(org.matsim.api.core.v01.population.Activity.class::cast)
+						.anyMatch(act -> act.getType().startsWith("freight")));
+
+		// Duplicate population for spatial overlap
+		int originalPopSize = scenario.getPopulation().getPersons().size();
+		duplicatePopulation(scenario.getPopulation(), 2);
+		System.out.println("Population duplicated: " + originalPopSize + " → " +
+				scenario.getPopulation().getPersons().size() + " persons");
+
+		// 7. Run simulation
+		Controler controler = DrtControlerCreator.createControler(config, scenario, false);
+		controler.addOverridingModule(new DemandExtractionModule());
+		controler.run();
+
+		// 8. Verify output files exist
+		String runId = config.controller().getRunId();
+		Path drtDemandDir = testOutputDir.resolve("drt_demand");
+		Path requestsFile = drtDemandDir.resolve(runId + ".drt_requests.csv");
+		Path ridesFile = drtDemandDir.resolve(runId + ".exmas_rides.csv");
+		Assertions.assertTrue(Files.exists(requestsFile), "DRT requests file should exist: " + requestsFile);
+		Assertions.assertTrue(Files.exists(ridesFile), "ExMAS rides file should exist: " + ridesFile);
+
+		// 9. Validate — per-pax walk assertion is non-trivial here because
+		// budget-aware enforcement is active (Phase B code paths exercised)
+		validateRequests(requestsFile);
+		validateRidesWithHyperPool(ridesFile, exMasConfig);
+
+		System.out.println("\n=== Kelheim HyperPool Budget-Aware Test Output Location ===");
+		System.out.println("Requests: " + requestsFile.toAbsolutePath());
+		System.out.println("Rides:    " + ridesFile.toAbsolutePath());
+		System.out.println("==========================================================\n");
+	}
+
+	/**
 	 * Configure ExMas WITH HYPERPOOL ENABLED.
 	 * This is the key difference from the standard Kelheim test.
 	 */
