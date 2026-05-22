@@ -99,6 +99,7 @@ public final class RunDemandExtractionPhase2 {
 	}
 
 	public static void main(String[] args) throws IOException {
+		LoggingSetup.configure();
 		long overallStartMs = System.currentTimeMillis();
 		Phase2Args a;
 		try {

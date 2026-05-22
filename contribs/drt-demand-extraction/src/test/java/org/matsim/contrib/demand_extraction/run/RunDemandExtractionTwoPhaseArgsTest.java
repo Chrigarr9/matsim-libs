@@ -42,6 +42,7 @@ class RunDemandExtractionTwoPhaseArgsTest {
 				"--travel-times", "/tmp/tt.tsv",
 				"--output-dir", "/tmp/out",
 				"--algorithm", "bamas",
+				"--deterministic-routing",
 				"--phase1-heap", "24g",
 				"--phase2-heap", "8g",
 				"--phase1-dump-dir", "/tmp/dump"
@@ -62,6 +63,7 @@ class RunDemandExtractionTwoPhaseArgsTest {
 		assertTrue(kept.contains("--prefix"));
 		assertTrue(kept.contains("--algorithm"));
 		assertTrue(kept.contains("bamas"));
+		assertTrue(kept.contains("--deterministic-routing"));
 	}
 
 	@Test

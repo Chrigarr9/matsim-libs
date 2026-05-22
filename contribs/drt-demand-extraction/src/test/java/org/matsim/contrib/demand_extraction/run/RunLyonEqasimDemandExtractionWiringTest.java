@@ -77,6 +77,21 @@ class RunLyonEqasimDemandExtractionWiringTest {
     }
 
     @Test
+    void parsesDeterministicRoutingFlag() {
+        RunLyonEqasimDemandExtraction.ParsedArgs args = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--algorithm", "bamas",
+                "--sample", "10",
+                "--scenario-dir", "/tmp/x",
+                "--prefix", "lyon_drt_area_",
+                "--travel-times", "/tmp/y",
+                "--output-dir", "/tmp/z",
+                "--deterministic-routing"
+        });
+
+        assertTrue(args.deterministicRouting);
+    }
+
+    @Test
     void buildsFilterConfigFromFocusRegistry() {
         java.nio.file.Path registry = java.nio.file.Path.of(
                 "../../../matsim_scenarios/eqasim-france/scenario-selection/data/foci.json");

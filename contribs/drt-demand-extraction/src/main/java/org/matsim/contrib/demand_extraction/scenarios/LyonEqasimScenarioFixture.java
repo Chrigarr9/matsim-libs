@@ -204,18 +204,36 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 
 		// IDFModeChoiceModule.provideModeChoiceParameters loads
 		// IDFModeParameters.buildDefault() first, then overlays this YAML —
-		// only drt.* need to be defined in the file.
-		URL drtParamsUrl = LyonEqasimScenarioFixture.class.getClassLoader()
-				.getResource("eqasim-drt-mode-parameters-idf.yml");
-		if (drtParamsUrl == null) {
-			throw new IllegalStateException(
-					"eqasim-drt-mode-parameters-idf.yml not found on classpath");
-		}
-		eqasim.setModeParametersPath(drtParamsUrl.getPath());
-		log.info("DRT mode parameters (PT-equivalent): {}", drtParamsUrl);
+		// only drt.* need to be defined in the file. Eqasim opens the path with
+		// FileInputStream, so when the resource lives inside a JAR we materialise
+		// it to a temp file first (URL.getPath() on a jar: URL is not a real path).
+		eqasim.setModeParametersPath(resolveClasspathResourceToFile(
+				"eqasim-drt-mode-parameters-idf.yml"));
 
 		// eqasim betaTravelTime already includes opportunity cost
 		config.scoring().setPerforming_utils_hr(0.0);
+	}
+
+	private static String resolveClasspathResourceToFile(String resourceName) {
+		URL url = LyonEqasimScenarioFixture.class.getClassLoader().getResource(resourceName);
+		if (url == null) {
+			throw new IllegalStateException(resourceName + " not found on classpath");
+		}
+		if ("file".equals(url.getProtocol())) {
+			log.info("Eqasim resource (filesystem): {}", url);
+			return url.getPath();
+		}
+		try {
+			Path tmp = Files.createTempFile("eqasim-", "-" + resourceName);
+			tmp.toFile().deleteOnExit();
+			try (var in = url.openStream()) {
+				Files.copy(in, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+			}
+			log.info("Eqasim resource (extracted from {} to {})", url, tmp);
+			return tmp.toString();
+		} catch (IOException e) {
+			throw new IllegalStateException("Could not extract classpath resource: " + resourceName, e);
+		}
 	}
 
 	public void applyExMasDefaults(Config config) {

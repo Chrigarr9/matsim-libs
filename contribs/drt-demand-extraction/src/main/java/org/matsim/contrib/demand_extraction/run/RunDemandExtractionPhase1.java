@@ -70,6 +70,7 @@ public final class RunDemandExtractionPhase1 {
 	}
 
 	public static void main(String[] args) throws Exception {
+		LoggingSetup.configure();
 		RunLyonEqasimDemandExtraction.CliArgs cli = RunLyonEqasimDemandExtraction.CliArgs.parse(args);
 		RunLyonEqasimDemandExtraction.ParsedArgs p = RunLyonEqasimDemandExtraction.parseArgs(args);
 		String phase1DumpDir = parsePhase1DumpDir(args);

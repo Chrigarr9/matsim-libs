@@ -147,6 +147,7 @@ public final class BamasRideExtender {
 		ConcurrentHashMap<Long, Ride> resultBySetHash = new ConcurrentHashMap<>();
 		AtomicInteger setsProcessed = new AtomicInteger();
 		AtomicInteger resultsFound = new AtomicInteger();
+		AtomicInteger totalEnqueued = new AtomicInteger(0);
 		AtomicLong lastProgressLogTime = new AtomicLong(System.currentTimeMillis());
 		ConcurrentHashMap<Long, EnumerationStats> threadStatsMap = new ConcurrentHashMap<>();
 
@@ -178,14 +179,18 @@ public final class BamasRideExtender {
 						resultsFound.incrementAndGet();
 					}
 
-					// Progress log every 30 seconds (total unknown upfront — producer/consumer)
+					// Progress log every 30 seconds
 					long now = System.currentTimeMillis();
 					long prev = lastProgressLogTime.get();
 					if (now - prev >= 30_000 && lastProgressLogTime.compareAndSet(prev, now)) {
 						double elapsed = (now - phaseStartTime) / 1000.0;
 						double rate = done / Math.max(0.001, elapsed);
-						log.info("  Progress: {} sets processed ({} results), {} sets/s",
-								done, resultsFound.get(), String.format("%.0f", rate));
+						int total = totalEnqueued.get();
+						String etaStr = (total > done)
+								? formatExtensionDuration((total - done) / Math.max(0.001, rate))
+								: "—";
+						log.info("  Progress: {}/{} sets ({} results), {} sets/s, ETA {}",
+								done, total, resultsFound.get(), String.format("%.0f", rate), etaStr);
 					}
 				}
 			});
@@ -225,6 +230,7 @@ public final class BamasRideExtender {
 					if (!claimedHashes.add(newSetHash)) {
 						continue; // duplicate child set — a lex-smaller parent already claimed it
 					}
+					totalEnqueued.incrementAndGet();
 					queue.put(new ExtensionTask(parentRide, newSet, newSetHash));
 				}
 			}
@@ -718,6 +724,15 @@ public final class BamasRideExtender {
 		if (seconds < 60) return String.format("%.0fs", seconds);
 		if (seconds < 3600) return String.format("%.1fmin", seconds / 60.0);
 		return String.format("%.1fh", seconds / 3600.0);
+	}
+
+	private static String formatExtensionDuration(double seconds) {
+		if (!Double.isFinite(seconds) || seconds <= 0) return "0s";
+		long t = (long) Math.ceil(seconds);
+		long h = t / 3600, m = (t % 3600) / 60, s = t % 60;
+		if (h > 0) return String.format("%dh%02dm%02ds", h, m, s);
+		if (m > 0) return String.format("%dm%02ds", m, s);
+		return String.format("%ds", s);
 	}
 
 	private static int[] buildSortedRequestSet(int[] existing, int newReq) {

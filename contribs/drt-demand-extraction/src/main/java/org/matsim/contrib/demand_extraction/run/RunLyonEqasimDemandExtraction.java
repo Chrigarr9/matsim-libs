@@ -253,6 +253,7 @@ public class RunLyonEqasimDemandExtraction {
 	}
 
 	public static void main(String[] args) throws Exception {
+		LoggingSetup.configure();
 		if (hasLowMemoryFlag(args)) {
 			log.info("--low-memory present — delegating to RunDemandExtractionTwoPhase orchestrator");
 			RunDemandExtractionTwoPhase.main(stripLowMemoryFlag(args));
