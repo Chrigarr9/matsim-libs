@@ -452,7 +452,13 @@ public final class StopBasedRideGenerator {
 			passengerDistances[i] = accessWalkDistances[i] + inVehicleDistance + egressWalkDistances[i];
 			passengerNetworkUtilities[i] = inVehicleUtility;
 
-			delays[i] = passengerTravelTimes[i] - requests[i].getTravelTime();
+			// A8 — correct delay convention for the preplanned-service model.
+			// Under preplanned DRT the vehicle arrives exactly when the passenger
+			// finishes walking to the stop, so pickup-wait = access walk time only.
+			// The legacy path (convertToStopBasedLegacy) still uses the old
+			// totalTime-directTime formula for backward compat.
+			delays[i] = accessTime;
+
 			detours[i] = requests[i].getTravelTime() > 0
 					? passengerTravelTimes[i] / requests[i].getTravelTime()
 					: 1.0;
