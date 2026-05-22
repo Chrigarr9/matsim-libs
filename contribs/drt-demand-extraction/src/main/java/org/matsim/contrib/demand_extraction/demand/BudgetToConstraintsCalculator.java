@@ -154,10 +154,23 @@ public class BudgetToConstraintsCalculator {
 	}
 
 	/**
-	 * Find max walk distance for a pooled-ride context.
-	 * Holds the pooled ride's actual travel time / distance / delay fixed,
-	 * binary-searches over symmetric walk distances (access = egress = mid).
-	 * 2·mid would be the total walk budget; callers split as needed.
+	 * Find max walk distance for a pooled-ride context, given the ride's actual
+	 * (travelTime, distance, delay) and any minimum walks already consumed.
+	 *
+	 * <p>Binary-searches symmetric walk distances (access = egress = mid) while
+	 * holding the pooled-ride scoring params fixed. The boundary is where
+	 * {@code score(actualTT, actualDist, mid, mid, delay) == request.bestModeScore},
+	 * i.e. where the passenger's remaining budget hits zero. The budget consumed
+	 * by pooling (detour + wait) is implicit in the gap between
+	 * {@code score(minimal walks, pooled params)} and {@code bestModeScore} —
+	 * a more aggressive pool leaves a tighter walk envelope.
+	 *
+	 * <p>2·mid is the total walk budget; callers may split between access and
+	 * egress (e.g., asymmetric pickup-then-dropoff stop search).
+	 *
+	 * <p>The {@code remainingBudget} arg is used only for the early-return guard
+	 * at {@code remainingBudget <= 0}; the binary search itself derives the
+	 * boundary from {@code request.bestModeScore} alone.
 	 */
 	public double budgetToMaxWalkDistance(double remainingBudget, Person person, DrtRequest request,
 			double actualTT, double actualDist, double delay) {
@@ -169,12 +182,16 @@ public class BudgetToConstraintsCalculator {
 		while (hi - lo > BINARY_SEARCH_TOLERANCE_METERS) {
 			double mid = (lo + hi) / 2.0;
 			double score = scoreDrtTripWithWalks(request, actualTT, actualDist, mid, mid, delay);
-			if (score >= request.bestModeScore) { lo = mid; } else { hi = mid; }
+			if (score >= request.bestModeScore) {
+				lo = mid;
+			} else {
+				hi = mid;
+			}
 		}
 		return Math.max(lo, exMasConfig.getMinDrtAccessEgressDistance());
 	}
 
-	/** Accessor for test assertions. */
+	/** Returns the minimum DRT access/egress walk distance floor (metres) from {@link ExMasConfigGroup}. */
 	public double getMinDrtAccessEgressDistance() {
 		return exMasConfig.getMinDrtAccessEgressDistance();
 	}
