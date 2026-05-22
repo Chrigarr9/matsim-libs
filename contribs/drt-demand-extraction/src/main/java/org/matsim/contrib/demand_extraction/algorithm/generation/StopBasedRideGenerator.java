@@ -48,6 +48,7 @@ public final class StopBasedRideGenerator {
 	private final WalkingDistanceCalculator walkCalculator;
 	private final BudgetValidator budgetValidator;
 	private final ExMasConfigGroup config;
+	private final WalkBudgetProvider walkBudgetProvider;
 	private final boolean useParallel;
 
 	// Statistics
@@ -68,13 +69,19 @@ public final class StopBasedRideGenerator {
 			WalkingDistanceCalculator walkCalculator,
 			BudgetValidator budgetValidator,
 			ExMasConfigGroup config,
-			int algorithmProcessCount) {
+			int algorithmProcessCount,
+			WalkBudgetProvider walkBudgetProvider) {
 		this.networkCache = networkCache;
 		this.stopFinder = stopFinder;
 		this.walkCalculator = walkCalculator;
 		this.budgetValidator = budgetValidator;
 		this.config = config;
+		this.walkBudgetProvider = walkBudgetProvider;
 		this.useParallel = algorithmProcessCount != 1;
+		if (config.isEnableBudgetAwareConstraints() && walkBudgetProvider == null) {
+			throw new IllegalArgumentException(
+					"WalkBudgetProvider must not be null when enableBudgetAwareConstraints=true");
+		}
 	}
 
 	/**
@@ -153,10 +160,27 @@ public final class StopBasedRideGenerator {
 	/**
 	 * Attempt to convert a single door-to-door ride to stop-based.
 	 *
+	 * <p>Dispatches to {@link #convertToStopBasedBudgetAware} when
+	 * {@code enableBudgetAwareConstraints=true}, otherwise falls back to
+	 * {@link #convertToStopBasedLegacy}.
+	 *
 	 * @param doorToDoor The door-to-door ride to convert
 	 * @return ConversionCandidate if successful, null if conversion failed
 	 */
 	private ConversionCandidate convertToStopBased(Ride doorToDoor) {
+		if (config.isEnableBudgetAwareConstraints()) {
+			return convertToStopBasedBudgetAware(doorToDoor);
+		} else {
+			return convertToStopBasedLegacy(doorToDoor);
+		}
+	}
+
+	/**
+	 * Legacy symmetric stop search. Both Phase A (pickup) and Phase B (dropoff)
+	 * use the same per-passenger walk cap derived from
+	 * {@link #deriveBudgetBasedMaxWalk}.
+	 */
+	private ConversionCandidate convertToStopBasedLegacy(Ride doorToDoor) {
 		totalProcessed.incrementAndGet();
 
 		DrtRequest[] requests = doorToDoor.getRequests();
@@ -289,6 +313,169 @@ public final class StopBasedRideGenerator {
 		}
 
 		// Create conversion candidate (will be assigned index later)
+		return new ConversionCandidate(
+				doorToDoor,
+				pickupStop,
+				dropoffStop,
+				accessWalkDistances,
+				egressWalkDistances,
+				passengerTravelTimes,
+				passengerDistances,
+				passengerNetworkUtilities,
+				delays,
+				detours,
+				remainingBudgets,
+				new double[]{stopToStopSegment.getTravelTime()},
+				new double[]{stopToStopSegment.getDistance()},
+				new double[]{stopToStopSegment.getNetworkUtility()},
+				doorToDoor.getStartTime()
+		);
+	}
+
+	/**
+	 * Asymmetric two-phase stop search using per-passenger budget envelopes.
+	 *
+	 * <p>Phase A (pickup): cap = min(2·mid, hardCap) per passenger, where
+	 * {@code mid = budgetToConstraints.budgetToMaxWalkDistance(remainingBudget, null, request, actualTT, actualDist, delay)}.
+	 *
+	 * <p>Phase B (dropoff): cap = max(0, min(2·mid − accessWalk[i], hardCap)) per
+	 * passenger, so passengers who walked less on access can walk farther on egress.
+	 */
+	private ConversionCandidate convertToStopBasedBudgetAware(Ride doorToDoor) {
+		totalProcessed.incrementAndGet();
+
+		DrtRequest[] requests = doorToDoor.getRequests();
+		int degree = doorToDoor.getDegree();
+		double hardCap = config.getMaxWalkDistanceMeters();
+		double[] remainingBudgetsD2D = doorToDoor.getRemainingBudgets();
+		double[] passengerTravelTimesD2D = doorToDoor.getPassengerTravelTimes();
+		double[] passengerDistancesD2D = doorToDoor.getPassengerDistances();
+		double[] delaysD2D = doorToDoor.getDelays();
+
+		// Step 1: Compute per-passenger total walk budget envelope (2·mid)
+		double[] maxTotalWalk = new double[degree];
+		for (int i = 0; i < degree; i++) {
+			double mid = walkBudgetProvider.getMid(
+					remainingBudgetsD2D[i], requests[i],
+					passengerTravelTimesD2D[i], passengerDistancesD2D[i], delaysD2D[i]);
+			maxTotalWalk[i] = 2.0 * mid;
+		}
+
+		// Step 2 (Phase A): Find shared pickup stop — per-pax access cap = min(maxTotalWalk[i], hardCap)
+		List<Coord> origins = new ArrayList<>(degree);
+		double[] accessCaps = new double[degree];
+		for (int i = 0; i < degree; i++) {
+			origins.add(new Coord(requests[i].originX, requests[i].originY));
+			accessCaps[i] = Math.min(maxTotalWalk[i], hardCap);
+		}
+
+		Optional<StopLocation> pickupStopOpt = stopFinder.findStop(
+				origins, accessCaps, doorToDoor.getStartTime());
+
+		if (pickupStopOpt.isEmpty()) {
+			failedNoPickupStop.incrementAndGet();
+			log.trace("Ride {} rejected: no valid pickup stop found (budget-aware)", doorToDoor.getIndex());
+			return null;
+		}
+		StopLocation pickupStop = pickupStopOpt.get();
+
+		// Step 3: Measure actual access walk distances
+		Link pickupLink = networkCache.getNetwork().getLinks().get(pickupStop.getLinkId());
+		double[] accessWalkDistances = new double[degree];
+		for (int i = 0; i < degree; i++) {
+			accessWalkDistances[i] = walkCalculator.calculateWalkDistance(origins.get(i), pickupLink);
+		}
+
+		// Step 4 (Phase B): Find shared dropoff stop — egress cap = max(0, min(maxTotalWalk[i] - accessWalk[i], hardCap))
+		List<Coord> destinations = new ArrayList<>(degree);
+		double[] egressCaps = new double[degree];
+		for (int i = 0; i < degree; i++) {
+			destinations.add(new Coord(requests[i].destinationX, requests[i].destinationY));
+			egressCaps[i] = Math.max(0.0, Math.min(maxTotalWalk[i] - accessWalkDistances[i], hardCap));
+		}
+
+		double estimatedDropoffTime = doorToDoor.getStartTime() + doorToDoor.getRideTravelTime();
+		Optional<StopLocation> dropoffStopOpt = stopFinder.findStop(
+				destinations, egressCaps, estimatedDropoffTime);
+
+		if (dropoffStopOpt.isEmpty()) {
+			failedNoDropoffStop.incrementAndGet();
+			log.trace("Ride {} rejected: no valid dropoff stop found (budget-aware)", doorToDoor.getIndex());
+			return null;
+		}
+		StopLocation dropoffStop = dropoffStopOpt.get();
+
+		// Step 5: Measure actual egress walk distances and validate hard cap per leg
+		Link dropoffLink = networkCache.getNetwork().getLinks().get(dropoffStop.getLinkId());
+		double[] egressWalkDistances = new double[degree];
+		for (int i = 0; i < degree; i++) {
+			egressWalkDistances[i] = walkCalculator.calculateWalkDistance(destinations.get(i), dropoffLink);
+
+			// Validate against hard cap (each leg individually)
+			if (accessWalkDistances[i] > hardCap || egressWalkDistances[i] > hardCap) {
+				failedWalkDistanceExceeded.incrementAndGet();
+				log.trace("Ride {} rejected: passenger {} walk exceeds hard cap",
+						doorToDoor.getIndex(), i);
+				return null;
+			}
+		}
+
+		// Step 6: Route the stop-to-stop segment
+		TravelSegment stopToStopSegment = networkCache.getSegment(
+				pickupStop.getLinkId(),
+				dropoffStop.getLinkId(),
+				doorToDoor.getStartTime());
+
+		if (stopToStopSegment == null) {
+			log.trace("Ride {} rejected: cannot route between stops (budget-aware)", doorToDoor.getIndex());
+			failedNoPickupStop.incrementAndGet();
+			return null;
+		}
+
+		// Step 7: Calculate passenger metrics
+		double[] passengerTravelTimes = new double[degree];
+		double[] passengerDistances = new double[degree];
+		double[] passengerNetworkUtilities = new double[degree];
+		double[] delays = new double[degree];
+		double[] detours = new double[degree];
+
+		double inVehicleTime = stopToStopSegment.getTravelTime();
+		double inVehicleDistance = stopToStopSegment.getDistance();
+		double inVehicleUtility = stopToStopSegment.getNetworkUtility();
+
+		for (int i = 0; i < degree; i++) {
+			double walkSpeed = config.getWalkSpeedMps();
+			double accessTime = accessWalkDistances[i] / walkSpeed;
+			double egressTime = egressWalkDistances[i] / walkSpeed;
+
+			passengerTravelTimes[i] = accessTime + inVehicleTime + egressTime;
+			passengerDistances[i] = accessWalkDistances[i] + inVehicleDistance + egressWalkDistances[i];
+			passengerNetworkUtilities[i] = inVehicleUtility;
+
+			delays[i] = passengerTravelTimes[i] - requests[i].getTravelTime();
+			detours[i] = requests[i].getTravelTime() > 0
+					? passengerTravelTimes[i] / requests[i].getTravelTime()
+					: 1.0;
+		}
+
+		// Step 8: Validate budgets with actual walk distances
+		double[] remainingBudgets = calculateStopBasedBudgets(
+				requests, delays, passengerTravelTimes, passengerDistances,
+				accessWalkDistances, egressWalkDistances);
+
+		if (remainingBudgets == null) {
+			failedBudgetExceeded.incrementAndGet();
+			log.trace("Ride {} rejected: budget validation failed (budget-aware)", doorToDoor.getIndex());
+			return null;
+		}
+
+		successfulConversions.incrementAndGet();
+		totalPassengers.addAndGet(degree);
+		for (int i = 0; i < degree; i++) {
+			totalAccessWalkDistance.addAndGet((long) (accessWalkDistances[i] * 100));
+			totalEgressWalkDistance.addAndGet((long) (egressWalkDistances[i] * 100));
+		}
+
 		return new ConversionCandidate(
 				doorToDoor,
 				pickupStop,

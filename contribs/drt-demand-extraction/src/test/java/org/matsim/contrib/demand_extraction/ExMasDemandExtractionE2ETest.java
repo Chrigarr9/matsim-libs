@@ -230,12 +230,12 @@ public class ExMasDemandExtractionE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				if (parts.length != 28) {
-					System.err.println("ERROR: Expected 28 fields but got " + parts.length);
+				if (parts.length != 38) {
+					System.err.println("ERROR: Expected 38 fields but got " + parts.length);
 					System.err.println("Line: " + line);
 					System.err.println("Fields: " + java.util.Arrays.toString(parts));
 				}
-				Assertions.assertEquals(29, parts.length, "Each request should have 29 fields (includes isEducation, activity types, PT accessibility, maxCostPerKm)");
+				Assertions.assertEquals(38, parts.length, "Each request should have 38 fields (includes originLinkCoord/destinationLinkCoord 8 fields + maxWalkDistance)");
 
 				String personId = parts[1];
 				double budget = Double.parseDouble(parts[6]);

@@ -27,6 +27,7 @@ import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinder;
 import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinderFactory;
 import org.matsim.contrib.demand_extraction.algorithm.stops.WalkingDistanceCalculator;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
+import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.facilities.ActivityFacilities;
 
@@ -47,6 +48,7 @@ public final class BamasEngine {
 	private final int maxDegree;
 	private final org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig;
 	private final ActivityFacilities facilities; // Optional, for predefined stop finder
+	private final BudgetToConstraintsCalculator budgetToConstraints; // Optional, for budget-aware stop search
 
 	private List<DrtRequest> requests;
 	private List<Ride> allRides;
@@ -56,19 +58,28 @@ public final class BamasEngine {
 	public BamasEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
 					   double horizon, int maxDegree,
 					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig) {
-		this(network, budgetValidator, horizon, maxDegree, exMasConfig, null);
+		this(network, budgetValidator, horizon, maxDegree, exMasConfig, null, null);
 	}
 
 	public BamasEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
 					   double horizon, int maxDegree,
 					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig,
 					   ActivityFacilities facilities) {
+		this(network, budgetValidator, horizon, maxDegree, exMasConfig, facilities, null);
+	}
+
+	public BamasEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
+					   double horizon, int maxDegree,
+					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig,
+					   ActivityFacilities facilities,
+					   BudgetToConstraintsCalculator budgetToConstraints) {
 		this.network = network;
 		this.budgetValidator = budgetValidator;
 		this.horizon = horizon;
 		this.maxDegree = maxDegree;
 		this.exMasConfig = exMasConfig;
 		this.facilities = facilities;
+		this.budgetToConstraints = budgetToConstraints;
 	}
 
     /**
@@ -354,8 +365,14 @@ public final class BamasEngine {
 
 		// Create generator
 		int algorithmProcessCount = exMasConfig.getAlgorithmProcessCount();
+		// Wrap BudgetToConstraintsCalculator as WalkBudgetProvider (null-safe: null passes through)
+		org.matsim.contrib.demand_extraction.algorithm.generation.WalkBudgetProvider walkBudgetProvider =
+				budgetToConstraints == null ? null :
+				(budget, req, tt, dist, delay) ->
+						budgetToConstraints.budgetToMaxWalkDistance(budget, null, req, tt, dist, delay);
 		StopBasedRideGenerator generator = new StopBasedRideGenerator(
-				network, stopFinder, walkCalculator, budgetValidator, exMasConfig, algorithmProcessCount);
+				network, stopFinder, walkCalculator, budgetValidator, exMasConfig, algorithmProcessCount,
+				walkBudgetProvider);
 
 		// Generate stop-based rides (indices will be assigned after the main algorithm)
 		int startIndex = doorToDoorRides.size();

@@ -27,6 +27,7 @@ import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinder;
 import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinderFactory;
 import org.matsim.contrib.demand_extraction.algorithm.stops.WalkingDistanceCalculator;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
+import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.contrib.demand_extraction.io.ExMasCsvWriter;
 import org.matsim.facilities.ActivityFacilities;
@@ -51,6 +52,7 @@ public final class ExMasReferenceEngine {
 	private final String progressRunLabel;
 	private final ReferenceProgressSink progressSink;
 	private final long checkpointIntervalMs;
+	private final BudgetToConstraintsCalculator budgetToConstraints; // Optional, for budget-aware stop search
 
 	private List<DrtRequest> requests;
 	private List<Ride> allRides;
@@ -61,14 +63,14 @@ public final class ExMasReferenceEngine {
 	public ExMasReferenceEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
 					   double horizon, int maxDegree,
 					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig) {
-		this(network, budgetValidator, horizon, maxDegree, exMasConfig, null, null, null, 30_000L);
+		this(network, budgetValidator, horizon, maxDegree, exMasConfig, null, null, null, 30_000L, null);
 	}
 
 	public ExMasReferenceEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
 					   double horizon, int maxDegree,
 					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig,
 					   ActivityFacilities facilities) {
-		this(network, budgetValidator, horizon, maxDegree, exMasConfig, facilities, null, null, 30_000L);
+		this(network, budgetValidator, horizon, maxDegree, exMasConfig, facilities, null, null, 30_000L, null);
 	}
 
 	public ExMasReferenceEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
@@ -78,7 +80,7 @@ public final class ExMasReferenceEngine {
 					   ReferenceProgressSink progressSink,
 					   long checkpointIntervalMs) {
 		this(network, budgetValidator, horizon, maxDegree, exMasConfig, null, progressRunLabel, progressSink,
-				checkpointIntervalMs);
+				checkpointIntervalMs, null);
 	}
 
 	public ExMasReferenceEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
@@ -88,6 +90,18 @@ public final class ExMasReferenceEngine {
 					   String progressRunLabel,
 					   ReferenceProgressSink progressSink,
 					   long checkpointIntervalMs) {
+		this(network, budgetValidator, horizon, maxDegree, exMasConfig, facilities, progressRunLabel, progressSink,
+				checkpointIntervalMs, null);
+	}
+
+	public ExMasReferenceEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
+					   double horizon, int maxDegree,
+					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig,
+					   ActivityFacilities facilities,
+					   String progressRunLabel,
+					   ReferenceProgressSink progressSink,
+					   long checkpointIntervalMs,
+					   BudgetToConstraintsCalculator budgetToConstraints) {
 		this.network = network;
 		this.budgetValidator = budgetValidator;
 		this.horizon = horizon;
@@ -97,6 +111,7 @@ public final class ExMasReferenceEngine {
 		this.progressRunLabel = progressRunLabel;
 		this.progressSink = progressSink;
 		this.checkpointIntervalMs = checkpointIntervalMs;
+		this.budgetToConstraints = budgetToConstraints;
 	}
 
     /**
@@ -361,8 +376,14 @@ public final class ExMasReferenceEngine {
 
 		// Create generator
 		int algorithmProcessCount = exMasConfig.getAlgorithmProcessCount();
+		// Wrap BudgetToConstraintsCalculator as WalkBudgetProvider (null-safe: null passes through)
+		org.matsim.contrib.demand_extraction.algorithm.generation.WalkBudgetProvider walkBudgetProvider =
+				budgetToConstraints == null ? null :
+				(budget, req, tt, dist, delay) ->
+						budgetToConstraints.budgetToMaxWalkDistance(budget, null, req, tt, dist, delay);
 		StopBasedRideGenerator generator = new StopBasedRideGenerator(
-				network, stopFinder, walkCalculator, budgetValidator, exMasConfig, algorithmProcessCount);
+				network, stopFinder, walkCalculator, budgetValidator, exMasConfig, algorithmProcessCount,
+				walkBudgetProvider);
 
 		// Generate stop-based rides (indices will be assigned after the main algorithm)
 		int startIndex = doorToDoorRides.size();
