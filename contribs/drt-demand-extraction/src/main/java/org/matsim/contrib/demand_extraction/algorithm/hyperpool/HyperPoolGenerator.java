@@ -22,6 +22,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation;
 import org.matsim.contrib.demand_extraction.algorithm.domain.StopSequence;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.generation.WalkBudgetProvider;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
@@ -75,6 +76,13 @@ public class HyperPoolGenerator {
     private final StopCompatibilityChecker compatibilityChecker;
     private final ExMasConfigGroup config;
     private final BudgetValidator budgetValidator;
+    /**
+     * Optional walk-budget provider for budget-aware per-pax walk caps in Stage 2.
+     * When non-null and {@code config.isEnableBudgetAwareConstraints()} is true,
+     * {@link #generateHyperPooledRide} will compute per-pax relocation caps and
+     * pass them into {@link StopRelocator#findMergedStop}.
+     */
+    private final WalkBudgetProvider walkBudgetProvider;
 
     // Configuration parameters (cached for efficiency)
     private final int minOccupancy;
@@ -100,13 +108,18 @@ public class HyperPoolGenerator {
      * @param compatibilityChecker the checker for stop-to-stop ride compatibility
      * @param config the ExMAS configuration with hyper-pooling parameters
      * @param budgetValidator the budget validator for validation phase
+     * @param walkBudgetProvider optional walk-budget provider; when non-null and
+     *        {@code config.isEnableBudgetAwareConstraints()} is true, per-pax walk
+     *        caps are computed and forwarded to the stop relocator.  Pass {@code null}
+     *        to use the legacy (unconstrained) relocation path.
      */
     public HyperPoolGenerator(
             MatsimNetworkCache networkCache,
             StopRelocator stopRelocator,
             StopCompatibilityChecker compatibilityChecker,
             ExMasConfigGroup config,
-            BudgetValidator budgetValidator) {
+            BudgetValidator budgetValidator,
+            WalkBudgetProvider walkBudgetProvider) {
 
         if (networkCache == null) {
             throw new IllegalArgumentException("networkCache cannot be null");
@@ -120,6 +133,7 @@ public class HyperPoolGenerator {
         this.compatibilityChecker = compatibilityChecker;
         this.config = config;
         this.budgetValidator = budgetValidator;
+        this.walkBudgetProvider = walkBudgetProvider;
 
         // Cache configuration parameters
         this.minOccupancy = config.getHyperPoolMinOccupancy();
@@ -378,11 +392,17 @@ public class HyperPoolGenerator {
      *
      * @param cluster the cluster of compatible rides
      * @param relocator the stop relocator for merging nearby stops
+     * @param perWrapperMaxReloc per-wrapper remaining walk budget arrays (metres) for
+     *        budget-aware relocation enforcement.  When non-null and the entry for a
+     *        wrapper is non-null, that array is forwarded to
+     *        {@link StopRelocator#findMergedStop} as {@code maxRelocDistPerPax}.
+     *        Pass {@code null} (or map with null values) for the legacy unconstrained path.
      * @return the optimal stop sequence, or null if generation fails
      */
     public StopSequence generateStopSequence(
             Set<StopToStopRideWrapper> cluster,
-            StopRelocator relocator) {
+            StopRelocator relocator,
+            Map<StopToStopRideWrapper, double[]> perWrapperMaxReloc) {
 
         if (cluster == null || cluster.isEmpty()) {
             return null;
@@ -400,8 +420,9 @@ public class HyperPoolGenerator {
 
             // Merge nearby stops if relocator available
             if (relocator != null) {
-                pickup = relocator.findMergedStop(pickup, pickupStops, stopProximityMeters);
-                dropoff = relocator.findMergedStop(dropoff, dropoffStops, stopProximityMeters);
+                double[] caps = perWrapperMaxReloc != null ? perWrapperMaxReloc.get(wrapper) : null;
+                pickup = relocator.findMergedStop(pickup, pickupStops, stopProximityMeters, caps);
+                dropoff = relocator.findMergedStop(dropoff, dropoffStops, stopProximityMeters, caps);
             }
 
             if (!pickupStops.contains(pickup)) {
@@ -433,7 +454,8 @@ public class HyperPoolGenerator {
                         (relocator != null && relocator.areStopsNearby(w.getDropoffStop(), stop, stopProximityMeters)))
                 .mapToInt(w -> pickupStops.indexOf(
                     relocator != null ?
-                        relocator.findMergedStop(w.getPickupStop(), pickupStops, stopProximityMeters) :
+                        relocator.findMergedStop(w.getPickupStop(), pickupStops, stopProximityMeters,
+                            perWrapperMaxReloc != null ? perWrapperMaxReloc.get(w) : null) :
                         w.getPickupStop()))
                 .min().orElse(Integer.MAX_VALUE);
         }));
@@ -459,8 +481,9 @@ public class HyperPoolGenerator {
 
             // Find merged stops if relocator available
             if (relocator != null) {
-                pickup = relocator.findMergedStop(pickup, pickupStops, stopProximityMeters);
-                dropoff = relocator.findMergedStop(dropoff, dropoffStops, stopProximityMeters);
+                double[] caps = perWrapperMaxReloc != null ? perWrapperMaxReloc.get(wrapper) : null;
+                pickup = relocator.findMergedStop(pickup, pickupStops, stopProximityMeters, caps);
+                dropoff = relocator.findMergedStop(dropoff, dropoffStops, stopProximityMeters, caps);
             }
 
             int boardingIndex = pickupStops.indexOf(pickup);
@@ -671,14 +694,70 @@ public class HyperPoolGenerator {
     }
 
     /**
+     * Computes per-wrapper remaining relocation budgets for budget-aware stop merging.
+     *
+     * <p>For each wrapper, computes the per-passenger remaining walk budget after
+     * Stage 1 access + egress walks are committed:
+     * <pre>
+     *   maxRelocDist[i] = 2 * provider.getMid(remainingBudget[i], req[i], tt[i], dist[i], delay[i])
+     *                     - accessWalk[i] - egressWalk[i]
+     * </pre>
+     * Clamped to ≥ 0.
+     *
+     * @param cluster the cluster of wrapped S2S rides
+     * @return map from wrapper to per-passenger remaining relocation budget array,
+     *         or {@code null} if budget-aware mode is off or provider is absent
+     */
+    private Map<StopToStopRideWrapper, double[]> computePerWrapperMaxReloc(
+            Set<StopToStopRideWrapper> cluster) {
+
+        if (walkBudgetProvider == null || !config.isEnableBudgetAwareConstraints()) {
+            return null;
+        }
+
+        Map<StopToStopRideWrapper, double[]> result = new HashMap<>();
+        for (StopToStopRideWrapper wrapper : cluster) {
+            Ride sourceRide = wrapper.getRide();
+            int deg = sourceRide.getDegree();
+            double[] remainingBudgets = sourceRide.getRemainingBudgets();
+            double[] passengerTravelTimes = sourceRide.getPassengerTravelTimes();
+            double[] passengerDistances = sourceRide.getPassengerDistances();
+            double[] delays = sourceRide.getDelays();
+            double[] sourceAccessWalks = sourceRide.getAccessWalkDistances();
+            double[] sourceEgressWalks = sourceRide.getEgressWalkDistances();
+            DrtRequest[] requests = sourceRide.getRequests();
+
+            double[] maxReloc = new double[deg];
+            for (int i = 0; i < deg; i++) {
+                double budget = remainingBudgets != null ? remainingBudgets[i] : 0.0;
+                double mid = walkBudgetProvider.getMid(
+                    budget,
+                    requests[i],
+                    passengerTravelTimes[i],
+                    passengerDistances[i],
+                    delays[i]);
+                double totalCap = 2.0 * mid;
+                double committedAccess = sourceAccessWalks != null ? sourceAccessWalks[i] : 0.0;
+                double committedEgress = sourceEgressWalks != null ? sourceEgressWalks[i] : 0.0;
+                maxReloc[i] = Math.max(0.0, totalCap - committedAccess - committedEgress);
+            }
+            result.put(wrapper, maxReloc);
+        }
+        return result;
+    }
+
+    /**
      * Generates a hyper-pooled ride from a cluster.
      */
     private HyperPooledRide generateHyperPooledRide(
             Set<StopToStopRideWrapper> cluster,
             int index) {
 
+        // Compute per-pax relocation caps (null when flag is off)
+        Map<StopToStopRideWrapper, double[]> perWrapperMaxReloc = computePerWrapperMaxReloc(cluster);
+
         // Generate stop sequence
-        StopSequence sequence = generateStopSequence(cluster, stopRelocator);
+        StopSequence sequence = generateStopSequence(cluster, stopRelocator, perWrapperMaxReloc);
         if (sequence == null) {
             return null;
         }
@@ -908,12 +987,26 @@ public class HyperPoolGenerator {
          * <p>If a nearby stop already exists in the list, returns that stop.
          * Otherwise returns the original stop.
          *
+         * <p>When {@code maxRelocDistPerPax} is non-null (budget-aware mode), the
+         * implementation MUST reject a candidate merged stop if the relocation
+         * distance exceeds the minimum remaining walk budget across all affected
+         * passengers: i.e. if
+         * {@code calculateRelocationDistance(stop, candidate) > min(maxRelocDistPerPax)},
+         * the candidate is skipped and the original stop is returned instead.
+         * When {@code maxRelocDistPerPax} is {@code null} (flag-off / legacy path),
+         * the method must behave identically to the pre-Phase-B implementation.
+         *
          * @param stop the stop to merge
          * @param existingStops list of existing stops
          * @param proximityMeters distance threshold for merging
+         * @param maxRelocDistPerPax per-passenger remaining walk budget after Stage 1
+         *        walks are committed (metres).  Relocation is rejected if it would
+         *        exceed {@code min(maxRelocDistPerPax[i])} for any passenger.
+         *        {@code null} means unconstrained (legacy path).
          * @return the merged or original stop
          */
-        StopLocation findMergedStop(StopLocation stop, List<StopLocation> existingStops, double proximityMeters);
+        StopLocation findMergedStop(StopLocation stop, List<StopLocation> existingStops,
+                                    double proximityMeters, double[] maxRelocDistPerPax);
 
         /**
          * Calculates the additional walk distance incurred by relocating to a merged stop.

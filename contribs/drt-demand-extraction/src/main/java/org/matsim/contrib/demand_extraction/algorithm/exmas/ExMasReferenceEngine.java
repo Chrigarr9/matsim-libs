@@ -443,10 +443,22 @@ public final class ExMasReferenceEngine {
 				public org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation findMergedStop(
 						org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop,
 						List<org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation> existingStops,
-						double proximityMeters) {
-					// Find the first existing stop that is nearby, or return the original stop
+						double proximityMeters,
+						double[] maxRelocDistPerPax) {
 					for (org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation existing : existingStops) {
 						if (areStopsNearby(stop, existing, proximityMeters)) {
+							// Budget-aware guard: reject merge if it would exceed any passenger's
+							// remaining walk budget (Signature A — caller pre-computes the budget).
+							if (maxRelocDistPerPax != null) {
+								double relocDist = calculateRelocationDistance(stop, existing);
+								double minBudget = Double.MAX_VALUE;
+								for (double b : maxRelocDistPerPax) {
+									if (b < minBudget) minBudget = b;
+								}
+								if (relocDist > minBudget) {
+									continue; // skip this candidate; try next existing stop
+								}
+							}
 							return existing;
 						}
 					}
@@ -465,9 +477,16 @@ public final class ExMasReferenceEngine {
 			log.info("HyperPool: Stop relocation disabled (matches original ExMAS/HyperPool)");
 		}
 
+		// Build WalkBudgetProvider (same lambda as Stage 1; null-safe)
+		org.matsim.contrib.demand_extraction.algorithm.generation.WalkBudgetProvider hyperPoolWalkBudgetProvider =
+				budgetToConstraints == null ? null :
+				(budget, req, tt, dist, delay) ->
+						budgetToConstraints.budgetToMaxWalkDistance(budget, null, req, tt, dist, delay);
+
 		// Create HyperPoolGenerator
 		HyperPoolGenerator generator = new HyperPoolGenerator(
-				network, stopRelocator, compatibilityChecker, exMasConfig, budgetValidator);
+				network, stopRelocator, compatibilityChecker, exMasConfig, budgetValidator,
+				hyperPoolWalkBudgetProvider);
 
 		// Generate hyper-pooled rides
 		// Start index is based on total rides (will be used for HyperPooledRide indexing)
