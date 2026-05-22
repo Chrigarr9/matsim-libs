@@ -220,7 +220,7 @@ public class ExMasHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				Assertions.assertEquals(38, parts.length, "Each request should have 38 fields (includes originLinkCoord/destinationLinkCoord 8 fields + maxWalkDistance)");
+				Assertions.assertEquals(39, parts.length, "Each request should have 39 fields (includes originLinkCoord/destinationLinkCoord 8 fields + maxWalkDistance + maxWaitTime)");
 
 				String personId = parts[1];
 				double budget = Double.parseDouble(parts[6]);

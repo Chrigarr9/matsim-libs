@@ -52,7 +52,7 @@ public final class ExMasCsvWriter {
 					"carTravelTime,ptTravelTime,ptAccessibility,maxCostPerKm," +
 					"originLinkCoordFromX,originLinkCoordFromY,originLinkCoordToX,originLinkCoordToY," +
 					"destinationLinkCoordFromX,destinationLinkCoordFromY,destinationLinkCoordToX,destinationLinkCoordToY," +
-					"maxWalkDistance");
+					"maxWalkDistance,maxWaitTime");
 			writer.newLine();
 
 			for (DrtRequest req : requests) {
@@ -61,7 +61,7 @@ public final class ExMasCsvWriter {
 						: Double.MAX_VALUE;
 				writer.write(String.format(java.util.Locale.US,
 						"%d,%s,%s,%d,%b,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f,%.4f,"
-								+ "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f",
+								+ "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%.4f",
 						req.index, req.personId, req.groupId, req.tripIndex, req.isCommute, req.isEducation,
 						req.budget, req.requestTime,
 						req.originLinkId, req.destinationLinkId,
@@ -77,7 +77,7 @@ public final class ExMasCsvWriter {
 						req.originLinkCoordToX, req.originLinkCoordToY,
 						req.destinationLinkCoordFromX, req.destinationLinkCoordFromY,
 						req.destinationLinkCoordToX, req.destinationLinkCoordToY,
-						req.maxWalkDistance));
+						req.maxWalkDistance, req.maxWaitTime));
 				writer.newLine();
 			}
 		} catch (IOException e) {

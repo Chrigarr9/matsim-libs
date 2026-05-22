@@ -357,8 +357,8 @@ public class ExMasKelheimHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// Current format: 38 fields (incl. originLinkCoord/destinationLinkCoord 8 fields + maxWalkDistance)
-				Assertions.assertEquals(38, parts.length, "Each request should have 38 fields");
+				// Current format: 39 fields (incl. originLinkCoord/destinationLinkCoord 8 fields + maxWalkDistance + maxWaitTime)
+				Assertions.assertEquals(39, parts.length, "Each request should have 39 fields");
 
 				String personId = parts[1]; // personId is column 1 (after index)
 				double budget = Double.parseDouble(parts[6]); // budget is column 6 (after isEducation)

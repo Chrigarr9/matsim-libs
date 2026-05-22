@@ -157,8 +157,8 @@ public class KelheimScenarioFixture implements ExMasScenarioFixture {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				check(parts.length == 38,
-						"Each request should have 38 fields, got " + parts.length);
+				check(parts.length == 39,
+						"Each request should have 39 fields, got " + parts.length);
 
 				String personId = parts[1];
 				double budget = Double.parseDouble(parts[6]);
