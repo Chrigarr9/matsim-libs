@@ -148,7 +148,7 @@ Controler through STEP 3 (request construction), dumps to disk, and
 `System.exit(0)` — releasing the heap. Phase 2 spawns in a fresh JVM, reloads
 the dump, and runs the algorithm + post-processor without the Controler graph.
 
-Plan & design: `docs/plans/2026-05-17-drt-extraction-low-memory-mode-plan.md`.
+Plan & design: `../../../docs/plans/2026-05-17-drt-extraction-low-memory-mode-plan.md` (in main Dissertation repo).
 
 ```bash
 # Orchestrator: one CLI command, two JVMs in sequence.

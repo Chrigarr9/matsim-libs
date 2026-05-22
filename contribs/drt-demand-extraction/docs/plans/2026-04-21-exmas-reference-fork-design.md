@@ -5,7 +5,7 @@
 **Related:**
 - `papers/paper1/planning/simulation-flow.md` (§6 — Block 2 demand extraction, R1/R2/R3 matrix)
 - `papers/paper1/planning/drt-demand-extraction-skeleton.md` (§1 — claims C1/C2/C3)
-- `docs/plans/2026-04-14-exmas-master-reference.md` (current algorithm reference)
+- `archive/docs-plans-old/2026-04-14-exmas-master-reference.md` (current algorithm reference; archived May 2026)
 
 ---
 

@@ -20,6 +20,8 @@ output/
 .sdkmanrc
 .qodo
 contribs/drt-demand-extraction/hs_err_pid*.log
+contribs/drt-demand-extraction/.planning/*.log
+contribs/drt-demand-extraction/META-INF/
 
 # Worktrees
 .worktrees/
