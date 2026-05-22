@@ -374,10 +374,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	 */
 	private boolean hyperPoolEnableDirectionalFilter = false;
 
-	// ===========================================
-	// Budget-Aware Constraints Settings
-	// ===========================================
-
 	/**
 	 * Master switch for budget-derived walk and wait caps.
 	 * Default: false — preserves current pipeline exactly.
@@ -1260,8 +1256,8 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	}
 
 	@StringSetter("enableBudgetAwareConstraints")
-	public void setEnableBudgetAwareConstraints(boolean v) {
-		this.enableBudgetAwareConstraints = v;
+	public void setEnableBudgetAwareConstraints(boolean enableBudgetAwareConstraints) {
+		this.enableBudgetAwareConstraints = enableBudgetAwareConstraints;
 	}
 
     @Override
@@ -1424,7 +1420,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("hyperPoolEnableDirectionalFilter",
 				"Enable directional compatibility filter (rejects rides moving opposite directions). Default: false (matches original ExMAS/HyperPool). If true: Production optimization that filters incompatible ride pairs early.");
 
-		// Budget-Aware Constraints comments
 		map.put("enableBudgetAwareConstraints",
 				"Master switch for budget-derived walk and wait caps. Default: false (preserves current pipeline). "
 				+ "When true: per-passenger walk and wait caps are derived from each person's utility budget, "
