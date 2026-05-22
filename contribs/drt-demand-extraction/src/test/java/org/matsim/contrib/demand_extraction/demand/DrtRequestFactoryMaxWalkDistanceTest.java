@@ -78,9 +78,18 @@ class DrtRequestFactoryMaxWalkDistanceTest {
                             + ", budget=" + r.budget + ")");
 
             Person person = population.getPersons().get(r.personId);
-            double expected = calculator.budgetToMaxWalkDistance(r.budget, person, r);
-            assertEquals(expected, r.maxWalkDistance, 1e-6,
+            double expectedWalk = calculator.budgetToMaxWalkDistance(r.budget, person, r);
+            assertEquals(expectedWalk, r.maxWalkDistance, 1e-6,
                     "maxWalkDistance must equal budgetToMaxWalkDistance(budget, person, request) "
+                            + "(request " + r.index + ")");
+
+            assertTrue(r.maxWaitTime > 0,
+                    "maxWaitTime should be positive when flag is on (request " + r.index
+                            + ", budget=" + r.budget + ")");
+
+            double expectedWait = calculator.budgetToMaxWaitingTime(r.budget, person, r);
+            assertEquals(expectedWait, r.maxWaitTime, 1e-6,
+                    "maxWaitTime must equal budgetToMaxWaitingTime(budget, person, request) "
                             + "(request " + r.index + ")");
         }
     }
@@ -112,6 +121,8 @@ class DrtRequestFactoryMaxWalkDistanceTest {
         for (DrtRequest r : requests) {
             assertEquals(0.0, r.maxWalkDistance, 1e-12,
                     "maxWalkDistance must be 0.0 when flag is off (request " + r.index + ")");
+            assertEquals(0.0, r.maxWaitTime, 1e-12,
+                    "maxWaitTime must be 0.0 when flag is off (request " + r.index + ")");
         }
     }
 

@@ -82,6 +82,13 @@ public class DrtRequest {
      */
     public final double maxWalkDistance;
 
+    /**
+     * Maximum acceptable waiting time for pooled rides (seconds).
+     * Calculated from the person's remaining budget using BudgetToConstraintsCalculator.
+     * A value of 0 means no wait is tolerable (flag off or zero budget).
+     */
+    public final double maxWaitTime;
+
     // Activity types (for downstream analysis grouping)
     public final String originActivityType; // Type of origin activity (e.g., "home", "work")
     public final String destinationActivityType; // Type of destination activity
@@ -158,6 +165,7 @@ public class DrtRequest {
         this.directDistance = builder.directDistance;
         this.maxDetourFactor = builder.maxDetourFactor;
         this.maxWalkDistance = builder.maxWalkDistance;
+        this.maxWaitTime = builder.maxWaitTime;
         this.originActivityType = builder.originActivityType;
         this.destinationActivityType = builder.destinationActivityType;
         this.carTravelTime = builder.carTravelTime;
@@ -201,6 +209,7 @@ public class DrtRequest {
             .directDistance(this.directDistance)
             .maxDetourFactor(this.maxDetourFactor)
             .maxWalkDistance(this.maxWalkDistance)
+            .maxWaitTime(this.maxWaitTime)
             .originActivityType(this.originActivityType)
             .destinationActivityType(this.destinationActivityType)
             .carTravelTime(this.carTravelTime)
@@ -299,6 +308,7 @@ public class DrtRequest {
         private double directDistance;
 		private double maxDetourFactor;
         private double maxWalkDistance = 0.0;
+        private double maxWaitTime = 0.0;
         private String originActivityType;
         private String destinationActivityType;
         private double carTravelTime;
@@ -339,6 +349,7 @@ public class DrtRequest {
 			return this;
 		}
         public Builder maxWalkDistance(double maxWalkDistance) { this.maxWalkDistance = maxWalkDistance; return this; }
+        public Builder maxWaitTime(double maxWaitTime) { this.maxWaitTime = maxWaitTime; return this; }
         public Builder originActivityType(String originActivityType) { this.originActivityType = originActivityType; return this; }
         public Builder destinationActivityType(String destinationActivityType) { this.destinationActivityType = destinationActivityType; return this; }
         public Builder carTravelTime(double carTravelTime) { this.carTravelTime = carTravelTime; return this; }
