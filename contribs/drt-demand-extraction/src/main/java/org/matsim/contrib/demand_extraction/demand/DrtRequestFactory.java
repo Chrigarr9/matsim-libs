@@ -408,6 +408,12 @@ public class DrtRequestFactory {
 		}
 		double effectiveMaxDetourFactor = 1.0 + (maxAbsoluteDetour / drtAttrs.travelTime());
 
+		// maxWalkDistance — ideal-DRT walk cap derived from the person's remaining budget.
+		// Gated on enableBudgetAwareConstraints; flag off leaves the field at 0.0 (current behaviour).
+		double budgetDerivedMaxWalk = exmasConfig.isEnableBudgetAwareConstraints()
+				? budgetToConstraintsCalculator.budgetToMaxWalkDistance(budget, person, draft)
+				: 0.0;
+
 		// Temporal flexibility (departure/arrival windows) — independent from detour.
 		double originFlex = flexibilityCalculator.calculateOriginFlexibility(person, trip.getOriginActivity(), maxAbsoluteDetour);
 		double destFlex = flexibilityCalculator.calculateDestinationFlexibility(person, trip.getDestinationActivity(), maxAbsoluteDetour);
@@ -419,6 +425,7 @@ public class DrtRequestFactory {
 				.earliestDeparture(earliestDep)
 				.latestArrival(latestArr)
 				.maxDetourFactor(effectiveMaxDetourFactor)
+				.maxWalkDistance(budgetDerivedMaxWalk)
 				.build();
 		finalRequest.setScoringContext(draft.getScoringContext());
 		return finalRequest;
