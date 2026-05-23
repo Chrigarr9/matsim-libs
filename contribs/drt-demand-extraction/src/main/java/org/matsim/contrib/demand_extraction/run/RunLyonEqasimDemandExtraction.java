@@ -78,6 +78,14 @@ public class RunLyonEqasimDemandExtraction {
 		/** Override predecessorsFilterTime (seconds). NaN = keep config default (unbounded).
 		 *  Set to e.g. 7200 to limit successor search to a 2h window — required for 100% scale. */
 		public final double predecessorsFilterTime;
+		/** Enable stop-based ride generation in Stage 1 (HyperPool §). Default false. */
+		public final boolean enableStopBased;
+		/** Enable HyperPool Stage 2 (multi-stop sequences). Default false. */
+		public final boolean enableHyperPooling;
+		/** Enable BAMAS budget-aware per-pax caps (Phase A/B/C wiring). Default false. */
+		public final boolean enableBudgetAwareConstraints;
+		/** Global hard cap on per-leg walk distance (m). NaN = leave fixture default. */
+		public final double maxWalkDistanceMeters;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
@@ -85,7 +93,9 @@ public class RunLyonEqasimDemandExtraction {
 				ExMasConfigGroup.Algorithm algorithm,
 				double tripFilterRadiusKm, boolean noExclusionZone,
 				boolean noPredecessors, boolean noShapley, boolean deterministicRouting,
-				int maxPoolingDegree, double predecessorsFilterTime) {
+				int maxPoolingDegree, double predecessorsFilterTime,
+				boolean enableStopBased, boolean enableHyperPooling,
+				boolean enableBudgetAwareConstraints, double maxWalkDistanceMeters) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -103,6 +113,10 @@ public class RunLyonEqasimDemandExtraction {
 			this.deterministicRouting = deterministicRouting;
 			this.maxPoolingDegree = maxPoolingDegree;
 			this.predecessorsFilterTime = predecessorsFilterTime;
+			this.enableStopBased = enableStopBased;
+			this.enableHyperPooling = enableHyperPooling;
+			this.enableBudgetAwareConstraints = enableBudgetAwareConstraints;
+			this.maxWalkDistanceMeters = maxWalkDistanceMeters;
 		}
 	}
 
@@ -124,6 +138,10 @@ public class RunLyonEqasimDemandExtraction {
 		boolean deterministicRouting = false;
 		int maxPoolingDegree = -1;
 		double predecessorsFilterTime = Double.NaN;
+		boolean enableStopBased = false;
+		boolean enableHyperPooling = false;
+		boolean enableBudgetAwareConstraints = false;
+		double maxWalkDistanceMeters = Double.NaN;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -144,13 +162,18 @@ public class RunLyonEqasimDemandExtraction {
 				case "--deterministic-routing" -> deterministicRouting = true;
 				case "--max-pooling-degree" -> maxPoolingDegree = Integer.parseInt(args[++i]);
 				case "--predecessors-filter-time" -> predecessorsFilterTime = Double.parseDouble(args[++i]);
+				case "--enable-stop-based" -> enableStopBased = true;
+				case "--enable-hyperpooling" -> enableHyperPooling = true;
+				case "--enable-budget-aware-constraints" -> enableBudgetAwareConstraints = true;
+				case "--max-walk-distance-meters" -> maxWalkDistanceMeters = Double.parseDouble(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
 		return new ParsedArgs(sample, scenarioDir, prefix, travelTimesPath, outputDir,
 				searchHorizon, maxDetourFactor, minDrtCostPerKm, pruningCoverageK, algorithm,
 				tripFilterRadiusKm, noExclusionZone, noPredecessors, noShapley, deterministicRouting,
-				maxPoolingDegree, predecessorsFilterTime);
+				maxPoolingDegree, predecessorsFilterTime,
+				enableStopBased, enableHyperPooling, enableBudgetAwareConstraints, maxWalkDistanceMeters);
 	}
 
 	/**
@@ -224,7 +247,7 @@ public class RunLyonEqasimDemandExtraction {
 						"--pruning-coverage-k", "--trip-filter-radius-km", "--max-pooling-degree",
 						"--predecessors-filter-time", "--trip-filter-focus", "--trip-filter-center-x",
 						"--trip-filter-center-y", "--exclusion-zone", "--gate-intercept",
-						"--gate-slope" -> true;
+						"--gate-slope", "--max-walk-distance-meters" -> true;
 				default -> false;
 			};
 		}
@@ -272,7 +295,9 @@ public class RunLyonEqasimDemandExtraction {
 					+ "[--min-drt-cost-per-km <eur>] [--pruning-coverage-k <int>] "
 					+ "[--trip-filter-radius-km <km>] [--no-exclusion-zone] "
 					+ "[--no-predecessors] [--no-shapley] [--deterministic-routing] "
-					+ "[--max-pooling-degree <int>]");
+					+ "[--max-pooling-degree <int>] "
+					+ "[--enable-stop-based] [--enable-hyperpooling] "
+					+ "[--enable-budget-aware-constraints] [--max-walk-distance-meters <m>]");
 			System.exit(1);
 		}
 
@@ -428,6 +453,22 @@ public class RunLyonEqasimDemandExtraction {
 		if (!Double.isNaN(p.predecessorsFilterTime)) {
 			log.info("  Override: predecessorsFilterTime = {}s", p.predecessorsFilterTime);
 			exMas.setPredecessorsFilterTime(p.predecessorsFilterTime);
+		}
+		if (p.enableStopBased) {
+			log.info("  Override: stop-based ride generation enabled");
+			exMas.setEnableStopBased(true);
+		}
+		if (p.enableHyperPooling) {
+			log.info("  Override: hyper-pooling enabled");
+			exMas.setEnableHyperPooling(true);
+		}
+		if (p.enableBudgetAwareConstraints) {
+			log.info("  Override: budget-aware per-pax caps enabled");
+			exMas.setEnableBudgetAwareConstraints(true);
+		}
+		if (!Double.isNaN(p.maxWalkDistanceMeters)) {
+			log.info("  Override: maxWalkDistanceMeters = {} m", p.maxWalkDistanceMeters);
+			exMas.setMaxWalkDistanceMeters(p.maxWalkDistanceMeters);
 		}
 	}
 }
