@@ -11,17 +11,17 @@ import java.util.List;
 /**
  * Writes the per-request scoring context dump used by Phase 2.
  *
- * <p>Format (single file, little-endian via {@link DataOutputStream}):
+ * <p>Format v2 (single file, little-endian via {@link DataOutputStream}):
  * <pre>
  * int32 magic = 0xDE5C0DE1
- * int32 version = 1
+ * int32 version = 2
  * int32 numRequests
  * int32 numActivityTypes
  * // Activity-type table (repeated numActivityTypes times)
  * utf   activityType
  * f64   typicalDuration_s
  * bool  scoreAtAll
- * // Request records (repeated numRequests times, 1 + 1 + 1 + 8*4 = 35 bytes/row)
+ * // Request records (repeated numRequests times, 51 bytes/row in v2)
  * int32 requestIndex
  * int8  originActivityTypeIdx   (-1 = synthetic activity, not in the table)
  * int8  destActivityTypeIdx     (-1 = synthetic activity, not in the table)
@@ -29,7 +29,12 @@ import java.util.List;
  * f64   destDuration_s
  * f64   marginalUtilityOfPerforming_s
  * f64   marginalUtilityOfWaitingPt_s
+ * f64   maxWalkDistance         (v2 only — meters; budget-derived stop-based cap)
+ * f64   maxWaitTime             (v2 only — seconds; budget-derived wait cap)
  * </pre>
+ *
+ * <p>v1 dumps (35-byte rows without the two trailing f64s) are still readable; see
+ * {@link ScoringContextsBinReader}.
  */
 public final class ScoringContextsBinWriter implements Closeable {
 
@@ -42,7 +47,9 @@ public final class ScoringContextsBinWriter implements Closeable {
 			double originDuration,
 			double destDuration,
 			double marginalUtilityOfPerforming_s,
-			double marginalUtilityOfWaitingPt_s) {}
+			double marginalUtilityOfWaitingPt_s,
+			double maxWalkDistance,
+			double maxWaitTime) {}
 
 	private final DataOutputStream out;
 	private boolean headerWritten = false;
@@ -74,6 +81,9 @@ public final class ScoringContextsBinWriter implements Closeable {
 		out.writeDouble(r.destDuration);
 		out.writeDouble(r.marginalUtilityOfPerforming_s);
 		out.writeDouble(r.marginalUtilityOfWaitingPt_s);
+		// v2 fields
+		out.writeDouble(r.maxWalkDistance);
+		out.writeDouble(r.maxWaitTime);
 	}
 
 	@Override

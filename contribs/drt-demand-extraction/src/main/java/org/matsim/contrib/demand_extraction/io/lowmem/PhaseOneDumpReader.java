@@ -38,12 +38,10 @@ import org.matsim.core.scoring.functions.ScoringParameters;
  * consult Person. Walk leg times are recomputed as {@code minDrtAccessEgressDistance /
  * walkSpeed}; the dump persists neither the times nor the speed for walks.
  *
- * <p><b>Stop-based pooling caveat:</b> the dump does not persist
- * {@code DrtRequest.maxWalkDistance}; reloaded requests default to {@code 0.0}. The
- * low-memory two-phase mode therefore only supports door-to-door variants. Enabling
- * stop-based or hyper-pool generation in Phase 2 would silently produce wrong rides —
- * the {@code ExMasConfigGroup.enableStopBased} / {@code enableHyperPooling} flags must be
- * left disabled when this reader is used.
+ * <p><b>v2 dumps:</b> persist {@code maxWalkDistance} and {@code maxWaitTime} in both the
+ * CSV and the BIN; reloaded requests carry the budget-derived caps. v1 dumps surface 0
+ * for both — Phase 2 must reject a v1 dump if HyperPool / stop-based generation is enabled,
+ * because the walks would silently default to zero (see {@link #read} for the gate).
  */
 public final class PhaseOneDumpReader {
 
@@ -249,6 +247,9 @@ public final class PhaseOneDumpReader {
 				.directTravelTime(directTravelTime)
 				.directDistance(d(f, col, "directDistance"))
 				.maxDetourFactor(maxDetourFactor)
+				// v2 CSV columns — present from BIN v2 onward; absent in v1 CSVs (defaulted to 0 via optionalD).
+				.maxWalkDistance(optionalD(f, col, "maxWalkDistance"))
+				.maxWaitTime(optionalD(f, col, "maxWaitTime"))
 				.originActivityType(nullableString(s(f, col, "originActivityType")))
 				.destinationActivityType(nullableString(s(f, col, "destinationActivityType")))
 				.carTravelTime(d(f, col, "carTravelTime"))
@@ -265,6 +266,15 @@ public final class PhaseOneDumpReader {
 
 	private static double d(String[] f, Map<String, Integer> col, String key) {
 		String v = s(f, col, key);
+		return v.isEmpty() ? 0.0 : Double.parseDouble(v);
+	}
+
+	/** Same as {@link #d} but returns 0.0 if the column is absent (for forward/backward
+	 *  compatibility with CSV schemas that added the column in a later version). */
+	private static double optionalD(String[] f, Map<String, Integer> col, String key) {
+		Integer idx = col.get(key);
+		if (idx == null) return 0.0;
+		String v = f[idx];
 		return v.isEmpty() ? 0.0 : Double.parseDouble(v);
 	}
 

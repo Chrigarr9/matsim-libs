@@ -124,7 +124,11 @@ public final class PhaseOneDumpWriter {
 				req.index, origIdx, destIdx,
 				ctx.originDuration(), ctx.destDuration(),
 				sp.marginalUtilityOfPerforming_s,
-				sp.marginalUtilityOfWaitingPt_s);
+				sp.marginalUtilityOfWaitingPt_s,
+				// v2 fields — budget-derived caps populated by DrtRequestFactory when
+				// enableBudgetAwareConstraints is on; default 0 otherwise.
+				req.maxWalkDistance,
+				req.maxWaitTime);
 	}
 
 	private static byte activityIdx(Activity act, Map<String, Integer> typeIdx) {
