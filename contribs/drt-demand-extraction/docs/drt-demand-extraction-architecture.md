@@ -68,7 +68,7 @@ The R1 reference path (`algorithm/exmas/`) replaces `BamasRideExtender` with `Re
 
 ## 2. Budget and Constraint Derivation
 
-Each trip's utility budget determines what level of DRT service the agent would accept. The framework supports four budget→constraint operators, but **only two are live in the main pipeline**; wait and walk admissibility are enforced *holistically* by `BudgetValidator` rather than via precomputed per-dimension caps.
+Each trip's utility budget determines what level of DRT service the agent would accept. Four operators convert budget → per-dimension caps; all four are live in the main pipeline once `enableBudgetAwareConstraints=true`. Holistic validation by `BudgetValidator` still runs at every emitted ride — the per-dimension caps act as fast pre-filters that prune impossible orderings before the holistic check.
 
 ```mermaid
 flowchart LR
@@ -82,24 +82,29 @@ flowchart LR
         MDF["budgetToMaxDetourTime (binary search)<br/>called from DrtRequestFactory"]
         MTT["maxTravelTime = directTT × maxDetourFactor"]
         MC["budgetToMaxCost (closed-form)<br/>baseFare + budget / margUtilMoney<br/>called from RidePostProcessor"]
-    end
-
-    subgraph "Dead-code methods (API surface only)"
-        MWT["budgetToMaxWaitingTime<br/>(no live caller)"]
-        MWD["budgetToMaxWalkDistance<br/>(no live caller)"]
+        MWT["budgetToMaxWaitingTime (binary search)<br/>ideal cap from DrtRequestFactory;<br/>pooled-ride cap from PairGenerator + OrderingEnumerator"]
+        MWD["budgetToMaxWalkDistance (binary search)<br/>ideal cap from DrtRequestFactory;<br/>pooled-ride cap from StopBasedRideGenerator + HyperPoolGenerator"]
     end
 
     subgraph "Holistic validation at every ride site"
-        HOL["BudgetValidator.validateAndPopulateBudgets<br/>scores actual ride trip vs score(best_baseline)<br/>enforces wait + walk admissibility"]
+        HOL["BudgetValidator.validateAndPopulateBudgets<br/>scores actual ride trip vs score(best_baseline)<br/>residual wait + walk admissibility"]
     end
 
     IDEAL --> BUD
     BEST --> BUD
     BUD --> MDF
     BUD --> MC
+    BUD --> MWT
+    BUD --> MWD
     MDF --> MTT
     BUD --> HOL
 ```
+
+**Stage 1 (StopBasedRideGenerator)** runs an **asymmetric two-phase stop search** when `enableBudgetAwareConstraints=true`: the per-pax total walk envelope `maxTotalWalk[i] = 2·budgetToMaxWalkDistance(remainingBudget[i], …)` is consumed pickup-first; whatever's left bounds the dropoff search. This recovers S2S rides where symmetric caps would have rejected a feasible pair just because one pax had a tight cap at the dropoff side.
+
+**Stage 2 (HyperPoolGenerator)** inherits per-pax walk caps from the source S2S rides' remaining budgets — `StopRelocator` rejects moves that push any pax's `accessWalk + egressWalk` above their inherited cap. With `enableStopRelocation=false` (default in Kelheim E2E) this is a no-op assertion; the cap matters only once relocation is enabled.
+
+**BAMAS pair + extension enumeration** adds a `maxWaitTime` pre-filter alongside (not replacing) the existing combined `maxDetourTime` envelope: any pair/ordering that pushes a passenger's pickup delay above `req.maxWaitTime` is pruned before scoring. Same gate, same per-pax cap, applied at `PairGenerator.tryFifoCandidate` / `tryLifoCandidate` and at every spot in `OrderingEnumerator` where a new pickup time is computed.
 
 **Binary-search tolerances**: 5.0 (seconds for time, meters for distance) since 2026-03-26 (was 1.0). **Adapter SPI** (`scoring/DemandExtractionScoringAdapter`): three implementations — eqasim, DMC, stock MATSim. Income enters indirectly via subpopulation-specific scoring parameters; per-trip via eqasim's `marginalUtilityOfMoney(d) = |betaCost| × (d/d_ref)^lambda`. Boolean `includeOpportunityCost` was replaced by an `OpportunityCostModel` enum (NONE / LINEAR / LOG); the older `supportsIterativeConstraints()` SPI method was replaced by `supportsDistanceSpecificMoneyUtility()`.
 
