@@ -414,6 +414,7 @@ class D3EnumerationGapDiagnosticTest {
 		OrderingEnumerator.enumerateAndEvaluateSeeded(
 				targetIndices, graph, cache, reqArray, bestValidDist,
 				seedParentOrigin, seedParentDest, seedNewRequest,
+				/* budgetAwareConstraints= */ false,
 				ord -> seededVisited.add(ord));
 
 		log.info("Seeded-pruned: {} orderings reached evaluator", seededVisited.size());

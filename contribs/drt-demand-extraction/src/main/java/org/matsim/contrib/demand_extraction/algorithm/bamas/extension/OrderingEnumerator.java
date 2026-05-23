@@ -177,6 +177,7 @@ public final class OrderingEnumerator {
 			int[] requestIndices, ShareabilityGraph graph,
 			MatsimNetworkCache network, DrtRequest[] requests,
 			double[] bestValidDist,
+			boolean budgetAwareConstraints,
 			Consumer<Ordering> evaluator) {
 
 		PairInfo[] constraints = extractConstraints(requestIndices, graph);
@@ -202,6 +203,7 @@ public final class OrderingEnumerator {
 				requestIndices, bestValidDist, new boolean[n], new int[n], new double[n], 0,
 				0.0, 0.0,
 				Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY,
+				budgetAwareConstraints,
 				evaluator,
 				connTT, connDist, connUtil);
 	}
@@ -224,6 +226,7 @@ public final class OrderingEnumerator {
 			MatsimNetworkCache network, DrtRequest[] requests,
 			double[] bestValidDist,
 			int[] seedParentOrigin, int[] seedParentDest, int seedNewRequest,
+			boolean budgetAwareConstraints,
 			Consumer<Ordering> evaluator) {
 
 		PairInfo[] constraints = extractConstraints(requestIndices, graph);
@@ -259,6 +262,7 @@ public final class OrderingEnumerator {
 				Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY,
 				seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
 				minIn, totalMinInInit,
+				budgetAwareConstraints,
 				evaluator, connTT, connDist, connUtil);
 	}
 
@@ -323,6 +327,7 @@ public final class OrderingEnumerator {
 			double currentL, double currentU,
 			int[] seedLocalOrigin, int[] seedLocalDest, int seedLocalNewRequest,
 			double[] minIn, double totalMinInRemaining,
+			boolean budgetAwareConstraints,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
@@ -333,6 +338,7 @@ public final class OrderingEnumerator {
 					currentL, currentU,
 					seedLocalDest, seedLocalNewRequest,
 					minIn, totalMinInRemaining,
+					budgetAwareConstraints,
 					evaluator, connTT, connDist, connUtil);
 			return;
 		}
@@ -412,6 +418,7 @@ public final class OrderingEnumerator {
 						newL, newU,
 						seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
 						minIn, newTotalMinInRemaining0,
+						budgetAwareConstraints,
 						evaluator,
 						connTT, connDist, connUtil);
 				used[c] = false;
@@ -469,6 +476,7 @@ public final class OrderingEnumerator {
 				double newPickupTime = currentTime + seg.getTravelTime();
 				DrtRequest reqC = requests[c];
 				double delayC = newPickupTime - reqC.getRequestTime();
+				if (budgetAwareConstraints && delayC > reqC.maxWaitTime) continue;
 				double newLowC = -delayC - reqC.getMaxNegativeDelay();
 				double newHighC = (reqC.getMaxPositiveDelay()
 						- Math.max(0.0, reqC.getPositiveDelayRelComponent())) - delayC;
@@ -492,6 +500,7 @@ public final class OrderingEnumerator {
 						newL, newU,
 						seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
 						minIn, newTotalMinInRemaining,
+						budgetAwareConstraints,
 						evaluator,
 						connTT, connDist, connUtil);
 				used[c] = false;
@@ -507,6 +516,7 @@ public final class OrderingEnumerator {
 			boolean[] used, int[] perm, double[] pickupTimes, int depth,
 			double partialDist, double currentTime,
 			double currentL, double currentU,
+			boolean budgetAwareConstraints,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
@@ -515,6 +525,7 @@ public final class OrderingEnumerator {
 			enumerateDestPrunedWithEval(n, perm, pairs, network, requests,
 					requestIndices, bestValidDist, partialDist, currentTime, pickupTimes,
 					currentL, currentU,
+					budgetAwareConstraints,
 					evaluator, connTT, connDist, connUtil);
 			return;
 		}
@@ -566,6 +577,7 @@ public final class OrderingEnumerator {
 						requestIndices, bestValidDist, used, perm, pickupTimes, 1,
 						0.0, reqC.getRequestTime(),
 						newL, newU,
+						budgetAwareConstraints,
 						evaluator,
 						connTT, connDist, connUtil);
 				used[c] = false;
@@ -595,6 +607,7 @@ public final class OrderingEnumerator {
 				double newPickupTime = currentTime + seg.getTravelTime();
 				DrtRequest reqC = requests[c];
 				double delayC = newPickupTime - reqC.getRequestTime();
+				if (budgetAwareConstraints && delayC > reqC.maxWaitTime) continue;
 				double newLowC = -delayC - reqC.getMaxNegativeDelay();
 				double newHighC = (reqC.getMaxPositiveDelay()
 						- Math.max(0.0, reqC.getPositiveDelayRelComponent())) - delayC;
@@ -615,6 +628,7 @@ public final class OrderingEnumerator {
 					requestIndices, bestValidDist, used, perm, pickupTimes, depth + 1,
 					newPartialDist, newPickupTime,
 					newL, newU,
+					budgetAwareConstraints,
 					evaluator,
 					connTT, connDist, connUtil);
 			used[c] = false;
@@ -629,6 +643,7 @@ public final class OrderingEnumerator {
 			double partialDist, double currentTime,
 			double[] pickupTimes,
 			double currentL, double currentU,
+			boolean budgetAwareConstraints,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
@@ -664,6 +679,7 @@ public final class OrderingEnumerator {
 				bestValidDist, new boolean[n], new int[n], 0,
 				partialDist, currentTime, prevLink, pickupTimes,
 				currentL, currentU,
+				budgetAwareConstraints,
 				evaluator, connTT, connDist, connUtil);
 	}
 
@@ -676,6 +692,7 @@ public final class OrderingEnumerator {
 			Id<Link> prevLinkId,
 			double[] pickupTimes,
 			double currentL, double currentU,
+			boolean budgetAwareConstraints,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
@@ -771,6 +788,11 @@ public final class OrderingEnumerator {
 			double effMaxPosC = reqC.getMaxPositiveDelay() - detourTimeC - posAdjC;
 			double effMaxNegC = reqC.getMaxNegativeDelay() - negAdjC;
 			double delayC = pickupTimes[c] - reqC.getRequestTime();
+			// Defensive guard: pickupTimes[c] was fixed during origin phase, so this
+			// delayC is numerically identical to the one checked there. Redundant when
+			// the origin-phase filter is active; kept as a belt-and-suspenders guard
+			// for callers that enter the dest DFS independently.
+			if (budgetAwareConstraints && delayC > reqC.maxWaitTime) continue;
 			double actualLowC = -delayC - effMaxNegC;
 			double actualHighC = effMaxPosC - delayC;
 			double newL = currentL > actualLowC ? currentL : actualLowC;
@@ -791,6 +813,7 @@ public final class OrderingEnumerator {
 					newPartialDist, newTime,
 					requests[c].destinationLinkId, pickupTimes,
 					newL, newU,
+					budgetAwareConstraints,
 					evaluator, connTT, connDist, connUtil);
 			used[c] = false;
 		}
@@ -819,6 +842,7 @@ public final class OrderingEnumerator {
 			double currentL, double currentU,
 			int[] seedLocalDest, int seedLocalNewRequest,
 			double[] minIn, double totalMinInRemaining,
+			boolean budgetAwareConstraints,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
@@ -856,6 +880,7 @@ public final class OrderingEnumerator {
 				currentL, currentU,
 				seedLocalDest, seedLocalNewRequest,
 				minIn, totalMinInRemaining,
+				budgetAwareConstraints,
 				evaluator, connTT, connDist, connUtil);
 	}
 
@@ -886,6 +911,7 @@ public final class OrderingEnumerator {
 			double currentL, double currentU,
 			int[] seedLocalDest, int seedLocalNewRequest,
 			double[] minIn, double totalMinInRemaining,
+			boolean budgetAwareConstraints,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
@@ -1004,6 +1030,11 @@ public final class OrderingEnumerator {
 				double effMaxPosC = reqC.getMaxPositiveDelay() - detourTimeC - posAdjC;
 				double effMaxNegC = reqC.getMaxNegativeDelay() - negAdjC;
 				double delayC = pickupTimes[c] - reqC.getRequestTime();
+				// Defensive guard: pickupTimes[c] was fixed during origin phase, so this
+				// delayC is numerically identical to the one checked there. Redundant when
+				// the origin-phase filter is active; kept as a belt-and-suspenders guard
+				// for callers that enter the dest DFS independently.
+				if (budgetAwareConstraints && delayC > reqC.maxWaitTime) continue;
 				double actualLowC = -delayC - effMaxNegC;
 				double actualHighC = effMaxPosC - delayC;
 				double newL = currentL > actualLowC ? currentL : actualLowC;
@@ -1027,6 +1058,7 @@ public final class OrderingEnumerator {
 						newL, newU,
 						seedLocalDest, seedLocalNewRequest,
 						minIn, newTotalMinInRemainingDest,
+						budgetAwareConstraints,
 						evaluator, connTT, connDist, connUtil);
 				used[c] = false;
 			}

@@ -51,6 +51,7 @@ class MinInLowerBoundTest {
                 requestIndices, setup.graph, setup.network, setup.requests,
                 bestValidDist,
                 parentOrigin, parentDest, newRequest,
+                /* budgetAwareConstraints= */ false,
                 ordering -> perOrderingConnDist.add(ordering.connDist().clone()));
 
         assertTrue(perOrderingConnDist.size() > 0,

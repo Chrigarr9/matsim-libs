@@ -404,6 +404,7 @@ public final class BamasRideExtender {
 		OrderingEnumerator.enumerateAndEvaluateSeeded(
 				newSet, graph, network, setRequests, bestValidDist,
 				seedParentOrigin, seedParentDest, seedNewRequest,
+				exMasConfig.isEnableBudgetAwareConstraints(),
 				(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
 						bestValidDist, bestRide, stats));
 

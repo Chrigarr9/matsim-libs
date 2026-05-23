@@ -53,6 +53,7 @@ class ParentConsistentSortTest {
                 requestIndices, setup.graph, setup.network, setup.requests,
                 bestValidDist,
                 parentOrigin, parentDest, newRequest,
+                /* budgetAwareConstraints= */ false,
                 ordering -> visitedOriginPerms.add(ordering.originPerm().clone()));
 
         assertTrue(visitedOriginPerms.size() > 0,
@@ -108,6 +109,7 @@ class ParentConsistentSortTest {
                 requestIndices, setup.graph, setup.network, setup.requests,
                 bestValidDist,
                 parentOrigin, parentDest, newRequest,
+                /* budgetAwareConstraints= */ false,
                 ordering -> visitedDestPerms.add(ordering.destPerm().clone()));
 
         assertTrue(visitedDestPerms.size() > 0,

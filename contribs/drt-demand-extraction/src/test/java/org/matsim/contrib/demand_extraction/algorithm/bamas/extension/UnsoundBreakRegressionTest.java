@@ -68,6 +68,7 @@ class UnsoundBreakRegressionTest {
                 requestIndices, setup.graph, setup.network, setup.requests,
                 bestValidDist,
                 parentOrigin, parentDest, newRequest,
+                /* budgetAwareConstraints= */ false,
                 ordering -> visitedOriginPerms.add(ordering.originPerm().clone()));
 
         // The fix must visit an ordering where request 0 is at position 0
