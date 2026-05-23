@@ -189,6 +189,16 @@ public class DemandExtractionListener implements ShutdownListener {
 		ExMasCsvWriter.writeRides(ridesFilename, rides);
 		log.info("Wrote {} rides to: {}", rides.size(), ridesFilename);
 
+		// HyperPool Stage-2 outputs use a distinct schema (multi-stop sequences,
+		// per-pax boarding/alighting indices) and land in their own CSV.
+		if (!algorithmResult.hyperPooledRides().isEmpty()) {
+			String hyperPoolFilename = demandOutputDir + "/" + config.controller().getRunId()
+					+ ".hyperpool_rides.csv";
+			ExMasCsvWriter.writeHyperPooledRides(hyperPoolFilename, algorithmResult.hyperPooledRides());
+			log.info("Wrote {} hyper-pooled rides to: {}",
+					algorithmResult.hyperPooledRides().size(), hyperPoolFilename);
+		}
+
 		// Write Connection Cache (includes depot connections routed in step 5)
 		if (exMasConfig.isCalcPredecessors()) {
 			String connectionCacheFilename = demandOutputDir + "/" + config.controller().getRunId()

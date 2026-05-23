@@ -58,6 +58,7 @@ public final class StopBasedRideGenerator {
 	private final AtomicInteger failedNoDropoffStop = new AtomicInteger();
 	private final AtomicInteger failedWalkDistanceExceeded = new AtomicInteger();
 	private final AtomicInteger failedBudgetExceeded = new AtomicInteger();
+	private final AtomicInteger failedWaitTimeExceeded = new AtomicInteger();
 	private final AtomicInteger skippedSingleRides = new AtomicInteger();
 	private final AtomicLong totalAccessWalkDistance = new AtomicLong();
 	private final AtomicLong totalEgressWalkDistance = new AtomicLong();
@@ -464,6 +465,22 @@ public final class StopBasedRideGenerator {
 					: 1.0;
 		}
 
+		// Step 7b — re-validate the budget-derived wait cap after the stop shift.
+		// The walk-to-stop access time becomes the pax's effective pickup delay
+		// (Step 7 above), and that delay must respect the same maxWaitTime the
+		// budget-aware constraint calculator stamped onto the DrtRequest. The
+		// outer budget check (Step 8) only verifies total utility >= 0 and can
+		// admit candidates whose access walk exceeds the per-pax wait cap.
+		for (int i = 0; i < degree; i++) {
+			double cap = requests[i].maxWaitTime;
+			if (cap > 0 && delays[i] > cap + 1e-6) {
+				failedWaitTimeExceeded.incrementAndGet();
+				log.trace("Ride {} rejected: passenger {} delay {} exceeds maxWaitTime {}",
+						doorToDoor.getIndex(), i, delays[i], cap);
+				return null;
+			}
+		}
+
 		// Step 8: Validate budgets with actual walk distances
 		double[] remainingBudgets = calculateStopBasedBudgets(
 				requests, delays, passengerTravelTimes, passengerDistances,
@@ -563,6 +580,7 @@ public final class StopBasedRideGenerator {
 		failedNoDropoffStop.set(0);
 		failedWalkDistanceExceeded.set(0);
 		failedBudgetExceeded.set(0);
+		failedWaitTimeExceeded.set(0);
 		skippedSingleRides.set(0);
 		totalAccessWalkDistance.set(0);
 		totalEgressWalkDistance.set(0);
@@ -579,6 +597,7 @@ public final class StopBasedRideGenerator {
 		log.info("  Failed - no pickup stop: {}", failedNoPickupStop.get());
 		log.info("  Failed - no dropoff stop: {}", failedNoDropoffStop.get());
 		log.info("  Failed - walk distance exceeded: {}", failedWalkDistanceExceeded.get());
+		log.info("  Failed - wait time exceeded: {}", failedWaitTimeExceeded.get());
 		log.info("  Failed - budget exceeded: {}", failedBudgetExceeded.get());
 
 		long passengers = totalPassengers.get();

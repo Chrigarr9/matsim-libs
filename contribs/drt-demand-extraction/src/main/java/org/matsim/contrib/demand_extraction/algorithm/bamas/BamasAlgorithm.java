@@ -48,6 +48,6 @@ public class BamasAlgorithm implements ExMasAlgorithm {
 				budgetToConstraints);
 		List<Ride> rides = engine.run(requests);
 		// Diagnostics are wired in Phase 3.4 once BamasEngine exposes EnumerationStats.
-		return new AlgorithmResult(rides, Map.of());
+		return new AlgorithmResult(rides, engine.getHyperPooledRides(), Map.of());
 	}
 }
