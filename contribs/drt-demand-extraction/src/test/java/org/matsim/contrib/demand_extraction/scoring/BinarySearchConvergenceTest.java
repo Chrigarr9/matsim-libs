@@ -434,4 +434,74 @@ class BinarySearchConvergenceTest {
 		assertTrue(maxWait <= 3600.0 + 5.0,
 				"Max waiting should be capped at 3600s upper bound");
 	}
+
+	@Test
+	void pooledRideWalkOverload_cachesQuantizationEquivalentCalls() {
+		// Cache is enabled by default (see ExMasConfigGroup.enableConstraintCalcCache),
+		// with default buckets: 5 s time, 50 m distance, 5 s delay.
+		// 900.0 s and 901.5 s fall into the same time bucket → second call should hit cache.
+		DrtRequest request = buildRequest(/* directTT */ 600, /* directDist */ 5000);
+
+		calculator.resetBinarySearchCount();
+
+		double cap1 = calculator.budgetToMaxWalkDistance(
+				/* remainingBudget */ 2.0, testPerson, request,
+				/* actualTT */ 900.0, /* actualDist */ 6500.0, /* delay */ 60.0);
+		long countAfterFirst = calculator.getBinarySearchCount();
+
+		double cap2 = calculator.budgetToMaxWalkDistance(
+				/* remainingBudget */ 2.0, testPerson, request,
+				/* actualTT */ 901.5, /* actualDist */ 6512.0, /* delay */ 61.0);
+		long countAfterSecond = calculator.getBinarySearchCount();
+
+		assertEquals(cap1, cap2,
+				"Quantization-equivalent calls must return identical cached value");
+		assertTrue(countAfterFirst >= 1,
+				"First call should run at least one binary search. count=" + countAfterFirst);
+		assertEquals(countAfterFirst, countAfterSecond,
+				"Second (quantization-equivalent) call must hit cache and not re-run binary search");
+	}
+
+	@Test
+	void pooledRideWaitOverload_cachesQuantizationEquivalentCalls() {
+		DrtRequest request = buildRequest(600, 5000);
+
+		calculator.resetBinarySearchCount();
+
+		double cap1 = calculator.budgetToMaxWaitingTime(
+				2.0, testPerson, request,
+				/* actualTT */ 900.0, /* actualDist */ 6500.0,
+				/* accessWalk */ 200.0, /* egressWalk */ 150.0);
+		long countAfterFirst = calculator.getBinarySearchCount();
+
+		double cap2 = calculator.budgetToMaxWaitingTime(
+				2.0, testPerson, request,
+				/* actualTT */ 901.5, /* actualDist */ 6512.0,
+				/* accessWalk */ 203.0, /* egressWalk */ 151.0);
+		long countAfterSecond = calculator.getBinarySearchCount();
+
+		assertEquals(cap1, cap2,
+				"Quantization-equivalent calls must return identical cached value");
+		assertTrue(countAfterFirst >= 1, "First call should run at least one binary search");
+		assertEquals(countAfterFirst, countAfterSecond,
+				"Second (quantization-equivalent) call must hit cache and not re-run binary search");
+	}
+
+	@Test
+	void pooledRideWalkOverload_doesNotCacheAcrossDifferentBuckets() {
+		DrtRequest request = buildRequest(600, 5000);
+
+		calculator.resetBinarySearchCount();
+
+		// 900 s and 950 s span 10 buckets at 5 s bucket size → distinct cache entries.
+		calculator.budgetToMaxWalkDistance(2.0, testPerson, request, 900.0, 6500.0, 60.0);
+		long countAfterFirst = calculator.getBinarySearchCount();
+
+		calculator.budgetToMaxWalkDistance(2.0, testPerson, request, 950.0, 6500.0, 60.0);
+		long countAfterSecond = calculator.getBinarySearchCount();
+
+		assertTrue(countAfterSecond > countAfterFirst,
+				"Different-bucket calls must re-run binary search. first=" + countAfterFirst
+						+ ", second=" + countAfterSecond);
+	}
 }

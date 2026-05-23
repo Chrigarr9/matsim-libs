@@ -1,9 +1,12 @@
 package org.matsim.contrib.demand_extraction.demand;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.scoring.DemandExtractionScoringAdapter;
 import org.matsim.contrib.demand_extraction.scoring.DrtTripScorer;
+import org.matsim.contrib.demand_extraction.util.SmallLru;
 import org.matsim.contrib.drt.run.DrtConfigGroup;
 import org.matsim.core.config.Config;
 import org.matsim.core.utils.geometry.CoordUtils;
@@ -36,10 +39,17 @@ public class BudgetToConstraintsCalculator {
 	/** Upper bound for binary search on maximum walk distance (meters). */
 	private static final double MAX_WALK_UPPER_BOUND_METERS = 5000.0;
 
+	/** Cache capacity per DrtRequest. Small — the cache amortizes within an enumeration burst,
+	 *  not across full passes. Bigger doesn't pay off; smaller risks thrashing on sibling orderings. */
+	private static final int CACHE_CAPACITY_PER_REQUEST = 4;
+
 	private final ExMasConfigGroup exMasConfig;
 	private final DrtConfigGroup drtConfig;
 	private final DemandExtractionScoringAdapter adapter;
 	private final double walkSpeed;
+
+	/** Test-only counter for cache-hit verification. Incremented on every binary search loop entry. */
+	private final AtomicLong binarySearchCount = new AtomicLong();
 
 	// DRT fare parameters
 	private final double baseFare;
@@ -177,6 +187,22 @@ public class BudgetToConstraintsCalculator {
 		if (remainingBudget <= 0) {
 			return exMasConfig.getMinDrtAccessEgressDistance();
 		}
+
+		SmallLru<DrtRequest.WalkCacheKey, Double> cache = null;
+		DrtRequest.WalkCacheKey key = null;
+		if (exMasConfig.isEnableConstraintCalcCache()) {
+			key = new DrtRequest.WalkCacheKey(
+					quantize(actualTT, exMasConfig.getCacheTimeBucketSec()),
+					quantize(actualDist, exMasConfig.getCacheDistBucketM()),
+					quantize(delay, exMasConfig.getCacheDelayBucketSec()));
+			cache = request.getOrCreateWalkCapCache(CACHE_CAPACITY_PER_REQUEST);
+			Double hit = cache.get(key);
+			if (hit != null) {
+				return hit;
+			}
+		}
+
+		binarySearchCount.incrementAndGet();
 		double lo = 0;
 		double hi = MAX_WALK_UPPER_BOUND_METERS;
 		while (hi - lo > BINARY_SEARCH_TOLERANCE_METERS) {
@@ -188,7 +214,11 @@ public class BudgetToConstraintsCalculator {
 				hi = mid;
 			}
 		}
-		return Math.max(lo, exMasConfig.getMinDrtAccessEgressDistance());
+		double result = Math.max(lo, exMasConfig.getMinDrtAccessEgressDistance());
+		if (cache != null) {
+			cache.put(key, result);
+		}
+		return result;
 	}
 
 	/**
@@ -209,6 +239,23 @@ public class BudgetToConstraintsCalculator {
 		if (remainingBudget <= 0) {
 			return 0.0;
 		}
+
+		SmallLru<DrtRequest.WaitCacheKey, Double> cache = null;
+		DrtRequest.WaitCacheKey key = null;
+		if (exMasConfig.isEnableConstraintCalcCache()) {
+			key = new DrtRequest.WaitCacheKey(
+					quantize(actualTT, exMasConfig.getCacheTimeBucketSec()),
+					quantize(actualDist, exMasConfig.getCacheDistBucketM()),
+					quantize(accessWalk, exMasConfig.getCacheDistBucketM()),
+					quantize(egressWalk, exMasConfig.getCacheDistBucketM()));
+			cache = request.getOrCreateWaitCapCache(CACHE_CAPACITY_PER_REQUEST);
+			Double hit = cache.get(key);
+			if (hit != null) {
+				return hit;
+			}
+		}
+
+		binarySearchCount.incrementAndGet();
 		double lo = 0;
 		double hi = MAX_WAIT_UPPER_BOUND_SECONDS;
 		while (hi - lo > BINARY_SEARCH_TOLERANCE_SECONDS) {
@@ -220,7 +267,25 @@ public class BudgetToConstraintsCalculator {
 				hi = mid;
 			}
 		}
+		if (cache != null) {
+			cache.put(key, lo);
+		}
 		return lo;
+	}
+
+	/** Quantize a floating-point param to a bucket index by integer-floor division. */
+	private static int quantize(double value, int bucket) {
+		return (int) Math.floor(value / bucket);
+	}
+
+	/** Test-only — total binary searches actually executed (cache misses + uncached paths). */
+	public long getBinarySearchCount() {
+		return binarySearchCount.get();
+	}
+
+	/** Test-only — reset the counter. */
+	public void resetBinarySearchCount() {
+		binarySearchCount.set(0);
 	}
 
 	/** Returns the minimum DRT access/egress walk distance floor (metres) from {@link ExMasConfigGroup}. */

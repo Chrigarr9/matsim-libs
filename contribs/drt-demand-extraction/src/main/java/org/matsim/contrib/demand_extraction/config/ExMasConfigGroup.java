@@ -383,6 +383,27 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	 */
 	private boolean enableBudgetAwareConstraints = false;
 
+	/**
+	 * Memoize the result of pooled-ride binary searches in
+	 * {@link org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator}.
+	 * Cache is per-{@code DrtRequest}, fixed at 4 entries, keyed on the
+	 * quantized pooled-ride params (see {@link #cacheTimeBucketSec},
+	 * {@link #cacheDistBucketM}, {@link #cacheDelayBucketSec}).
+	 *
+	 * <p>Only consulted by the pooled-ride overloads, which are themselves
+	 * gated on {@link #enableBudgetAwareConstraints}. Default {@code true}.
+	 */
+	private boolean enableConstraintCalcCache = true;
+
+	/** Time-bucket size for cache-key quantization (seconds). Default 5. */
+	private int cacheTimeBucketSec = 5;
+
+	/** Distance-bucket size for cache-key quantization (meters). Default 50. */
+	private int cacheDistBucketM = 50;
+
+	/** Delay-bucket size for cache-key quantization (seconds). Default 5. */
+	private int cacheDelayBucketSec = 5;
+
     public ExMasConfigGroup() {
         super(GROUP_NAME);
     }
@@ -1260,6 +1281,35 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.enableBudgetAwareConstraints = enableBudgetAwareConstraints;
 	}
 
+	@StringGetter("enableConstraintCalcCache")
+	public boolean isEnableConstraintCalcCache() { return enableConstraintCalcCache; }
+	@StringSetter("enableConstraintCalcCache")
+	public void setEnableConstraintCalcCache(boolean v) { this.enableConstraintCalcCache = v; }
+
+	@StringGetter("cacheTimeBucketSec")
+	public int getCacheTimeBucketSec() { return cacheTimeBucketSec; }
+	@StringSetter("cacheTimeBucketSec")
+	public void setCacheTimeBucketSec(int v) {
+		if (v <= 0) throw new IllegalArgumentException("cacheTimeBucketSec must be positive, got " + v);
+		this.cacheTimeBucketSec = v;
+	}
+
+	@StringGetter("cacheDistBucketM")
+	public int getCacheDistBucketM() { return cacheDistBucketM; }
+	@StringSetter("cacheDistBucketM")
+	public void setCacheDistBucketM(int v) {
+		if (v <= 0) throw new IllegalArgumentException("cacheDistBucketM must be positive, got " + v);
+		this.cacheDistBucketM = v;
+	}
+
+	@StringGetter("cacheDelayBucketSec")
+	public int getCacheDelayBucketSec() { return cacheDelayBucketSec; }
+	@StringSetter("cacheDelayBucketSec")
+	public void setCacheDelayBucketSec(int v) {
+		if (v <= 0) throw new IllegalArgumentException("cacheDelayBucketSec must be positive, got " + v);
+		this.cacheDelayBucketSec = v;
+	}
+
     @Override
     public Map<String, String> getComments() {
         Map<String, String> map = super.getComments();
@@ -1424,6 +1474,17 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Master switch for budget-derived walk and wait caps. Default: false (preserves current pipeline). "
 				+ "When true: per-passenger walk and wait caps are derived from each person's utility budget, "
 				+ "tightening the DRT service envelope to what they can actually afford.");
+
+		map.put("enableConstraintCalcCache",
+				"Memoize pooled-ride binary searches per DrtRequest. 4-entry LRU keyed on quantized params. "
+				+ "Only consulted by the pooled-ride overloads, which are themselves gated on enableBudgetAwareConstraints. "
+				+ "Default: true.");
+		map.put("cacheTimeBucketSec",
+				"Time-bucket size for cache-key quantization (seconds). Default: 5.");
+		map.put("cacheDistBucketM",
+				"Distance-bucket size for cache-key quantization (meters). Default: 50.");
+		map.put("cacheDelayBucketSec",
+				"Delay-bucket size for cache-key quantization (seconds). Default: 5.");
 
         return map;
     }

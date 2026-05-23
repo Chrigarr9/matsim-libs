@@ -6,6 +6,7 @@ import org.matsim.api.core.v01.population.Activity;
 import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Route;
+import org.matsim.contrib.demand_extraction.util.SmallLru;
 import org.matsim.contrib.drt.routing.DrtRoute;
 import org.matsim.core.scoring.functions.ScoringParameters;
 
@@ -133,6 +134,46 @@ public class DrtRequest {
 
 	public ScoringContext getScoringContext() { return scoringContext; }
 	public void setScoringContext(ScoringContext ctx) { this.scoringContext = ctx; }
+
+	/**
+	 * Per-request LRU cache for pooled-ride
+	 * {@link BudgetToConstraintsCalculator#budgetToMaxWalkDistance} results, keyed on
+	 * the quantized (actualTT, actualDist, delay) triple. Lazily allocated on first
+	 * use to avoid pre-emptive allocation for the many requests that never reach
+	 * the pooled-ride code path.
+	 */
+	private SmallLru<WalkCacheKey, Double> walkCapCache;
+
+	/**
+	 * Per-request LRU cache for pooled-ride
+	 * {@link BudgetToConstraintsCalculator#budgetToMaxWaitingTime} results, keyed on
+	 * the quantized (actualTT, actualDist, accessWalk, egressWalk) tuple.
+	 */
+	private SmallLru<WaitCacheKey, Double> waitCapCache;
+
+	public SmallLru<WalkCacheKey, Double> getOrCreateWalkCapCache(int capacity) {
+		SmallLru<WalkCacheKey, Double> c = walkCapCache;
+		if (c == null) {
+			c = new SmallLru<>(capacity);
+			walkCapCache = c;
+		}
+		return c;
+	}
+
+	public SmallLru<WaitCacheKey, Double> getOrCreateWaitCapCache(int capacity) {
+		SmallLru<WaitCacheKey, Double> c = waitCapCache;
+		if (c == null) {
+			c = new SmallLru<>(capacity);
+			waitCapCache = c;
+		}
+		return c;
+	}
+
+	/** Cache key for the pooled-ride walk overload. */
+	public record WalkCacheKey(int ttBucket, int distBucket, int delayBucket) {}
+
+	/** Cache key for the pooled-ride wait overload. */
+	public record WaitCacheKey(int ttBucket, int distBucket, int accessBucket, int egressBucket) {}
 
     private DrtRequest(Builder builder) {
         this.index = builder.index;
