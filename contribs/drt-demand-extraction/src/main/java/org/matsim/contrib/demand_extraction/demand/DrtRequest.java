@@ -140,22 +140,24 @@ public class DrtRequest {
 	 * {@link BudgetToConstraintsCalculator#budgetToMaxWalkDistance} results, keyed on
 	 * the quantized (actualTT, actualDist, delay) triple. Lazily allocated on first
 	 * use to avoid pre-emptive allocation for the many requests that never reach
-	 * the pooled-ride code path.
+	 * the pooled-ride code path. Volatile + double-checked locking is required
+	 * because Stage 1 parallel-streams over rides that may share a DrtRequest.
 	 */
-	private SmallLru<WalkCacheKey, Double> walkCapCache;
+	private volatile SmallLru<WalkCacheKey, Double> walkCapCache;
 
-	/**
-	 * Per-request LRU cache for pooled-ride
-	 * {@link BudgetToConstraintsCalculator#budgetToMaxWaitingTime} results, keyed on
-	 * the quantized (actualTT, actualDist, accessWalk, egressWalk) tuple.
-	 */
-	private SmallLru<WaitCacheKey, Double> waitCapCache;
+	/** See {@link #walkCapCache}. */
+	private volatile SmallLru<WaitCacheKey, Double> waitCapCache;
 
 	public SmallLru<WalkCacheKey, Double> getOrCreateWalkCapCache(int capacity) {
 		SmallLru<WalkCacheKey, Double> c = walkCapCache;
 		if (c == null) {
-			c = new SmallLru<>(capacity);
-			walkCapCache = c;
+			synchronized (this) {
+				c = walkCapCache;
+				if (c == null) {
+					c = new SmallLru<>(capacity);
+					walkCapCache = c;
+				}
+			}
 		}
 		return c;
 	}
@@ -163,8 +165,13 @@ public class DrtRequest {
 	public SmallLru<WaitCacheKey, Double> getOrCreateWaitCapCache(int capacity) {
 		SmallLru<WaitCacheKey, Double> c = waitCapCache;
 		if (c == null) {
-			c = new SmallLru<>(capacity);
-			waitCapCache = c;
+			synchronized (this) {
+				c = waitCapCache;
+				if (c == null) {
+					c = new SmallLru<>(capacity);
+					waitCapCache = c;
+				}
+			}
 		}
 		return c;
 	}

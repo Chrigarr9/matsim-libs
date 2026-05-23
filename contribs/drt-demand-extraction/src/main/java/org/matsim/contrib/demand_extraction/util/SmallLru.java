@@ -9,12 +9,17 @@ import java.util.Map;
  * <p>Used by {@link org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator}
  * to memoize the result of pooled-ride binary searches per {@code DrtRequest}.
  * Capacity is typically small (4 entries) — the cache amortizes redundant
- * searches within a single ordering-enumeration burst where multiple sibling
- * orderings of the same passenger evaluate against quantization-equivalent
- * params.
+ * searches within an enumeration burst where sibling orderings of the same
+ * passenger evaluate against quantization-equivalent params.
  *
- * <p>Not thread-safe. Each {@code DrtRequest} owns its own cache; concurrent
- * enumeration touches different requests.
+ * <p>Thread-safe by coarse synchronization on the cache instance. Stage 1's
+ * {@code parallelStream} can invoke the calculator on the same {@code DrtRequest}
+ * from multiple worker threads when that request appears in several source
+ * rides; accessOrder={@code true} {@link LinkedHashMap} mutates its internal
+ * linked-list on every {@code get}, so unsynchronized concurrent access would
+ * corrupt the cache. Contention is per-{@code DrtRequest} and the critical
+ * sections are O(1) — the cost is negligible compared to a 15+-iteration
+ * binary search.
  */
 public final class SmallLru<K, V> {
 
@@ -34,15 +39,15 @@ public final class SmallLru<K, V> {
 		};
 	}
 
-	public V get(K key) {
+	public synchronized V get(K key) {
 		return map.get(key);
 	}
 
-	public void put(K key, V value) {
+	public synchronized void put(K key, V value) {
 		map.put(key, value);
 	}
 
-	public int size() {
+	public synchronized int size() {
 		return map.size();
 	}
 }
