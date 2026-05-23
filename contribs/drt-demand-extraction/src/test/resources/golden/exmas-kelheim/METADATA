@@ -1,9 +1,10 @@
 Golden CSVs for ExMasReferencePortRegressionTest.
 
 source_branch=feature/exmas-reference-fork
-source_sha=386fbf4ec3e5d5b01cc20b24e0030e0ebd3cbb74
-generated_at=2026-04-22T14:08:41+02:00
+source_sha=bfade56c3c4cc9eda607e480334d3e5f43f3b0cb
+generated_at=2026-05-23T08:45:01+02:00
 generator=ExMasAlgorithmE2ETest (kelheim + ExMAS reference algorithm, unpruned; pre-A6 named "R1")
+generator_invocation=mvn test -Dtest="ExMasAlgorithmE2ETest#kelheimAlgorithmRunsEndToEnd[Kelheim + R1]"
 java=openjdk version "25.0.2" 2026-01-20 LTS
 scenario=matsim-examples kelheim-mini (1% sample)
 
@@ -12,11 +13,12 @@ R1 configuration (paper Algorithm 2, full 2^n enumeration):
   - No pruning (all PruningMode gates off)
   - MATSim scoring model (replaces Python WtS formula)
 
-Note: this golden no longer matches main binary (main still takes list(product(*E))[0]).
-  The regression test guards future drift in the corrected R1, not against main parity.
+Note: this golden no longer matches main's binary (main still takes [0] from
+  list(product(*E))). The regression test guards against future drift in the
+  corrected R1 implementation, not against main parity.
 
 Counts:
-  exmas_rides.csv:    952 rides
+  exmas_rides.csv:    827 rides
   drt_requests.csv:   246 requests
 
 Regenerate with: scripts/regenerate_exmas_reference_golden.sh [--force]
