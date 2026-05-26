@@ -455,13 +455,19 @@ public final class ExMasCsvWriter {
 	public static void writeHyperPooledRides(String filename, List<HyperPooledRide> hyperPooledRides) {
 		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
 			// Header with all hyper-pooled ride attributes
+			// Extension-2 per-pax columns (requestTags, hubIds) are APPENDED at
+			// the END of the header — never inserted in the middle — so existing
+			// consumers that read by column name or by trailing position keep
+			// working. They mirror the iteration order of HyperPooledRide.getRequests()
+			// and the `[a | b | c]` format already used for other per-pax fields.
 			writer.write("rideIndex,degree," +
 					"sourceRideIndices," +
 					"stopSequence,stopSequenceX,stopSequenceY," +
 					"passengerBoardingStopIndices,passengerAlightingStopIndices," +
 					"passengerTotalWalkDistances,passengerInVehicleTimes," +
 					"totalTravelTime,totalDistance,totalVKT," +
-					"passengerDelays,remainingBudgets");
+					"passengerDelays,remainingBudgets," +
+					"requestTags,hubIds");
 			writer.newLine();
 
 			List<HyperPooledRide> sortedRides = hyperPooledRides.stream()
@@ -511,15 +517,27 @@ public final class ExMasCsvWriter {
 				// Format remaining budgets
 				String remainingBudgetsStr = formatDoubleArray(ride.getRemainingBudgets());
 
+				// Extension-2 per-pax columns: same iteration order as
+				// HyperPooledRide.getRequests(), same `[a | b | c]` format used
+				// elsewhere. Null values render as empty inside the list.
+				DrtRequest[] paxRequests = ride.getRequests();
+				String requestTagsStr = formatStringArray(Arrays.stream(paxRequests)
+						.map(r -> r.requestTag != null ? r.requestTag : "")
+						.toArray(String[]::new));
+				String hubIdsStr = formatStringArray(Arrays.stream(paxRequests)
+						.map(r -> r.hubId != null ? r.hubId : "")
+						.toArray(String[]::new));
+
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.4f,%s,%s",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.4f,%s,%s,%s,%s",
 						ride.getIndex(), ride.getDegree(),
 						sourceRideIndicesStr,
 						stopSequenceStr, stopSequenceXStr, stopSequenceYStr,
 						boardingIndices, alightingIndices,
 						totalWalkDistances, inVehicleTimes,
 						totalTravelTime, totalDistance, totalVKT,
-						delaysStr, remainingBudgetsStr));
+						delaysStr, remainingBudgetsStr,
+						requestTagsStr, hubIdsStr));
 				writer.newLine();
 			}
 		} catch (IOException e) {
