@@ -404,6 +404,18 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	/** Delay-bucket size for cache-key quantization (seconds). Default 5. */
 	private int cacheDelayBucketSec = 5;
 
+	// ===========================================
+	// Paper 2 Extension 2 — hub-service settings
+	// ===========================================
+
+	/**
+	 * Path to the hub-set GeoJSON file produced by the Phase-3 Python hub
+	 * discovery. Consumed in Phase 4 by virtual-trip expansion in
+	 * {@link org.matsim.contrib.demand_extraction.demand.DrtRequestFactory} once
+	 * that path is wired up. Null = disabled (no hub-service rewriting).
+	 */
+	private String hubSetGeoJsonPath = null;
+
     public ExMasConfigGroup() {
         super(GROUP_NAME);
     }
@@ -1310,6 +1322,20 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.cacheDelayBucketSec = v;
 	}
 
+	// ===========================================
+	// Paper 2 Extension 2 — hub-service getters/setters
+	// ===========================================
+
+	@StringGetter("hubSetGeoJsonPath")
+	public String getHubSetGeoJsonPath() {
+		return hubSetGeoJsonPath;
+	}
+
+	@StringSetter("hubSetGeoJsonPath")
+	public void setHubSetGeoJsonPath(String hubSetGeoJsonPath) {
+		this.hubSetGeoJsonPath = hubSetGeoJsonPath;
+	}
+
     @Override
     public Map<String, String> getComments() {
         Map<String, String> map = super.getComments();
@@ -1485,6 +1511,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Distance-bucket size for cache-key quantization (meters). Default: 50.");
 		map.put("cacheDelayBucketSec",
 				"Delay-bucket size for cache-key quantization (seconds). Default: 5.");
+
+		map.put("hubSetGeoJsonPath",
+				"Paper-2 Extension 2: path to the hub-set GeoJSON file produced by Phase-3 Python "
+				+ "hub discovery. FeatureCollection of Point features with a 'hub_id' string property "
+				+ "and [x, y] coordinates in the scenario CRS. Consumed by virtual-trip expansion in "
+				+ "Phase 4. Default: null (disabled).");
 
         return map;
     }
