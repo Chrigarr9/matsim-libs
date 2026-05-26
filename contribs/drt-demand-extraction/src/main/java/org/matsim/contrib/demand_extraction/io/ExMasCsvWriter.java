@@ -137,6 +137,9 @@ public final class ExMasCsvWriter {
 		// consumers that read by column name or by trailing position keep
 		// working. They mirror the iteration order and `[a | b | c]` format of
 		// the existing per-pax `personIds` field.
+		// Extension-2 Task 7.2: `peak_pax` (max simultaneous in-vehicle
+		// occupancy) is appended AFTER requestTags/hubIds — required by the
+		// class-aware path cover (rev-3 §7.4b).
 		writer.write("rideIndex,degree,kind,variant," +
 				"requestIndices,personIds,groupIds,requestTimes,isCommutes,isEducations," +
 				"originsOrdered,destinationsOrdered," +
@@ -145,7 +148,8 @@ public final class ExMasCsvWriter {
 				"pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty," +
 				"dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty," +
 				"accessWalkDistances,egressWalkDistances," +
-				"requestTags,hubIds");
+				"requestTags,hubIds," +
+				"peak_pax");
 		writer.newLine();
 	}
 
@@ -239,7 +243,7 @@ public final class ExMasCsvWriter {
 				}
 
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s,%d",
 						ride.getIndex(), ride.getDegree(), ride.getKind(), variant,
 						reqIndices, personIds, groupIds, requestTimes, isCommutes, isEducations,
 						origins, destinations,
@@ -249,7 +253,8 @@ public final class ExMasCsvWriter {
 						pickupLinkId, pickupX, pickupY, pickupPenalty,
 						dropoffLinkId, dropoffX, dropoffY, dropoffPenalty,
 						accessWalks, egressWalks,
-						requestTags, hubIds));
+						requestTags, hubIds,
+						ride.getPeakPax()));
 				writer.newLine();
 			}
 		}
@@ -460,6 +465,10 @@ public final class ExMasCsvWriter {
 			// consumers that read by column name or by trailing position keep
 			// working. They mirror the iteration order of HyperPooledRide.getRequests()
 			// and the `[a | b | c]` format already used for other per-pax fields.
+			// Extension-2 Task 7.2: `peak_pax` (max simultaneous in-vehicle
+			// occupancy over the stop sequence) is appended AFTER
+			// requestTags/hubIds — required by the class-aware path cover
+			// (rev-3 §7.4b).
 			writer.write("rideIndex,degree," +
 					"sourceRideIndices," +
 					"stopSequence,stopSequenceX,stopSequenceY," +
@@ -467,7 +476,8 @@ public final class ExMasCsvWriter {
 					"passengerTotalWalkDistances,passengerInVehicleTimes," +
 					"totalTravelTime,totalDistance,totalVKT," +
 					"passengerDelays,remainingBudgets," +
-					"requestTags,hubIds");
+					"requestTags,hubIds," +
+					"peak_pax");
 			writer.newLine();
 
 			List<HyperPooledRide> sortedRides = hyperPooledRides.stream()
@@ -529,7 +539,7 @@ public final class ExMasCsvWriter {
 						.toArray(String[]::new));
 
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.4f,%s,%s,%s,%s",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.4f,%s,%s,%s,%s,%d",
 						ride.getIndex(), ride.getDegree(),
 						sourceRideIndicesStr,
 						stopSequenceStr, stopSequenceXStr, stopSequenceYStr,
@@ -537,7 +547,8 @@ public final class ExMasCsvWriter {
 						totalWalkDistances, inVehicleTimes,
 						totalTravelTime, totalDistance, totalVKT,
 						delaysStr, remainingBudgetsStr,
-						requestTagsStr, hubIdsStr));
+						requestTagsStr, hubIdsStr,
+						ride.getPeakPax()));
 				writer.newLine();
 			}
 		} catch (IOException e) {

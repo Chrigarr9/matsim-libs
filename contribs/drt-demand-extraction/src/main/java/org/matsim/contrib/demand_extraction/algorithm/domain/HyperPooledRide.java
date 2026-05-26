@@ -412,6 +412,37 @@ public final class HyperPooledRide {
         return totalRideDistance / 1000.0;
     }
 
+    /**
+     * Returns the maximum simultaneous in-vehicle passenger count over the
+     * vehicle's stop sequence — required by the Extension-2 class-aware
+     * path cover (rev-3 §7.4b).
+     *
+     * <p>Sweeps the stop sequence in order, +1 at each stop where any pax
+     * boards, −1 at each stop where any pax alights, and tracks the running
+     * max. Unlike the regular {@link Ride} case (pickups always before
+     * dropoffs), HyperPool sequences may interleave boardings and
+     * alightings, so the peak can be strictly less than the degree.
+     */
+    public int getPeakPax() {
+        int n = stopSequence.length;
+        int[] delta = new int[n];
+        for (int i = 0; i < passengerBoardingStopIndices.length; i++) {
+            delta[passengerBoardingStopIndices[i]]++;
+        }
+        for (int i = 0; i < passengerAlightingStopIndices.length; i++) {
+            delta[passengerAlightingStopIndices[i]]--;
+        }
+        int occ = 0;
+        int peak = 0;
+        for (int s = 0; s < n; s++) {
+            occ += delta[s];
+            if (occ > peak) {
+                peak = occ;
+            }
+        }
+        return peak;
+    }
+
     // ==================== Builder ====================
 
     /**

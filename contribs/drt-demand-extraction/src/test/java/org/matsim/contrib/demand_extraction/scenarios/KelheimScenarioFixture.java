@@ -192,9 +192,10 @@ public class KelheimScenarioFixture implements ExMasScenarioFixture {
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
 				// 35 baseline columns + 2 Extension-2 per-pax columns
-				// (requestTags, hubIds) appended at the end of exmas_rides.csv.
-				check(parts.length == 37,
-						"Each ride should have 37 fields, got " + parts.length);
+				// (requestTags, hubIds) + 1 Extension-2 per-ride column
+				// (peak_pax, Task 7.2) appended at the end of exmas_rides.csv.
+				check(parts.length == 38,
+						"Each ride should have 38 fields, got " + parts.length);
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();

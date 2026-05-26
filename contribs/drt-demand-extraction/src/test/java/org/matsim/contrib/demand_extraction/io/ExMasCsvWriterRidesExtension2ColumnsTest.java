@@ -53,17 +53,20 @@ class ExMasCsvWriterRidesExtension2ColumnsTest {
         assertEquals(2, lines.size());
 
         String header = lines.get(0);
-        // Trailing two columns must be exactly `requestTags,hubIds` (appended).
-        assertTrue(header.endsWith(",requestTags,hubIds"),
-                "Header must end with requestTags,hubIds — was: " + header);
+        // requestTags,hubIds remain APPENDED — never inserted in the middle.
+        // Task 7.2 added peak_pax as a per-ride column AFTER hubIds. The
+        // per-pax pair (requestTags, hubIds) still ends at headerCols[len-2]/[len-3].
+        assertTrue(header.contains(",requestTags,hubIds,"),
+                "Header must contain ,requestTags,hubIds, in order — was: " + header);
 
         // Pre-existing leading columns survive untouched (sanity check).
         assertTrue(header.startsWith("rideIndex,degree,kind,variant,"),
                 "Existing leading header schema unchanged — was: " + header);
 
         String[] headerCols = header.split(",", -1);
-        int tagsIdx = headerCols.length - 2;
-        int hubsIdx = headerCols.length - 1;
+        // requestTags / hubIds sit immediately before peak_pax (Task 7.2).
+        int tagsIdx = headerCols.length - 3;
+        int hubsIdx = headerCols.length - 2;
         assertEquals("requestTags", headerCols[tagsIdx]);
         assertEquals("hubIds", headerCols[hubsIdx]);
 

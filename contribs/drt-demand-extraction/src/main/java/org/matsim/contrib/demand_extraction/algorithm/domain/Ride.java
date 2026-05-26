@@ -220,6 +220,41 @@ public final class Ride {
     public double[] getAccessWalkDistances() { return accessWalkDistances != null ? accessWalkDistances.clone() : null; }
     public double[] getEgressWalkDistances() { return egressWalkDistances != null ? egressWalkDistances.clone() : null; }
 
+    /**
+     * Returns the maximum simultaneous in-vehicle passenger count over the
+     * ride's stop sequence — required by the Extension-2 class-aware path
+     * cover (rev-3 §7.4b).
+     *
+     * <p>For a {@link Ride}, the implicit stop sequence is
+     * {@code [all pickups in origin-order, then all dropoffs in
+     * destination-order]} — pickups always precede dropoffs in the sweep,
+     * so the running max is always {@code degree}. The method is still
+     * implemented as an explicit +1/-1 sweep (rather than returning
+     * {@code degree} directly) so it stays semantically aligned with the
+     * {@link HyperPooledRide} counterpart and survives any future change
+     * to ride structure (e.g. interleaved sequences).
+     *
+     * <p>NB: per-pax wall-clock timestamps are NOT stored on the Ride
+     * object; only stop-sequence ordering matters here, so we sweep over
+     * the event order directly rather than chasing absolute times.
+     */
+    public int getPeakPax() {
+        int occ = 0;
+        int peak = 0;
+        // All pickups first.
+        for (int i = 0; i < originsOrderedRequests.length; i++) {
+            occ++;
+            if (occ > peak) {
+                peak = occ;
+            }
+        }
+        // Then all dropoffs.
+        for (int i = 0; i < destinationsOrderedRequests.length; i++) {
+            occ--;
+        }
+        return peak;
+    }
+
     // Builder pattern
     public static Builder builder() {
         return new Builder();
