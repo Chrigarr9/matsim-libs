@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.function.Predicate;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -22,6 +23,8 @@ import org.matsim.api.core.v01.population.Population;
 import java.util.Set;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.FleetSide;
+import org.matsim.core.network.NetworkUtils;
 import org.matsim.core.router.TripStructureUtils;
 import org.matsim.core.router.TripStructureUtils.Trip;
 
@@ -70,6 +73,16 @@ public class DrtRequestFactory {
 	 */
 	private volatile RequestClassificationLoader requestClassificationLoader;
 
+	/**
+	 * Paper-2 Extension 2: lazily-loaded hub set for virtual-trip expansion.
+	 * Populated once on the first {@link #buildRequests(Population)} call when
+	 * {@link ExMasConfigGroup#getHubSetGeoJsonPath()} is non-null; stays null
+	 * in the Kelheim path where no hub set is configured. Loaded from disk
+	 * here rather than via Guice because the GeoJSON may live anywhere on disk
+	 * and may not exist at injector-construction time.
+	 */
+	private volatile List<HubSetLoader.Hub> hubs;
+
 	@Inject
 	public DrtRequestFactory(ExMasConfigGroup config, ModeRoutingCache modeRoutingCache,
 			ChainIdentifier chainIdentifier, CommuteIdentifier commuteIdentifier,
@@ -103,6 +116,53 @@ public class DrtRequestFactory {
 			}
 		}
 
+		// Paper-2 Extension 2: load hub set once, lazily, when virtual-trip
+		// expansion is configured. Both hubSetGeoJsonPath AND fleetSide must
+		// be set to enable expansion; either being null disables it. If a hub
+		// set is configured but fleetSide is missing, fail fast — that's a
+		// misconfiguration that would silently drop the entire connecting
+		// cohort downstream.
+		String hubSetPath = exmasConfig.getHubSetGeoJsonPath();
+		FleetSide fleetSide = exmasConfig.getFleetSide();
+		if (hubSetPath != null && fleetSide == null) {
+			throw new IllegalStateException(
+					"ExMasConfigGroup.hubSetGeoJsonPath is set (" + hubSetPath
+					+ ") but fleetSide is null. Both must be configured together to "
+					+ "enable virtual-trip expansion. Set ExMasConfigGroup.fleetSide "
+					+ "to RURAL or URBAN, or clear hubSetGeoJsonPath to disable "
+					+ "expansion.");
+		}
+		if (hubSetPath != null && hubs == null) {
+			try {
+				hubs = new HubSetLoader().load(Path.of(hubSetPath));
+				log.info("Loaded {} hubs from {} (fleetSide={})",
+						hubs.size(), hubSetPath, fleetSide);
+			} catch (IOException e) {
+				throw new RuntimeException(
+						"Failed to load hub set from " + hubSetPath, e);
+			}
+		}
+
+		// Spatial pre-filter (already constructed below for trip filtering) doubles
+		// as the metropole-polygon source for virtual-trip expansion: a coord is
+		// "inside the metropole" iff TripSpatialPreFilter.containsPoint returns
+		// true (the loaded exclusion polygon IS the metropole polygon under the
+		// Lyon Extension 2 config).
+		TripSpatialPreFilter expansionMetropoleSource = null;
+		if (hubs != null) {
+			// We need TripSpatialPreFilter to have an exclusion polygon to drive
+			// the rural-vs-urban endpoint detection. The spatial filter below
+			// will be re-constructed; build a dedicated copy here for clarity.
+			expansionMetropoleSource = new TripSpatialPreFilter(exmasConfig);
+			if (!exmasConfig.hasTripExclusionZone()) {
+				log.warn("Virtual-trip expansion is enabled (hubSetGeoJsonPath={}) but no "
+						+ "tripFilterExclusionShapefilePath is configured. The metropole "
+						+ "polygon is required to identify which endpoint of a connecting "
+						+ "request is urban. Falling back to: 'destination is always urban'.",
+						hubSetPath);
+			}
+		}
+
 		// Identify commute trips before building requests
 		commuteIdentifier.identifyCommutes(population);
 
@@ -124,6 +184,7 @@ public class DrtRequestFactory {
 		int filteredByCommute = 0;
 		int filteredBySpatial = 0;
 		int filteredByExcludedMode = 0;
+		int filteredByExternalTag = 0;
 
 		int processedPersons = 0;
 		int totalPersons = population.getPersons().size();
@@ -210,6 +271,21 @@ public class DrtRequestFactory {
 					continue;
 				}
 
+				// Paper-2 Extension 2: drop "external" trips pre-construction.
+				// These were classified by the Phase-2 Python pass as falling
+				// entirely outside the rural+metropole study area; emitting them
+				// would only pollute the request list. Only applies when a
+				// classifications CSV is loaded; without it the tag is null and
+				// the trip passes through unchanged (Kelheim default).
+				if (requestClassificationLoader != null) {
+					String tagPreCheck = requestClassificationLoader.lookup(
+							person.getId().toString(), tripIdx);
+					if ("external".equals(tagPreCheck)) {
+						filteredByExternalTag++;
+						continue;
+					}
+				}
+
 				// Check commute/education status and apply filter
 				boolean isCommute = commuteIdentifier.isCommute(person.getId(), tripIdx);
 				boolean isEducation = commuteIdentifier.isEducation(person.getId(), tripIdx);
@@ -260,12 +336,45 @@ public class DrtRequestFactory {
 			}
 		}
 
+		// Paper-2 Extension 2 — virtual-trip expansion (post-construction pass).
+		// For each request tagged "connecting", emit |H| copies (one per hub)
+		// with the cross-boundary endpoint replaced by the hub coord. Other
+		// tags (rural_intra, urban_intra, null) pass through unchanged. Skipped
+		// entirely when hubs == null (Kelheim default and any pre-Extension-2
+		// path), preserving prior request-list contents exactly.
+		int connectingExpanded = 0;
+		int virtualEmitted = 0;
+		if (hubs != null && fleetSide != null) {
+			Predicate<Coord> isInsideMetropole = (expansionMetropoleSource != null)
+					? expansionMetropoleSource::containsPoint
+					: c -> false;
+
+			List<DrtRequest> expanded = new ArrayList<>(requests.size());
+			for (DrtRequest r : requests) {
+				if ("connecting".equals(r.requestTag)) {
+					List<DrtRequest> copies = expandConnecting(
+							r, hubs, fleetSide, isInsideMetropole, network);
+					expanded.addAll(copies);
+					connectingExpanded++;
+					virtualEmitted += copies.size();
+				} else {
+					expanded.add(r);
+				}
+			}
+			requests = expanded;
+			log.info("Virtual-trip expansion: expanded {} connecting request(s) into {} "
+					+ "virtual DrtRequest(s) (|H|={}, fleetSide={})",
+					connectingExpanded, virtualEmitted, hubs.size(), fleetSide);
+		}
+
 		long elapsed = System.currentTimeMillis() - startTime;
 		double seconds = elapsed / 1000.0;
 		log.info("Request building complete: {} requests from {} persons in {}s "
-				+ "(filtered {} by commute filter, {} by spatial/exclusion-zone filter, {} by excluded mode)",
+				+ "(filtered {} by commute filter, {} by spatial/exclusion-zone filter, "
+				+ "{} by excluded mode, {} by external tag)",
 				requests.size(), totalPersons, String.format("%.1f", seconds),
-				filteredByCommute, filteredBySpatial, filteredByExcludedMode);
+				filteredByCommute, filteredBySpatial, filteredByExcludedMode,
+				filteredByExternalTag);
 
 		return requests;
 	}
@@ -488,6 +597,121 @@ public class DrtRequestFactory {
 		}
 
 		throw new IllegalStateException("Activity has neither coordinate nor link ID: " + activity);
+	}
+
+	/**
+	 * Paper-2 Extension 2 — virtual-trip expansion for one {@code connecting}
+	 * request. Returns {@code |hubs|} copies of {@code original}, each with
+	 * one endpoint replaced by a hub coordinate (which endpoint depends on
+	 * {@code fleetSide}):
+	 *
+	 * <ul>
+	 *   <li>{@link FleetSide#RURAL} — the URBAN endpoint (the one inside the
+	 *       metropole polygon) is replaced. The rural fleet sees a rural-to-hub
+	 *       trip.</li>
+	 *   <li>{@link FleetSide#URBAN} — the RURAL endpoint is replaced. The
+	 *       urban fleet sees a hub-to-urban trip.</li>
+	 * </ul>
+	 *
+	 * <p>For non-connecting tags ({@code rural_intra}, {@code urban_intra},
+	 * {@code null}) this returns the single-element list {@code [original]}.
+	 *
+	 * <p>The replaced endpoint's {@code linkId} is snapped to the nearest
+	 * network link to the hub via {@link NetworkUtils#getNearestLink}; the
+	 * link-corner coordinates are recomputed off that new link. Every other
+	 * field is preserved verbatim, including {@code directTravelTime} and
+	 * {@code directDistance} — Phase 4 produces row-count and tagging
+	 * correctness; Phase 5 re-routes the virtual leg for correct metrics.
+	 *
+	 * <p>The {@link ScoringContext} from {@code original} is reused on every
+	 * copy. Since {@code directTravelTime} / {@code directDistance} are
+	 * unchanged, the context's pre-built {@code DrtRoute} template and
+	 * walk-leg routes remain valid.
+	 *
+	 * <p>If neither endpoint is identified as inside the metropole by
+	 * {@code isInsideMetropole}, the fallback is to treat the DESTINATION as
+	 * urban (i.e. rural→urban orientation). This keeps the helper total even
+	 * when the configured polygon is missing or doesn't cover the request.
+	 *
+	 * <p>Package-private + static so unit tests can drive it without a
+	 * Controler-built injector.
+	 */
+	static List<DrtRequest> expandConnecting(
+			DrtRequest original,
+			List<HubSetLoader.Hub> hubs,
+			FleetSide fleetSide,
+			Predicate<Coord> isInsideMetropole,
+			Network network) {
+		if (!"connecting".equals(original.requestTag)) {
+			return List.of(original);
+		}
+		if (hubs == null || hubs.isEmpty()) {
+			return List.of(original);
+		}
+
+		// Identify which endpoint is urban (inside metropole) and which is
+		// rural. The fallback (when neither tests inside) treats the
+		// destination as urban — this matches the dominant home-to-work
+		// orientation in the rural-to-urban connecting cohort.
+		Coord originCoord = new Coord(original.originX, original.originY);
+		Coord destCoord = new Coord(original.destinationX, original.destinationY);
+		boolean originIsUrban = isInsideMetropole.test(originCoord);
+		boolean destIsUrban = isInsideMetropole.test(destCoord);
+		boolean replaceOrigin;
+		if (fleetSide == FleetSide.RURAL) {
+			// Rural fleet sees rural-to-hub: replace the urban endpoint.
+			if (originIsUrban && !destIsUrban) {
+				replaceOrigin = true;     // origin was urban, becomes hub
+			} else {
+				replaceOrigin = false;    // default: destination was urban
+			}
+		} else { // URBAN
+			// Urban fleet sees hub-to-urban: replace the rural endpoint.
+			if (destIsUrban && !originIsUrban) {
+				replaceOrigin = true;     // origin was rural, becomes hub
+			} else if (!destIsUrban && originIsUrban) {
+				replaceOrigin = false;    // destination was rural, becomes hub
+			} else {
+				// Fallback: assume origin is rural (mirrors the
+				// rural-fleet fallback orientation).
+				replaceOrigin = true;
+			}
+		}
+
+		List<DrtRequest> copies = new ArrayList<>(hubs.size());
+		for (HubSetLoader.Hub hub : hubs) {
+			Coord hubCoord = hub.coord();
+			Link hubLink = NetworkUtils.getNearestLink(network, hubCoord);
+			Id<Link> hubLinkId = hubLink.getId();
+			Coord hubLinkFrom = hubLink.getFromNode().getCoord();
+			Coord hubLinkTo = hubLink.getToNode().getCoord();
+
+			DrtRequest.Builder b = original.toBuilder()
+					.hubId(hub.id());
+
+			if (replaceOrigin) {
+				b.originLinkId(hubLinkId)
+				 .originX(hubCoord.getX())
+				 .originY(hubCoord.getY())
+				 .originLinkCoordFromX(hubLinkFrom.getX())
+				 .originLinkCoordFromY(hubLinkFrom.getY())
+				 .originLinkCoordToX(hubLinkTo.getX())
+				 .originLinkCoordToY(hubLinkTo.getY());
+			} else {
+				b.destinationLinkId(hubLinkId)
+				 .destinationX(hubCoord.getX())
+				 .destinationY(hubCoord.getY())
+				 .destinationLinkCoordFromX(hubLinkFrom.getX())
+				 .destinationLinkCoordFromY(hubLinkFrom.getY())
+				 .destinationLinkCoordToX(hubLinkTo.getX())
+				 .destinationLinkCoordToY(hubLinkTo.getY());
+			}
+
+			DrtRequest copy = b.build();
+			copy.setScoringContext(original.getScoringContext());
+			copies.add(copy);
+		}
+		return copies;
 	}
 
 	private int getPersonAge(Person person) {

@@ -409,12 +409,39 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// ===========================================
 
 	/**
+	 * Which fleet this extraction is producing demand for in the two-stage hub
+	 * service. Selects which endpoint of a {@code connecting} request gets
+	 * rewritten by virtual-trip expansion:
+	 * <ul>
+	 *   <li>{@code RURAL} — replace the URBAN endpoint (the one inside the
+	 *       metropole polygon) with the hub coordinate, so the rural fleet
+	 *       sees a rural-to-hub trip.</li>
+	 *   <li>{@code URBAN} — replace the RURAL endpoint with the hub
+	 *       coordinate, so the urban fleet sees a hub-to-urban trip.</li>
+	 * </ul>
+	 * Null (default) disables virtual-trip expansion entirely, preserving
+	 * pre-Extension-2 behaviour.
+	 */
+	public enum FleetSide { RURAL, URBAN }
+
+	/**
 	 * Path to the hub-set GeoJSON file produced by the Phase-3 Python hub
 	 * discovery. Consumed in Phase 4 by virtual-trip expansion in
 	 * {@link org.matsim.contrib.demand_extraction.demand.DrtRequestFactory} once
 	 * that path is wired up. Null = disabled (no hub-service rewriting).
 	 */
 	private String hubSetGeoJsonPath = null;
+
+	/**
+	 * Which fleet side this extraction is producing demand for. See
+	 * {@link FleetSide}. Null (default) = no virtual-trip expansion.
+	 *
+	 * <p>Expansion only fires when {@link #hubSetGeoJsonPath} is also non-null;
+	 * both must be set together. With a hub set but no fleet side configured,
+	 * {@link org.matsim.contrib.demand_extraction.demand.DrtRequestFactory}
+	 * fails fast at startup to surface the misconfiguration.
+	 */
+	private FleetSide fleetSide = null;
 
 	/**
 	 * Path to the request-classifications CSV produced by the Phase-2 Python
@@ -1348,6 +1375,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.hubSetGeoJsonPath = hubSetGeoJsonPath;
 	}
 
+	@StringGetter("fleetSide")
+	public FleetSide getFleetSide() {
+		return fleetSide;
+	}
+
+	@StringSetter("fleetSide")
+	public void setFleetSide(FleetSide fleetSide) {
+		this.fleetSide = fleetSide;
+	}
+
 	@StringGetter("requestClassificationsPath")
 	public String getRequestClassificationsPath() {
 		return requestClassificationsPath;
@@ -1539,6 +1576,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				+ "hub discovery. FeatureCollection of Point features with a 'hub_id' string property "
 				+ "and [x, y] coordinates in the scenario CRS. Consumed by virtual-trip expansion in "
 				+ "Phase 4. Default: null (disabled).");
+
+		map.put("fleetSide",
+				"Paper-2 Extension 2: which fleet this extraction targets. RURAL = urban endpoint "
+				+ "of each connecting request is replaced by the hub coord. URBAN = rural endpoint "
+				+ "is replaced. Must be set together with hubSetGeoJsonPath; either being null "
+				+ "disables virtual-trip expansion. Default: null (disabled).");
 
 		map.put("requestClassificationsPath",
 				"Paper-2 Extension 2: path to the request-classifications CSV emitted by the Phase-2 "

@@ -104,6 +104,23 @@ public class TripSpatialPreFilter {
     }
 
     /**
+     * Returns true when an exclusion-zone polygon is configured and the supplied
+     * coordinate falls inside its union geometry. Used by Paper-2 Extension 2's
+     * virtual-trip expansion to determine which endpoint of a {@code connecting}
+     * request is inside the metropole (the urban end) and which is outside (the
+     * rural end). The exclusion polygon doubles as the metropole polygon under
+     * the Lyon scenario fixture; if no exclusion zone is configured this always
+     * returns {@code false}.
+     */
+    public boolean containsPoint(Coord c) {
+        if (!hasExclusionZone || exclusionZone == null || c == null) {
+            return false;
+        }
+        Point p = gf.createPoint(new org.locationtech.jts.geom.Coordinate(c.getX(), c.getY()));
+        return exclusionZone.contains(p);
+    }
+
+    /**
      * Returns true if the person has at least one trip that passes all active spatial filters.
      * When no filter is active, always returns true.
      */
