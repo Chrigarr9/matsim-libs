@@ -88,6 +88,8 @@ public class RunLyonEqasimDemandExtraction {
 		public final double maxWalkDistanceMeters;
 		/** Paper-2 Extension 2: path to hub-set GeoJSON (Phase 3 output). Null = disabled. */
 		public final String hubSetGeoJsonPath;
+		/** Paper-2 Extension 2: path to request-classifications CSV (Phase 2 output). Null = disabled. */
+		public final String requestClassificationsPath;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
@@ -98,7 +100,7 @@ public class RunLyonEqasimDemandExtraction {
 				int maxPoolingDegree, double predecessorsFilterTime,
 				boolean enableStopBased, boolean enableHyperPooling,
 				boolean enableBudgetAwareConstraints, double maxWalkDistanceMeters,
-				String hubSetGeoJsonPath) {
+				String hubSetGeoJsonPath, String requestClassificationsPath) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -121,6 +123,7 @@ public class RunLyonEqasimDemandExtraction {
 			this.enableBudgetAwareConstraints = enableBudgetAwareConstraints;
 			this.maxWalkDistanceMeters = maxWalkDistanceMeters;
 			this.hubSetGeoJsonPath = hubSetGeoJsonPath;
+			this.requestClassificationsPath = requestClassificationsPath;
 		}
 	}
 
@@ -147,6 +150,7 @@ public class RunLyonEqasimDemandExtraction {
 		boolean enableBudgetAwareConstraints = false;
 		double maxWalkDistanceMeters = Double.NaN;
 		String hubSetGeoJsonPath = null;
+		String requestClassificationsPath = null;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -172,6 +176,7 @@ public class RunLyonEqasimDemandExtraction {
 				case "--enable-budget-aware-constraints" -> enableBudgetAwareConstraints = true;
 				case "--max-walk-distance-meters" -> maxWalkDistanceMeters = Double.parseDouble(args[++i]);
 				case "--hub-set" -> hubSetGeoJsonPath = args[++i];
+				case "--request-classifications" -> requestClassificationsPath = args[++i];
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -180,7 +185,7 @@ public class RunLyonEqasimDemandExtraction {
 				tripFilterRadiusKm, noExclusionZone, noPredecessors, noShapley, deterministicRouting,
 				maxPoolingDegree, predecessorsFilterTime,
 				enableStopBased, enableHyperPooling, enableBudgetAwareConstraints, maxWalkDistanceMeters,
-				hubSetGeoJsonPath);
+				hubSetGeoJsonPath, requestClassificationsPath);
 	}
 
 	/**
@@ -254,7 +259,8 @@ public class RunLyonEqasimDemandExtraction {
 						"--pruning-coverage-k", "--trip-filter-radius-km", "--max-pooling-degree",
 						"--predecessors-filter-time", "--trip-filter-focus", "--trip-filter-center-x",
 						"--trip-filter-center-y", "--exclusion-zone", "--gate-intercept",
-						"--gate-slope", "--max-walk-distance-meters", "--hub-set" -> true;
+						"--gate-slope", "--max-walk-distance-meters", "--hub-set",
+						"--request-classifications" -> true;
 				default -> false;
 			};
 		}
@@ -305,7 +311,8 @@ public class RunLyonEqasimDemandExtraction {
 					+ "[--max-pooling-degree <int>] "
 					+ "[--enable-stop-based] [--enable-hyperpooling] "
 					+ "[--enable-budget-aware-constraints] [--max-walk-distance-meters <m>] "
-					+ "[--hub-set <geojson-path>]");
+					+ "[--hub-set <geojson-path>] "
+					+ "[--request-classifications <csv-path>]");
 			System.exit(1);
 		}
 
@@ -481,6 +488,10 @@ public class RunLyonEqasimDemandExtraction {
 		if (p.hubSetGeoJsonPath != null) {
 			log.info("  Override: hubSetGeoJsonPath = {}", p.hubSetGeoJsonPath);
 			exMas.setHubSetGeoJsonPath(p.hubSetGeoJsonPath);
+		}
+		if (p.requestClassificationsPath != null) {
+			log.info("  Override: requestClassificationsPath = {}", p.requestClassificationsPath);
+			exMas.setRequestClassificationsPath(p.requestClassificationsPath);
 		}
 	}
 }

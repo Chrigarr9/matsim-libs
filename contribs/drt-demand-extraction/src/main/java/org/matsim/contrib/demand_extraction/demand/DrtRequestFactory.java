@@ -1,5 +1,7 @@
 package org.matsim.contrib.demand_extraction.demand;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -58,6 +60,16 @@ public class DrtRequestFactory {
 	private final BudgetValidator budgetValidator;
 	private final FlexibilityCalculator flexibilityCalculator;
 
+	/**
+	 * Paper-2 Extension 2: lazily-loaded request-classification lookup. Populated
+	 * once on the first {@link #buildRequests(Population)} call when
+	 * {@link ExMasConfigGroup#getRequestClassificationsPath()} is non-null;
+	 * stays null in the Kelheim path where no classification CSV is configured.
+	 * Not injected — the CSV may live anywhere on disk and may not exist at
+	 * injector-construction time.
+	 */
+	private volatile RequestClassificationLoader requestClassificationLoader;
+
 	@Inject
 	public DrtRequestFactory(ExMasConfigGroup config, ModeRoutingCache modeRoutingCache,
 			ChainIdentifier chainIdentifier, CommuteIdentifier commuteIdentifier,
@@ -76,6 +88,20 @@ public class DrtRequestFactory {
 	public List<DrtRequest> buildRequests(Population population) {
 		log.info("Building DRT requests from {} persons...", population.getPersons().size());
 		long startTime = System.currentTimeMillis();
+
+		// Paper-2 Extension 2: load request classifications once, lazily.
+		// Path null = preserve Kelheim default (DrtRequest.requestTag stays null).
+		String classificationsPath = exmasConfig.getRequestClassificationsPath();
+		if (classificationsPath != null && requestClassificationLoader == null) {
+			try {
+				requestClassificationLoader = new RequestClassificationLoader(Path.of(classificationsPath));
+				log.info("Loaded {} request classifications from {}",
+						requestClassificationLoader.size(), classificationsPath);
+			} catch (IOException e) {
+				throw new RuntimeException(
+						"Failed to load request classifications from " + classificationsPath, e);
+			}
+		}
 
 		// Identify commute trips before building requests
 		commuteIdentifier.identifyCommutes(population);
@@ -347,6 +373,13 @@ public class DrtRequestFactory {
 				? ptTravelTime / carTravelTime
 				: Double.NaN;
 
+		// Paper-2 Extension 2: per-trip classification tag (null when no
+		// classifications CSV is configured OR this (person, tripIdx) pair was
+		// absent from the CSV — both leave DrtRequest.requestTag = null).
+		String requestTag = (requestClassificationLoader == null)
+				? null
+				: requestClassificationLoader.lookup(person.getId().toString(), tripIdx);
+
 		// Build a draft request with every field that doesn't depend on the budget.
 		// Budget, time windows, and maxDetourFactor are placeholders, refined below
 		// once the binary search runs over this draft.
@@ -358,6 +391,7 @@ public class DrtRequestFactory {
 				.isCommute(isCommute)
 				.bestModeScore(bestBaselineMode.getValue())
 				.bestMode(bestBaselineMode.getKey())
+				.requestTag(requestTag)
 				.originLinkId(originLinkId)
 				.destinationLinkId(destinationLinkId)
 				.originX(originCoord.getX())

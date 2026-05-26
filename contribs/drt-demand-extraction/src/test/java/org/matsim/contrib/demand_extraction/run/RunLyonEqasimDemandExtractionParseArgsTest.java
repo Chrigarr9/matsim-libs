@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RunLyonEqasimDemandExtractionParseArgsTest {
@@ -37,5 +38,27 @@ class RunLyonEqasimDemandExtractionParseArgsTest {
         assertTrue(p.enableHyperPooling);
         assertTrue(p.enableBudgetAwareConstraints);
         assertEquals(1000.0, p.maxWalkDistanceMeters, 0.0);
+    }
+
+    @Test
+    void defaultsLeaveRequestClassificationsPathNull() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+        });
+        assertNull(p.requestClassificationsPath,
+                "request-classifications path null by default");
+    }
+
+    @Test
+    void parsesRequestClassificationsFlag() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+                "--request-classifications", "/tmp/cls.csv",
+        });
+        assertEquals("/tmp/cls.csv", p.requestClassificationsPath);
     }
 }

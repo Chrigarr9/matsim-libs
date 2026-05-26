@@ -416,6 +416,18 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	 */
 	private String hubSetGeoJsonPath = null;
 
+	/**
+	 * Path to the request-classifications CSV produced by the Phase-2 Python
+	 * classifier (columns: {@code personId}, {@code tripIndex},
+	 * {@code requestTag}). When set, {@link
+	 * org.matsim.contrib.demand_extraction.demand.DrtRequestFactory} loads it
+	 * via {@link org.matsim.contrib.demand_extraction.demand.RequestClassificationLoader}
+	 * and stamps each {@link org.matsim.contrib.demand_extraction.demand.DrtRequest}
+	 * with the corresponding tag. Null = disabled — requests get
+	 * {@code requestTag == null}, preserving pre-Extension-2 (Kelheim) behaviour.
+	 */
+	private String requestClassificationsPath = null;
+
     public ExMasConfigGroup() {
         super(GROUP_NAME);
     }
@@ -1336,6 +1348,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.hubSetGeoJsonPath = hubSetGeoJsonPath;
 	}
 
+	@StringGetter("requestClassificationsPath")
+	public String getRequestClassificationsPath() {
+		return requestClassificationsPath;
+	}
+
+	@StringSetter("requestClassificationsPath")
+	public void setRequestClassificationsPath(String requestClassificationsPath) {
+		this.requestClassificationsPath = requestClassificationsPath;
+	}
+
     @Override
     public Map<String, String> getComments() {
         Map<String, String> map = super.getComments();
@@ -1517,6 +1539,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				+ "hub discovery. FeatureCollection of Point features with a 'hub_id' string property "
 				+ "and [x, y] coordinates in the scenario CRS. Consumed by virtual-trip expansion in "
 				+ "Phase 4. Default: null (disabled).");
+
+		map.put("requestClassificationsPath",
+				"Paper-2 Extension 2: path to the request-classifications CSV emitted by the Phase-2 "
+				+ "Python classifier. Columns: personId, tripIndex, requestTag (in any order; extra "
+				+ "columns tolerated). When set, DrtRequestFactory loads it via "
+				+ "RequestClassificationLoader and stamps each DrtRequest.requestTag. Default: null "
+				+ "(disabled — DrtRequest.requestTag stays null, preserving Kelheim behaviour).");
 
         return map;
     }
