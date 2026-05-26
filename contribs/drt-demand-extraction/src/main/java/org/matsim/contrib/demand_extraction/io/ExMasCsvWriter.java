@@ -44,6 +44,10 @@ public final class ExMasCsvWriter {
 		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
 			// Header includes all request attributes
 			// Note: baseMode/baseModeScore are the mode we compare DRT against (typically the best available mode)
+			// Extension-2 schema additions (requestTag, hubId) are APPENDED at the
+			// end of the header — never inserted in the middle — so existing
+			// consumers that read by column name or by trailing position keep
+			// working.
 			writer.write("index,personId,groupId,tripIndex,isCommute,isEducation,budget,requestTime," +
 					"originLinkId,destinationLinkId,originX,originY,destinationX,destinationY," +
 					"originActivityType,destinationActivityType," +
@@ -52,7 +56,8 @@ public final class ExMasCsvWriter {
 					"carTravelTime,ptTravelTime,ptAccessibility,maxCostPerKm," +
 					"originLinkCoordFromX,originLinkCoordFromY,originLinkCoordToX,originLinkCoordToY," +
 					"destinationLinkCoordFromX,destinationLinkCoordFromY,destinationLinkCoordToX,destinationLinkCoordToY," +
-					"maxWalkDistance,maxWaitTime");
+					"maxWalkDistance,maxWaitTime," +
+					"requestTag,hubId");
 			writer.newLine();
 
 			for (DrtRequest req : requests) {
@@ -61,7 +66,7 @@ public final class ExMasCsvWriter {
 						: Double.MAX_VALUE;
 				writer.write(String.format(java.util.Locale.US,
 						"%d,%s,%s,%d,%b,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f,%.4f,"
-								+ "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%.4f",
+								+ "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%.4f,%s,%s",
 						req.index, req.personId, req.groupId, req.tripIndex, req.isCommute, req.isEducation,
 						req.budget, req.requestTime,
 						req.originLinkId, req.destinationLinkId,
@@ -77,7 +82,9 @@ public final class ExMasCsvWriter {
 						req.originLinkCoordToX, req.originLinkCoordToY,
 						req.destinationLinkCoordFromX, req.destinationLinkCoordFromY,
 						req.destinationLinkCoordToX, req.destinationLinkCoordToY,
-						req.maxWalkDistance, req.maxWaitTime));
+						req.maxWalkDistance, req.maxWaitTime,
+						req.requestTag != null ? req.requestTag : "",
+						req.hubId != null ? req.hubId : ""));
 				writer.newLine();
 			}
 		} catch (IOException e) {
