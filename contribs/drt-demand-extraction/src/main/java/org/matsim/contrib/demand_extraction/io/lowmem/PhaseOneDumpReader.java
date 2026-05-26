@@ -250,6 +250,12 @@ public final class PhaseOneDumpReader {
 				// v2 CSV columns — present from BIN v2 onward; absent in v1 CSVs (defaulted to 0 via optionalD).
 				.maxWalkDistance(optionalD(f, col, "maxWalkDistance"))
 				.maxWaitTime(optionalD(f, col, "maxWaitTime"))
+				// Extension-2 schema additions — appended at the end of the CSV header
+				// (see ExMasCsvWriter.writeRequests). Absent in pre-Extension-2 dumps,
+				// in which case optionalString returns null and the reconstructed
+				// request carries null for both fields.
+				.requestTag(optionalString(f, col, "requestTag"))
+				.hubId(optionalString(f, col, "hubId"))
 				.originActivityType(nullableString(s(f, col, "originActivityType")))
 				.destinationActivityType(nullableString(s(f, col, "destinationActivityType")))
 				.carTravelTime(d(f, col, "carTravelTime"))
@@ -276,6 +282,16 @@ public final class PhaseOneDumpReader {
 		if (idx == null) return 0.0;
 		String v = f[idx];
 		return v.isEmpty() ? 0.0 : Double.parseDouble(v);
+	}
+
+	/** Same as {@link #s} but returns {@code null} if the column is absent OR empty
+	 *  (for forward/backward compatibility with CSV schemas that added the column
+	 *  in a later version, and for fields that the writer renders empty for nulls). */
+	private static String optionalString(String[] f, Map<String, Integer> col, String key) {
+		Integer idx = col.get(key);
+		if (idx == null) return null;
+		String v = f[idx];
+		return v.isEmpty() ? null : v;
 	}
 
 	private static int i(String[] f, Map<String, Integer> col, String key) {

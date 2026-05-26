@@ -30,6 +30,17 @@ final class LowMemTestFixtures {
 	 */
 	static DrtRequest buildRequest(int idx, String originActivityType, String destActivityType,
 			double originTypicalDuration, double destTypicalDuration) {
+		return buildRequest(idx, originActivityType, destActivityType,
+				originTypicalDuration, destTypicalDuration, null, null);
+	}
+
+	/**
+	 * Variant that also stamps the Extension-2 {@code requestTag} and {@code hubId}
+	 * onto the request. Either / both can be {@code null}.
+	 */
+	static DrtRequest buildRequest(int idx, String originActivityType, String destActivityType,
+			double originTypicalDuration, double destTypicalDuration,
+			String requestTag, String hubId) {
 		Id<Link> from = Id.createLinkId("L" + (idx * 2));
 		Id<Link> to = Id.createLinkId("L" + (idx * 2 + 1));
 
@@ -41,6 +52,8 @@ final class LowMemTestFixtures {
 				.budget(10.0)
 				.bestModeScore(-5.0)
 				.bestMode("car")
+				.requestTag(requestTag)
+				.hubId(hubId)
 				.originLinkId(from)
 				.destinationLinkId(to)
 				.originX(0.0).originY(0.0)
