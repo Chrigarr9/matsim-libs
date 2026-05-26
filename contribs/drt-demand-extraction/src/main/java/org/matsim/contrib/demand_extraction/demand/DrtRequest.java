@@ -38,7 +38,13 @@ public class DrtRequest {
     // Budget information
     public final double budget; // Utility difference: drtScore - bestModeScore
     public final double bestModeScore; // Score of best baseline mode (for budget validation)
-    public final String bestMode; 
+    public final String bestMode;
+
+    /** Request classification tag: rural_intra | urban_intra | connecting | external. */
+    public final String requestTag;
+
+    /** Hub identifier for virtual trips on connecting commuters; null for non-virtual requests. */
+    public final String hubId;
 
     
     // Location (link-based for MATSim routing)
@@ -192,6 +198,8 @@ public class DrtRequest {
         this.budget = builder.budget;
         this.bestModeScore = builder.bestModeScore;
         this.bestMode = builder.bestMode;
+        this.requestTag = builder.requestTag;
+        this.hubId = builder.hubId;
         this.originLinkId = builder.originLinkId;
         this.destinationLinkId = builder.destinationLinkId;
         this.originX = builder.originX;
@@ -236,6 +244,8 @@ public class DrtRequest {
             .budget(this.budget)
             .bestModeScore(this.bestModeScore)
             .bestMode(this.bestMode)
+            .requestTag(this.requestTag)
+            .hubId(this.hubId)
             .originLinkId(this.originLinkId)
             .destinationLinkId(this.destinationLinkId)
             .originX(this.originX)
@@ -335,6 +345,10 @@ public class DrtRequest {
         private double budget;
         private double bestModeScore;
         private String bestMode;
+        // Extension 2 classification fields (default null = backward-compatible with
+        // pre-Extension-2 callers that don't yet know about request tags).
+        private String requestTag;
+        private String hubId;
         private Id<Link> originLinkId;
         private Id<Link> destinationLinkId;
         private double originX;
@@ -372,6 +386,8 @@ public class DrtRequest {
         public Builder budget(double budget) { this.budget = budget; return this; }
         public Builder bestModeScore(double bestModeScore) { this.bestModeScore = bestModeScore; return this; }
 		public Builder bestMode(String bestMode) {this.bestMode = bestMode; return this;}
+        public Builder requestTag(String requestTag) { this.requestTag = requestTag; return this; }
+        public Builder hubId(String hubId) { this.hubId = hubId; return this; }
         public Builder originLinkId(Id<Link> originLinkId) { this.originLinkId = originLinkId; return this; }
         public Builder destinationLinkId(Id<Link> destinationLinkId) { this.destinationLinkId = destinationLinkId; return this; }
         public Builder originX(double originX) { this.originX = originX; return this; }
