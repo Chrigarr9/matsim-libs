@@ -132,6 +132,11 @@ public final class ExMasCsvWriter {
 		// Header with all ride attributes and flattened request attributes
 		// Note: predecessors removed (not needed for optimization), successors kept for path cover
 		// Stop-based columns added at the end for backward compatibility
+		// Extension-2 per-pax columns (requestTags, hubIds) are APPENDED at the
+		// END of the header — never inserted in the middle — so existing
+		// consumers that read by column name or by trailing position keep
+		// working. They mirror the iteration order and `[a | b | c]` format of
+		// the existing per-pax `personIds` field.
 		writer.write("rideIndex,degree,kind,variant," +
 				"requestIndices,personIds,groupIds,requestTimes,isCommutes,isEducations," +
 				"originsOrdered,destinationsOrdered," +
@@ -139,7 +144,8 @@ public final class ExMasCsvWriter {
 				"startTime,endTime,rideTravelTime,rideDistance," +
 				"pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty," +
 				"dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty," +
-				"accessWalkDistances,egressWalkDistances");
+				"accessWalkDistances,egressWalkDistances," +
+				"requestTags,hubIds");
 		writer.newLine();
 	}
 
@@ -168,6 +174,15 @@ public final class ExMasCsvWriter {
 				String isEducations = formatBooleanArray(Arrays.stream(requests)
 						.map(r -> r.isEducation)
 						.toArray(Boolean[]::new));
+
+				// Extension-2 per-pax columns: same iteration order as personIds,
+				// same `[a | b | c]` format. Null values render as empty inside the list.
+				String requestTags = formatStringArray(Arrays.stream(requests)
+						.map(r -> r.requestTag != null ? r.requestTag : "")
+						.toArray(String[]::new));
+				String hubIds = formatStringArray(Arrays.stream(requests)
+						.map(r -> r.hubId != null ? r.hubId : "")
+						.toArray(String[]::new));
 
 				// Format origin/destination sequences
 				String origins = formatLinkIdArray(ride.getOriginsOrdered());
@@ -224,7 +239,7 @@ public final class ExMasCsvWriter {
 				}
 
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s",
 						ride.getIndex(), ride.getDegree(), ride.getKind(), variant,
 						reqIndices, personIds, groupIds, requestTimes, isCommutes, isEducations,
 						origins, destinations,
@@ -233,7 +248,8 @@ public final class ExMasCsvWriter {
 						ride.getRideTravelTime(), ride.getRideDistance(),
 						pickupLinkId, pickupX, pickupY, pickupPenalty,
 						dropoffLinkId, dropoffX, dropoffY, dropoffPenalty,
-						accessWalks, egressWalks));
+						accessWalks, egressWalks,
+						requestTags, hubIds));
 				writer.newLine();
 			}
 		}

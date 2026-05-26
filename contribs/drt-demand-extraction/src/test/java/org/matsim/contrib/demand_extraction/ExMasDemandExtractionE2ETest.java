@@ -276,8 +276,9 @@ public class ExMasDemandExtractionE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// Updated to 33 columns (with HyperPool stop-based pooling fields)
-				Assertions.assertEquals(35, parts.length, "Each ride should have 35 fields (with HyperPool stop fields)");
+				// 35 baseline columns (incl. HyperPool stop-based pooling fields)
+				// + 2 Extension-2 per-pax columns (requestTags, hubIds) appended.
+				Assertions.assertEquals(37, parts.length, "Each ride should have 37 fields (with HyperPool stop fields)");
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();

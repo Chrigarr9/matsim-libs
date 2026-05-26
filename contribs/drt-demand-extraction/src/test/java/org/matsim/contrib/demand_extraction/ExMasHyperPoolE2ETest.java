@@ -256,7 +256,9 @@ public class ExMasHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				Assertions.assertEquals(35, parts.length, "Each ride should have 35 fields (with HyperPool)");
+				// 35 baseline columns + 2 Extension-2 per-pax columns
+				// (requestTags, hubIds) appended at the end of exmas_rides.csv.
+				Assertions.assertEquals(37, parts.length, "Each ride should have 37 fields (with HyperPool)");
 
 				int degree = Integer.parseInt(parts[1]);
 				String variant = parts[3]; // DOOR_TO_DOOR, STOP_TO_STOP, or HYPER_POOLED
