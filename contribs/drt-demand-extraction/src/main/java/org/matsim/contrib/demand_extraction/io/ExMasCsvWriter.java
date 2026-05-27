@@ -140,6 +140,9 @@ public final class ExMasCsvWriter {
 		// Extension-2 Task 7.2: `peak_pax` (max simultaneous in-vehicle
 		// occupancy) is appended AFTER requestTags/hubIds — required by the
 		// class-aware path cover (rev-3 §7.4b).
+		// chained_timebin Task 4: `reposTimeMeanOutgoing` (mean outgoing repos
+		// time across successors) is appended AFTER peak_pax — required by the
+		// chained time-bin repos-time resolver.
 		writer.write("rideIndex,degree,kind,variant," +
 				"requestIndices,personIds,groupIds,requestTimes,isCommutes,isEducations," +
 				"originsOrdered,destinationsOrdered," +
@@ -149,7 +152,7 @@ public final class ExMasCsvWriter {
 				"dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty," +
 				"accessWalkDistances,egressWalkDistances," +
 				"requestTags,hubIds," +
-				"peak_pax");
+				"peak_pax,reposTimeMeanOutgoing");
 		writer.newLine();
 	}
 
@@ -243,7 +246,7 @@ public final class ExMasCsvWriter {
 				}
 
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s,%d",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s,%d,%.2f",
 						ride.getIndex(), ride.getDegree(), ride.getKind(), variant,
 						reqIndices, personIds, groupIds, requestTimes, isCommutes, isEducations,
 						origins, destinations,
@@ -254,7 +257,7 @@ public final class ExMasCsvWriter {
 						dropoffLinkId, dropoffX, dropoffY, dropoffPenalty,
 						accessWalks, egressWalks,
 						requestTags, hubIds,
-						ride.getPeakPax()));
+						ride.getPeakPax(), ride.getReposTimeMeanOutgoing()));
 				writer.newLine();
 			}
 		}
