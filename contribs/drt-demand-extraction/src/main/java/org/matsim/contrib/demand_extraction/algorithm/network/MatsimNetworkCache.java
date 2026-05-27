@@ -67,7 +67,7 @@ import com.google.inject.name.Names;
  * time-dependent routing accuracy.
  */
 @Singleton
-public class MatsimNetworkCache {
+public class MatsimNetworkCache implements TravelSegmentLookup {
 	
 	private static final Logger log = LogManager.getLogger(MatsimNetworkCache.class);
 	private static final double DETERMINISTIC_TIME_COEF = 1.0;

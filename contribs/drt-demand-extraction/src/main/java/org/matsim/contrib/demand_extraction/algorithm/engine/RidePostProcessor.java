@@ -22,6 +22,7 @@ import org.matsim.api.core.v01.network.Link;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.network.TravelSegmentLookup;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
@@ -45,10 +46,23 @@ public final class RidePostProcessor {
     }
 
     private final ExMasConfigGroup config;
-    private final MatsimNetworkCache networkCache;
+    private final TravelSegmentLookup networkCache;
     private final MaxCostResolver maxCostResolver;
 
+    /**
+     * Production constructor — wires a full {@link MatsimNetworkCache}.
+     * Prefer this in runners and Guice modules.
+     */
     public RidePostProcessor(ExMasConfigGroup config, MatsimNetworkCache networkCache,
+                            MaxCostResolver maxCostResolver) {
+        this(config, (TravelSegmentLookup) networkCache, maxCostResolver);
+    }
+
+    /**
+     * Flexible constructor — accepts any {@link TravelSegmentLookup}.
+     * Used in tests with lightweight stubs.
+     */
+    public RidePostProcessor(ExMasConfigGroup config, TravelSegmentLookup networkCache,
                             MaxCostResolver maxCostResolver) {
         this.config = config;
         this.networkCache = networkCache;
