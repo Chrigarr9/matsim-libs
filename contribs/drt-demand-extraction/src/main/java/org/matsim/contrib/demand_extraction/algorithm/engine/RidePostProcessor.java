@@ -312,10 +312,29 @@ public final class RidePostProcessor {
                 sliceEnd += 1; // upper bound
             }
 
+            // SSSP batch precompute: one Dijkstra tree from lastDests[i] populates the cache
+            // for all candidate destination links in [sliceStart, sliceEnd). Replaces N
+            // point-to-point routing calls with 1 tree. Pattern from PairGenerator.java:203.
+            // The no-op default on TravelSegmentLookup keeps test stubs working unchanged.
+            Id<Link> originLink = lastDests[i];
+            if (originLink != null && sliceEnd > sliceStart) {
+                List<Id<Link>> candidateLinksList = new ArrayList<>(sliceEnd - sliceStart);
+                for (int j = sliceStart; j < sliceEnd; j++) {
+                    if (i == j) continue;
+                    Id<Link> to = firstOrigins[j];
+                    if (to != null) candidateLinksList.add(to);
+                }
+                if (!candidateLinksList.isEmpty()) {
+                    @SuppressWarnings("unchecked")
+                    Id<Link>[] toArr = candidateLinksList.toArray(new Id[0]);
+                    networkCache.batchPrecompute(originLink, endTime, toArr, filterTime);
+                }
+            }
+
             List<ConnectionCandidate> candidates = new ArrayList<>();
 
             for (int j = sliceStart; j < sliceEnd; j++) {
-                if (i == j) continue; 
+                if (i == j) continue;
 
                 // Basic checks
                 Id<Link> from = lastDests[i];

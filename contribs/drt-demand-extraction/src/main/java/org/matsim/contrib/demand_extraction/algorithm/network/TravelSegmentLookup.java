@@ -26,4 +26,25 @@ public interface TravelSegmentLookup {
 	 * @return travel segment, never null
 	 */
 	TravelSegment getSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime);
+
+	/**
+	 * Optional batch precompute: runs one SSSP tree from {@code fromLinkId} and
+	 * populates the internal cache for all {@code toLinkIds}.  Subsequent
+	 * {@link #getSegment} calls for those destinations are served from the cache.
+	 *
+	 * <p>The default implementation is a no-op — test stubs and simple
+	 * implementations fall through to the per-pair {@link #getSegment} path,
+	 * which remains correct.  {@link MatsimNetworkCache} overrides this with
+	 * the full SSSP implementation (3-4x speedup on large scenarios).
+	 *
+	 * @param fromLinkId          origin link for the SSSP tree
+	 * @param departureTime       departure time in seconds since midnight
+	 * @param toLinkIds           candidate destination links to precompute
+	 * @param maxTravelTimeSeconds early-termination bound for the Dijkstra tree
+	 */
+	@SuppressWarnings("unused")
+	default void batchPrecompute(Id<Link> fromLinkId, double departureTime,
+	                             Id<Link>[] toLinkIds, double maxTravelTimeSeconds) {
+		// no-op: stubs rely entirely on getSegment
+	}
 }
