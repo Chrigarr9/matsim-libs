@@ -12,17 +12,18 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
  * {@link MatsimNetworkCache} implements this interface; tests can provide
  * lightweight stubs.
  */
+@FunctionalInterface
 public interface TravelSegmentLookup {
 
-    /**
-     * Returns the travel segment (travel time, distance, utility) between two
-     * links at the given departure time.  Must never return {@code null}; use
-     * {@link TravelSegment#unreachable()} when no path exists.
-     *
-     * @param originLinkId  the departure link
-     * @param destLinkId    the arrival link
-     * @param departureTime departure time in seconds since midnight
-     * @return travel segment, never null
-     */
-    TravelSegment getSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime);
+	/**
+	 * Returns the travel segment (travel time, distance, utility) between two
+	 * links at the given departure time.  Must never return {@code null}; use
+	 * {@link TravelSegment#unreachable()} when no path exists.
+	 *
+	 * @param originLinkId  the departure link
+	 * @param destLinkId    the arrival link
+	 * @param departureTime departure time in seconds since midnight
+	 * @return travel segment, never null
+	 */
+	TravelSegment getSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime);
 }

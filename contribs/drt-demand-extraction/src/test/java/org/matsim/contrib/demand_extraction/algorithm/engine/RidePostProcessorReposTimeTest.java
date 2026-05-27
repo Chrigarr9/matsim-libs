@@ -66,165 +66,165 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  */
 class RidePostProcessorReposTimeTest {
 
-    // ─── Link IDs ────────────────────────────────────────────────────────────
+	// ─── Link IDs ────────────────────────────────────────────────────────────
 
-    private static final Id<Link> ORIG_A = Id.createLinkId("origA");
-    private static final Id<Link> DEST_A = Id.createLinkId("destA");
-    private static final Id<Link> ORIG_B = Id.createLinkId("origB");
-    private static final Id<Link> DEST_B = Id.createLinkId("destB");
-    private static final Id<Link> ORIG_C = Id.createLinkId("origC");
-    private static final Id<Link> DEST_C = Id.createLinkId("destC");
+	private static final Id<Link> ORIG_A = Id.createLinkId("origA");
+	private static final Id<Link> DEST_A = Id.createLinkId("destA");
+	private static final Id<Link> ORIG_B = Id.createLinkId("origB");
+	private static final Id<Link> DEST_B = Id.createLinkId("destB");
+	private static final Id<Link> ORIG_C = Id.createLinkId("origC");
+	private static final Id<Link> DEST_C = Id.createLinkId("destC");
 
-    // ─── Fixture helpers ─────────────────────────────────────────────────────
+	// ─── Fixture helpers ─────────────────────────────────────────────────────
 
-    /**
-     * Builds a single-passenger request at the specified index with the given
-     * origin and destination links. Fields not required by the post-processor
-     * are set to benign defaults.
-     */
-    private static DrtRequest req(int index, Id<Link> originLink, Id<Link> destLink) {
-        return new DrtRequest.Builder()
-                .index(index)
-                .personId(org.matsim.api.core.v01.Id.createPersonId("p" + index))
-                .originLinkId(originLink)
-                .destinationLinkId(destLink)
-                .directTravelTime(0)
-                .directDistance(0)
-                .earliestDeparture(0)
-                .latestArrival(Integer.MAX_VALUE)
-                .build();
-    }
+	/**
+	 * Builds a single-passenger request at the specified index with the given
+	 * origin and destination links. Fields not required by the post-processor
+	 * are set to benign defaults.
+	 */
+	private static DrtRequest req(int index, Id<Link> originLink, Id<Link> destLink) {
+		return new DrtRequest.Builder()
+				.index(index)
+				.personId(org.matsim.api.core.v01.Id.createPersonId("p" + index))
+				.originLinkId(originLink)
+				.destinationLinkId(destLink)
+				.directTravelTime(0)
+				.directDistance(0)
+				.earliestDeparture(0)
+				.latestArrival(Integer.MAX_VALUE)
+				.build();
+	}
 
-    /**
-     * Builds a degree-1 (single) ride whose vehicle segment has the specified
-     * {@code connectionTravelTime}, giving {@code rideTravelTime = connectionTravelTime}
-     * and {@code endTime = startTime + connectionTravelTime}.
-     *
-     * <p>The origin link of the ride's first request becomes
-     * {@link Ride#getOriginsOrdered()}{@code [0]}, and the destination link
-     * becomes {@link Ride#getDestinationsOrdered()}{@code [0]} — these are what
-     * {@code computePredecessors} reads as the "first origin" and "last dest".
-     */
-    private static Ride singleRide(int rideIndex, DrtRequest request,
-                                   double startTime, double connectionTravelTime) {
-        return Ride.builder()
-                .index(rideIndex)
-                .degree(1)
-                .kind(RideKind.SINGLE)
-                .requests(new DrtRequest[] { request })
-                .originsOrderedRequests(new DrtRequest[] { request })
-                .destinationsOrderedRequests(new DrtRequest[] { request })
-                .passengerTravelTimes(new double[] { connectionTravelTime })
-                .passengerDistances(new double[] { 0.0 })
-                .passengerNetworkUtilities(new double[] { 0.0 })
-                .delays(new double[] { 0.0 })
-                .detours(new double[] { 1.0 })
-                .connectionTravelTimes(new double[] { connectionTravelTime })
-                .connectionDistances(new double[] { 1000.0 })
-                .connectionNetworkUtilities(new double[] { 0.0 })
-                .startTime(startTime)
-                .build();
-    }
+	/**
+	 * Builds a degree-1 (single) ride whose vehicle segment has the specified
+	 * {@code connectionTravelTime}, giving {@code rideTravelTime = connectionTravelTime}
+	 * and {@code endTime = startTime + connectionTravelTime}.
+	 *
+	 * <p>The origin link of the ride's first request becomes
+	 * {@link Ride#getOriginsOrdered()}{@code [0]}, and the destination link
+	 * becomes {@link Ride#getDestinationsOrdered()}{@code [0]} — these are what
+	 * {@code computePredecessors} reads as the "first origin" and "last dest".
+	 */
+	private static Ride singleRide(int rideIndex, DrtRequest request,
+								   double startTime, double connectionTravelTime) {
+		return Ride.builder()
+				.index(rideIndex)
+				.degree(1)
+				.kind(RideKind.SINGLE)
+				.requests(new DrtRequest[] { request })
+				.originsOrderedRequests(new DrtRequest[] { request })
+				.destinationsOrderedRequests(new DrtRequest[] { request })
+				.passengerTravelTimes(new double[] { connectionTravelTime })
+				.passengerDistances(new double[] { 0.0 })
+				.passengerNetworkUtilities(new double[] { 0.0 })
+				.delays(new double[] { 0.0 })
+				.detours(new double[] { 1.0 })
+				.connectionTravelTimes(new double[] { connectionTravelTime })
+				.connectionDistances(new double[] { 1000.0 })
+				.connectionNetworkUtilities(new double[] { 0.0 })
+				.startTime(startTime)
+				.build();
+	}
 
-    /**
-     * Minimal {@link TravelSegmentLookup} stub driven by an explicit
-     * {@code (fromLinkId, toLinkId) -> travelTime} map.
-     * All other pairs return {@link TravelSegment#unreachable()}.
-     */
-    private static TravelSegmentLookup stubLookup(
-            Map<String, Double> travelTimeByLinkPair) {
-        return (from, to, departureTime) -> {
-            String key = from.toString() + "|" + to.toString();
-            Double tt = travelTimeByLinkPair.get(key);
-            if (tt == null) {
-                return TravelSegment.unreachable();
-            }
-            return new TravelSegment(tt, tt * 10.0 /* distance placeholder */, 0.0);
-        };
-    }
+	/**
+	 * Minimal {@link TravelSegmentLookup} stub driven by an explicit
+	 * {@code (fromLinkId, toLinkId) -> travelTime} map.
+	 * All other pairs return {@link TravelSegment#unreachable()}.
+	 */
+	private static TravelSegmentLookup stubLookup(
+			Map<String, Double> travelTimeByLinkPair) {
+		return (from, to, departureTime) -> {
+			String key = from.toString() + "|" + to.toString();
+			Double tt = travelTimeByLinkPair.get(key);
+			if (tt == null) {
+				return TravelSegment.unreachable();
+			}
+			return new TravelSegment(tt, tt * 10.0 /* distance placeholder */, 0.0);
+		};
+	}
 
-    /**
-     * Convenience to produce a link-pair lookup key.
-     */
-    private static String pair(Id<Link> from, Id<Link> to) {
-        return from.toString() + "|" + to.toString();
-    }
+	/**
+	 * Convenience to produce a link-pair lookup key.
+	 */
+	private static String pair(Id<Link> from, Id<Link> to) {
+		return from.toString() + "|" + to.toString();
+	}
 
-    // ─── Config ──────────────────────────────────────────────────────────────
+	// ─── Config ──────────────────────────────────────────────────────────────
 
-    /**
-     * Minimal {@link ExMasConfigGroup}: predecessors enabled, Shapley off,
-     * single-threaded, unbounded filter time (covers all pairs), no distance
-     * filter, maxSuccessors=0 (unlimited).
-     */
-    private static ExMasConfigGroup minimalConfig() {
-        ExMasConfigGroup cfg = new ExMasConfigGroup();
-        cfg.setCalcPredecessors(true);
-        cfg.setCalcShapleyValues(false);
-        cfg.setHeuristicsProcessCount(1);
-        cfg.setPredecessorsFilterTime(-1.0);   // unbounded
-        cfg.setMaxSuccessors(0);               // no top-K pruning
-        return cfg;
-    }
+	/**
+	 * Minimal {@link ExMasConfigGroup}: predecessors enabled, Shapley off,
+	 * single-threaded, unbounded filter time (covers all pairs), no distance
+	 * filter, maxSuccessors=0 (unlimited).
+	 */
+	private static ExMasConfigGroup minimalConfig() {
+		ExMasConfigGroup cfg = new ExMasConfigGroup();
+		cfg.setCalcPredecessors(true);
+		cfg.setCalcShapleyValues(false);
+		cfg.setHeuristicsProcessCount(1);
+		cfg.setPredecessorsFilterTime(-1.0);   // unbounded
+		cfg.setMaxSuccessors(0);               // no top-K pruning
+		return cfg;
+	}
 
-    // ─── Test ────────────────────────────────────────────────────────────────
+	// ─── Test ────────────────────────────────────────────────────────────────
 
-    /**
-     * Primary assertion: after {@code process()}, each ride reports the
-     * expected {@code reposTimeMeanOutgoing} value.
-     *
-     * <p>This test FAILS until Task 3 populates the field in
-     * {@link RidePostProcessor}.
-     */
-    @Test
-    void reposTimeMeanOutgoing_computedFromSuccessorTravelTimes() {
+	/**
+	 * Primary assertion: after {@code process()}, each ride reports the
+	 * expected {@code reposTimeMeanOutgoing} value.
+	 *
+	 * <p>This test FAILS until Task 3 populates the field in
+	 * {@link RidePostProcessor}.
+	 */
+	@Test
+	void reposTimeMeanOutgoing_computedFromSuccessorTravelTimes() {
 
-        // Build requests (distinct link IDs so computePredecessors can route them)
-        DrtRequest reqA = req(0, ORIG_A, DEST_A);
-        DrtRequest reqB = req(1, ORIG_B, DEST_B);
-        DrtRequest reqC = req(2, ORIG_C, DEST_C);
+		// Build requests (distinct link IDs so computePredecessors can route them)
+		DrtRequest reqA = req(0, ORIG_A, DEST_A);
+		DrtRequest reqB = req(1, ORIG_B, DEST_B);
+		DrtRequest reqC = req(2, ORIG_C, DEST_C);
 
-        // Build rides
-        // rideA: [0, 100], rideB: [200, 300], rideC: [1000, 1100]
-        Ride rideA = singleRide(0, reqA, 0.0,    100.0);
-        Ride rideB = singleRide(1, reqB, 200.0,  100.0);
-        Ride rideC = singleRide(2, reqC, 1000.0, 100.0);
+		// Build rides
+		// rideA: [0, 100], rideB: [200, 300], rideC: [1000, 1100]
+		Ride rideA = singleRide(0, reqA, 0.0,    100.0);
+		Ride rideB = singleRide(1, reqB, 200.0,  100.0);
+		Ride rideC = singleRide(2, reqC, 1000.0, 100.0);
 
-        // Stub routing table:
-        //   destA -> origB : 60s  (rideA chains to rideB; arrival 100+60=160 <= 200 ✓)
-        //   destA -> origC : 120s (rideA chains to rideC; arrival 100+120=220 <= 1000 ✓)
-        //   destB -> origC : 200s (rideB chains to rideC; arrival 300+200=500 <= 1000 ✓)
-        //   everything else: unreachable
-        Map<String, Double> routingTable = new HashMap<>();
-        routingTable.put(pair(DEST_A, ORIG_B),  60.0);
-        routingTable.put(pair(DEST_A, ORIG_C), 120.0);
-        routingTable.put(pair(DEST_B, ORIG_C), 200.0);
+		// Stub routing table:
+		//   destA -> origB : 60s  (rideA chains to rideB; arrival 100+60=160 <= 200 ✓)
+		//   destA -> origC : 120s (rideA chains to rideC; arrival 100+120=220 <= 1000 ✓)
+		//   destB -> origC : 200s (rideB chains to rideC; arrival 300+200=500 <= 1000 ✓)
+		//   everything else: unreachable
+		Map<String, Double> routingTable = new HashMap<>();
+		routingTable.put(pair(DEST_A, ORIG_B),  60.0);
+		routingTable.put(pair(DEST_A, ORIG_C), 120.0);
+		routingTable.put(pair(DEST_B, ORIG_C), 200.0);
 
-        TravelSegmentLookup lookup = stubLookup(routingTable);
-        ExMasConfigGroup cfg = minimalConfig();
+		TravelSegmentLookup lookup = stubLookup(routingTable);
+		ExMasConfigGroup cfg = minimalConfig();
 
-        RidePostProcessor processor = new RidePostProcessor(
-                cfg,
-                lookup,
-                (budget, request, travelTime, distance) -> 0.0  // maxCostResolver stub
-        );
+		RidePostProcessor processor = new RidePostProcessor(
+				cfg,
+				lookup,
+				(budget, request, travelTime, distance) -> 0.0  // maxCostResolver stub
+		);
 
-        List<Ride> enriched = processor.process(List.of(rideA, rideB, rideC));
+		List<Ride> enriched = processor.process(List.of(rideA, rideB, rideC));
 
-        // Map by ride index for readable assertions
-        Map<Integer, Ride> byIndex = new HashMap<>();
-        for (Ride r : enriched) byIndex.put(r.getIndex(), r);
+		// Map by ride index for readable assertions
+		Map<Integer, Ride> byIndex = new HashMap<>();
+		for (Ride r : enriched) byIndex.put(r.getIndex(), r);
 
-        // rideA has two successors: tt=60 and tt=120 → mean = 90.0
-        assertEquals(90.0, byIndex.get(0).getReposTimeMeanOutgoing(), 1e-6,
-                "rideA with successors [60s, 120s] should have mean=90.0");
+		// rideA has two successors: tt=60 and tt=120 → mean = 90.0
+		assertEquals(90.0, byIndex.get(0).getReposTimeMeanOutgoing(), 1e-6,
+				"rideA with successors [60s, 120s] should have mean=90.0");
 
-        // rideB has one successor: tt=200 → mean = 200.0
-        assertEquals(200.0, byIndex.get(1).getReposTimeMeanOutgoing(), 1e-6,
-                "rideB with one successor [200s] should have mean=200.0");
+		// rideB has one successor: tt=200 → mean = 200.0
+		assertEquals(200.0, byIndex.get(1).getReposTimeMeanOutgoing(), 1e-6,
+				"rideB with one successor [200s] should have mean=200.0");
 
-        // rideC has no successors → sentinel -1.0 (field untouched)
-        assertEquals(-1.0, byIndex.get(2).getReposTimeMeanOutgoing(), 1e-6,
-                "rideC with no successors should retain sentinel -1.0");
-    }
+		// rideC has no successors → sentinel -1.0 (field untouched)
+		assertEquals(-1.0, byIndex.get(2).getReposTimeMeanOutgoing(), 1e-6,
+				"rideC with no successors should retain sentinel -1.0");
+	}
 }
