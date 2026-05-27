@@ -56,6 +56,7 @@ public final class Ride {
     private final double[] shapleyValues;
     private final int[] predecessors;
     private final int[] successors;
+    private final double reposTimeMeanOutgoing;
 
     // Stop-based pooling support (HyperPool integration)
     private final RideVariant variant;
@@ -97,6 +98,7 @@ public final class Ride {
         this.shapleyValues = builder.shapleyValues != null ? builder.shapleyValues.clone() : null;
         this.predecessors = builder.predecessors != null ? builder.predecessors.clone() : null;
         this.successors = builder.successors != null ? builder.successors.clone() : null;
+        this.reposTimeMeanOutgoing = builder.reposTimeMeanOutgoing;
 
         // Stop-based pooling fields
         this.variant = builder.variant != null ? builder.variant : RideVariant.DOOR_TO_DOOR;
@@ -212,6 +214,7 @@ public final class Ride {
     public double[] getShapleyValues() { return shapleyValues != null ? shapleyValues.clone() : null; }
     public int[] getPredecessors() { return predecessors != null ? predecessors.clone() : null; }
     public int[] getSuccessors() { return successors != null ? successors.clone() : null; }
+    public double getReposTimeMeanOutgoing() { return reposTimeMeanOutgoing; }
 
     // Stop-based pooling getters
     public RideVariant getVariant() { return variant; }
@@ -288,6 +291,7 @@ public final class Ride {
             .shapleyValues(this.shapleyValues)
             .predecessors(this.predecessors)
             .successors(this.successors)
+            .reposTimeMeanOutgoing(this.reposTimeMeanOutgoing)
             .variant(this.variant)
             .pickupStop(this.pickupStop)
             .dropoffStop(this.dropoffStop)
@@ -317,6 +321,7 @@ public final class Ride {
         private double[] shapleyValues;
         private int[] predecessors;
         private int[] successors;
+        private double reposTimeMeanOutgoing = -1.0;  // sentinel: no successors / not computed
 
         // Stop-based pooling fields
         private RideVariant variant;
@@ -429,6 +434,11 @@ public final class Ride {
 
         public Builder successors(int[] successors) {
             this.successors = successors;
+            return this;
+        }
+
+        public Builder reposTimeMeanOutgoing(double value) {
+            this.reposTimeMeanOutgoing = value;
             return this;
         }
 
