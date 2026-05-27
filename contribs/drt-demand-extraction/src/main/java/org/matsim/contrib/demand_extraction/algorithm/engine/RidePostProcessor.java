@@ -101,7 +101,7 @@ public final class RidePostProcessor {
 			log.info("  Predecessors/successors computed in {} ms", System.currentTimeMillis() - predStart);
 		} else {
 			log.info("  Predecessors/successors disabled (skipped)");
-			predsAndSuccs = new PredSucc(Collections.emptyMap(), Collections.emptyMap());
+			predsAndSuccs = new PredSucc(Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap());
 		}
 
         List<Ride> enriched = new ArrayList<>(rides.size());
@@ -110,6 +110,7 @@ public final class RidePostProcessor {
             int[] preds = predsAndSuccs.predecessors().getOrDefault(ride.getIndex(), new int[0]);
             int[] succs = predsAndSuccs.successors().getOrDefault(ride.getIndex(), new int[0]);
             MaxCostResult maxCostResult = maxCostByRide.get(ride.getIndex());
+            double reposMean = predsAndSuccs.reposTimeMeans().getOrDefault(ride.getIndex(), -1.0);
 
             Ride rebuilt = ride.toBuilder()
                     .maxCosts(maxCostResult.maxCosts())
@@ -117,6 +118,7 @@ public final class RidePostProcessor {
                     .shapleyValues(shapley)
                     .predecessors(preds)
                     .successors(succs)
+                    .reposTimeMeanOutgoing(reposMean)
                     .build();
             enriched.add(rebuilt);
         }
@@ -256,6 +258,7 @@ public final class RidePostProcessor {
 
         Map<Integer, List<Integer>> predecessors = new ConcurrentHashMap<>();
         Map<Integer, List<Integer>> successors = new ConcurrentHashMap<>();
+        Map<Integer, Double> reposTimeMeans = new ConcurrentHashMap<>();
 
         int parallelism = resolveParallelism();
 		log.info("    Computing predecessor/successor connections (parallelism: {})...", parallelism);
@@ -357,6 +360,17 @@ public final class RidePostProcessor {
                 candidates = candidates.subList(0, maxSuccessors);
             }
 
+            // Compute mean outgoing repositioning travel time over the (post-pruning) candidate set
+            double meanReposTime = -1.0;
+            if (!candidates.isEmpty()) {
+                double sum = 0.0;
+                for (ConnectionCandidate c : candidates) {
+                    sum += c.travelTime();
+                }
+                meanReposTime = sum / candidates.size();
+            }
+            reposTimeMeans.put(sortedByStart.get(i).getIndex(), meanReposTime);
+
             List<Integer> succIds = candidates.stream().map(c -> c.rideId).collect(Collectors.toList());
             successors.put(sortedByStart.get(i).getIndex(), succIds);
         });
@@ -390,7 +404,7 @@ public final class RidePostProcessor {
 		int totalPreds = predArrays.values().stream().mapToInt(arr -> arr.length).sum();
 		log.info("    Found {} predecessor connections", totalPreds);
 
-        return new PredSucc(predArrays, succArrays);
+        return new PredSucc(predArrays, succArrays, reposTimeMeans);
     }
 
     private record ConnectionCandidate(int rideId, Id<Link> toLink, double distance, double idlingTime, double travelTime) {
@@ -437,5 +451,9 @@ public final class RidePostProcessor {
         return result;
     }
 
-    private record PredSucc(Map<Integer, int[]> predecessors, Map<Integer, int[]> successors) {}
+    private record PredSucc(
+        Map<Integer, int[]> predecessors,
+        Map<Integer, int[]> successors,
+        Map<Integer, Double> reposTimeMeans
+    ) {}
 }
