@@ -604,24 +604,20 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 				// This properly handles turn restrictions and considers full link-to-link
 				// travel
 				// Use dummy person/vehicle for generic routing (required by TravelDisutility)
-				Path path;
-				if (useSharedDeterministicRouter) {
-					synchronized (routerLock) {
-						path = sharedRouter.calcLeastCostPath(
-								originLink,
-								destLink,
-								departureTime,
-								dummyPerson,
-								dummyVehicle);
-					}
-				} else {
-					path = threadLocalRouter.get().calcLeastCostPath(
-				originLink,
-				destLink,
-				departureTime,
-				dummyPerson,
-				dummyVehicle);
-				}
+				// Always thread-local: per-thread SpeedyALT instances are constructed
+				// identically from the same factory/network/disutility/travelTime, so
+				// they give identical paths for identical OD queries. The legacy
+				// synchronized(routerLock) + sharedRouter branch was a global serialization
+				// point — JFR (2026-05-27) showed 15/16 workers blocked there, dominating
+				// the predecessors phase. ConcurrentHashMap.computeIfAbsent already
+				// serializes same-OD callers via bucket locks, preserving per-OD
+				// cache determinism.
+				Path path = threadLocalRouter.get().calcLeastCostPath(
+						originLink,
+						destLink,
+						departureTime,
+						dummyPerson,
+						dummyVehicle);
 			
 			if (path == null || path.links.isEmpty()) {
 				// No path found - track failure
