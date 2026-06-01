@@ -46,6 +46,36 @@ class ExMasCsvWriterTest {
 				.toList());
 	}
 
+	@Test
+	void writeRideRows_emitsPerPassengerDirectDistanceColumnSeparateFromInVehicle() throws Exception {
+		// Per-passenger DIRECT (requested-trip) distance is what income / person-km
+		// bill on; passengerDistances (in-vehicle, incl. detour) is separate. Here the
+		// in-vehicle distances are zeros so the two columns are unmistakably distinct.
+		DrtRequest request0 = req(0, 1_000.0);
+		DrtRequest request1 = req(1, 1_100.0);
+		Ride completedPair = ride(1, new DrtRequest[] { request0, request1 }, 1_500.0);
+		Ride completedSingle = ride(0, new DrtRequest[] { request0 }, 1_000.0);
+
+		Path csv = tempDir.resolve("direct-distance.csv");
+		ExMasCsvWriter.writeRideBatches(csv.toString(),
+				List.of(completedPair, completedSingle), List.of());
+
+		List<String> lines = Files.readAllLines(csv);
+		// Array cells use " | " separators (no internal commas) -> safe to split on ",".
+		List<String> header = List.of(lines.get(0).split(","));
+		int ddIdx = header.indexOf("passengerDirectDistances");
+		int pdIdx = header.indexOf("passengerDistances");
+		assertTrue(ddIdx >= 0, "passengerDirectDistances column must be emitted");
+
+		// Rides are written in index order: row 1 = single (idx 0), row 2 = pair (idx 1).
+		String[] pairRow = lines.get(2).split(",");
+		assertEquals("1", pairRow[0]);
+		// direct distances == each passenger's requested-trip distance, in passenger order
+		assertEquals("[1000.00 | 1100.00]", pairRow[ddIdx]);
+		// in-vehicle passengerDistances remain a separate column (zeros in this fixture)
+		assertEquals("[0.00 | 0.00]", pairRow[pdIdx]);
+	}
+
 	private static DrtRequest req(int index, double directDistance) {
 		return new DrtRequest.Builder()
 				.index(index)

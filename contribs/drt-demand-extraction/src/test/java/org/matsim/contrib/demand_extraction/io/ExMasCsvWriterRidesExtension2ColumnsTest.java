@@ -64,9 +64,12 @@ class ExMasCsvWriterRidesExtension2ColumnsTest {
                 "Existing leading header schema unchanged — was: " + header);
 
         String[] headerCols = header.split(",", -1);
-        // requestTags / hubIds sit immediately before peak_pax (Task 7.2).
-        int tagsIdx = headerCols.length - 3;
-        int hubsIdx = headerCols.length - 2;
+        // requestTags / hubIds are appended together, before the per-ride trailing
+        // columns (peak_pax, reposTimeMeanOutgoing). Locate by name, not by offset,
+        // so later trailing additions don't rot this test.
+        java.util.List<String> headerList = java.util.Arrays.asList(headerCols);
+        int tagsIdx = headerList.indexOf("requestTags");
+        int hubsIdx = headerList.indexOf("hubIds");
         assertEquals("requestTags", headerCols[tagsIdx]);
         assertEquals("hubIds", headerCols[hubsIdx]);
 

@@ -146,7 +146,7 @@ public final class ExMasCsvWriter {
 		writer.write("rideIndex,degree,kind,variant," +
 				"requestIndices,personIds,groupIds,requestTimes,isCommutes,isEducations," +
 				"originsOrdered,destinationsOrdered," +
-				"passengerTravelTimes,passengerDistances,delays,detours,remainingBudgets,maxCosts,maxCostsPerKm,shapleyValues,successors," +
+				"passengerTravelTimes,passengerDistances,passengerDirectDistances,delays,detours,remainingBudgets,maxCosts,maxCostsPerKm,shapleyValues,successors," +
 				"startTime,endTime,rideTravelTime,rideDistance," +
 				"pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty," +
 				"dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty," +
@@ -198,6 +198,12 @@ public final class ExMasCsvWriter {
 				// Format other arrays
 				String pttimes = formatDoubleArray(ride.getPassengerTravelTimes());
 				String pdists = formatDoubleArray(ride.getPassengerDistances());
+				// Per-passenger DIRECT (requested-trip) distance, in the same passenger
+				// order as personIds/passengerDistances. Income + person-km bill on this;
+				// passengerDistances (in-vehicle, incl. detour) drives fleet-km / occupancy.
+				String pdirects = formatDoubleArray(Arrays.stream(requests)
+						.mapToDouble(r -> r.directDistance)
+						.toArray());
 				String delays = formatDoubleArray(ride.getDelays());
 				String detours = formatDoubleArray(ride.getDetours());
 				String budgets = ride.getRemainingBudgets() != null
@@ -246,11 +252,11 @@ public final class ExMasCsvWriter {
 				}
 
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s,%d,%.2f",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s,%d,%.2f",
 						ride.getIndex(), ride.getDegree(), ride.getKind(), variant,
 						reqIndices, personIds, groupIds, requestTimes, isCommutes, isEducations,
 						origins, destinations,
-						pttimes, pdists, delays, detours, budgets, maxCosts, maxCostsPerKm, shapleyValues, successors,
+						pttimes, pdists, pdirects, delays, detours, budgets, maxCosts, maxCostsPerKm, shapleyValues, successors,
 						ride.getStartTime(), ride.getEndTime(),
 						ride.getRideTravelTime(), ride.getRideDistance(),
 						pickupLinkId, pickupX, pickupY, pickupPenalty,
