@@ -5,7 +5,6 @@ import java.io.BufferedWriter;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -13,27 +12,12 @@ import java.util.Map;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
-import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.network.Node;
 import org.matsim.api.core.v01.population.Person;
-import org.matsim.contrib.common.timeprofile.TimeDiscretizer;
-import org.matsim.contrib.demand_extraction.algorithm.network.TimeDistanceTravelDisutility;
-import org.matsim.contrib.dvrp.trafficmonitoring.DvrpOfflineTravelTimes;
-import org.matsim.core.config.Config;
-import org.matsim.core.config.ConfigUtils;
-import org.matsim.core.network.io.MatsimNetworkReader;
-import org.matsim.core.population.PopulationUtils;
-import org.matsim.core.router.speedy.SpeedyALTFactory;
 import org.matsim.core.router.util.LeastCostPathCalculator;
-import org.matsim.core.router.util.TravelDisutility;
-import org.matsim.core.router.util.TravelTime;
-import org.matsim.core.scenario.MutableScenario;
-import org.matsim.core.scenario.ScenarioUtils;
 import org.matsim.vehicles.Vehicle;
-import org.matsim.vehicles.VehicleType;
-import org.matsim.vehicles.VehicleUtils;
 
 /**
  * Export MATSim-routed OD paths for DRT requests, using the SAME routing the
@@ -70,12 +54,6 @@ public class RunConnectingRouteExport {
 
 	private static final Logger log = LogManager.getLogger(RunConnectingRouteExport.class);
 
-	// Match LyonEqasimScenarioFixture exactly.
-	private static final int TRAVEL_TIME_BIN_SIZE = 900;   // 15 min
-	private static final int TRAVEL_TIME_END = 36 * 3600;  // 36 h
-	private static final double DET_TIME_COEF = 1.0;
-	private static final double DET_DIST_COEF = 1e-9;
-
 	public static void main(String[] args) throws IOException {
 		String networkPath = null;
 		String travelTimesPath = null;
@@ -103,23 +81,12 @@ public class RunConnectingRouteExport {
 		log.info("  Requests:     {}", requestsPath);
 		log.info("  Output:       {}", outputPath);
 
-		// Load network (Atlantis CRS placeholder; coords are already EPSG:2154 in file).
-		Config config = ConfigUtils.createConfig();
-		config.global().setCoordinateSystem("Atlantis");
-		MutableScenario scenario = (MutableScenario) ScenarioUtils.createScenario(config);
-		new MatsimNetworkReader(scenario.getNetwork()).readFile(networkPath);
-		Network network = scenario.getNetwork();
+		Phase2RoutingSetup setup = Phase2RoutingSetup.load(networkPath, travelTimesPath);
+		Network network = setup.network;
+		LeastCostPathCalculator router = setup.router;
+		Person dummyPerson = setup.dummyPerson;
+		Vehicle dummyVehicle = setup.dummyVehicle;
 		log.info("Loaded network: {} links", network.getLinks().size());
-
-		// Offline travel times + deterministic disutility + SpeedyALT — identical to the extraction.
-		TravelTime travelTime = loadOfflineTravelTimes(travelTimesPath);
-		TravelDisutility disutility = new TimeDistanceTravelDisutility(travelTime, DET_TIME_COEF, DET_DIST_COEF);
-		LeastCostPathCalculator router = new SpeedyALTFactory()
-				.createPathCalculator(network, disutility, travelTime);
-
-		Person dummyPerson = PopulationUtils.getFactory().createPerson(Id.createPersonId("route_export_dummy"));
-		VehicleType dummyType = VehicleUtils.createVehicleType(Id.create("car", VehicleType.class));
-		Vehicle dummyVehicle = VehicleUtils.createVehicle(Id.createVehicleId("route_export_dummy"), dummyType);
 
 		int routed = 0;
 		int failed = 0;
@@ -206,15 +173,4 @@ public class RunConnectingRouteExport {
 		return i;
 	}
 
-	private static TravelTime loadOfflineTravelTimes(String ttFile) throws IOException {
-		log.info("Loading pre-computed travel times from: {}", ttFile);
-		TimeDiscretizer timeDiscretizer = new TimeDiscretizer(TRAVEL_TIME_END, TRAVEL_TIME_BIN_SIZE);
-		java.net.URL ttUrl = Path.of(ttFile).toUri().toURL();
-		double[][] matrix = DvrpOfflineTravelTimes.loadLinkTravelTimes(timeDiscretizer, ttUrl, "\t");
-		TravelTime baseTt = DvrpOfflineTravelTimes.asTravelTime(timeDiscretizer, matrix);
-		log.info("Bound pre-computed travel times ({} bins, clamped to {}h)",
-				timeDiscretizer.getIntervalCount(), TRAVEL_TIME_END / 3600);
-		return (link, time, person, vehicle) ->
-				baseTt.getLinkTravelTime(link, Math.min(time, TRAVEL_TIME_END), person, vehicle);
-	}
 }
