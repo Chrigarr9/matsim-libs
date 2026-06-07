@@ -289,8 +289,13 @@ public final class BamasRideExtender {
 		results.sort((a, b) -> compareSortedIntArrays(sortedRequestIndices(a), sortedRequestIndices(b)));
 
 		// Assign sequential indices after sort so ride indices are deterministic.
+		// Stamp in place rather than rebuilding: a toBuilder().build() clone deep-copies
+		// every array, and because the originals stay pinned in resultBySetHash (retained
+		// via lastResultBySetHash for the degree-graph build), the clones doubled per-degree
+		// Ride retention and OOM'd at 100%. Mutating index keeps the result list and the
+		// map sharing the same Ride instances (1x retention); output is byte-identical.
 		for (int i = 0; i < results.size(); i++) {
-			results.set(i, rebuildWithIndex(results.get(i), nextRideIndex + i));
+			results.get(i).assignIndex(nextRideIndex + i);
 		}
 
 		long elapsed = System.currentTimeMillis() - phaseStartTime;
@@ -714,12 +719,6 @@ public final class BamasRideExtender {
 	}
 
 	// --- Utility methods ---
-
-	private Ride rebuildWithIndex(Ride ride, int newIndex) {
-		return ride.toBuilder()
-				.index(newIndex)
-				.build();
-	}
 
 	private static String formatEta(double seconds) {
 		if (seconds < 60) return String.format("%.0fs", seconds);

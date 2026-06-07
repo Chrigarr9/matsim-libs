@@ -18,7 +18,12 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation;
  * Uses direct DrtRequest references. Link IDs are derived from requests when needed.
  */
 public final class Ride {
-    private final int index;
+    // Non-final so the extension phase can stamp the deterministic post-sort index
+    // in place via assignIndex(), instead of a full toBuilder().build() rebuild that
+    // deep-clones all ~17 arrays. The rebuild doubled per-degree Ride retention at
+    // scale (originals pinned in resultBySetHash + cloned copies in the result list)
+    // and OOM'd at 100%. Same motivation as the non-final remainingBudgets below.
+    private int index;
     private final int degree;
     private final RideKind kind;
 
@@ -118,6 +123,18 @@ public final class Ride {
 
     // Getters
     public int getIndex() { return index; }
+
+    /**
+     * Stamp the output index in place, avoiding a full toBuilder().build() clone.
+     *
+     * <p>{@code index} participates in {@link #equals}/{@link #hashCode}, so this
+     * MUST NOT be called while the ride is a live key in a hash-based collection.
+     * It is only used by the extension phase to assign the deterministic, sorted
+     * sequential index after all rides for a degree have been collected — at which
+     * point rides live only in {@code Map<Long,Ride>} values and {@code List<Ride>},
+     * never as {@code Ride} keys. See the field comment for the memory rationale.
+     */
+    public void assignIndex(int newIndex) { this.index = newIndex; }
     public int getDegree() { return degree; }
     public RideKind getKind() { return kind; }
 
