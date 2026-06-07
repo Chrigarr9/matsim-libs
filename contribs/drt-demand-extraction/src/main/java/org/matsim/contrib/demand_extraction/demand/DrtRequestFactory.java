@@ -185,6 +185,7 @@ public class DrtRequestFactory {
 		int filteredBySpatial = 0;
 		int filteredByExcludedMode = 0;
 		int filteredByExternalTag = 0;
+		int filteredByOffFleetTag = 0;
 
 		int processedPersons = 0;
 		int totalPersons = population.getPersons().size();
@@ -284,6 +285,15 @@ public class DrtRequestFactory {
 						filteredByExternalTag++;
 						continue;
 					}
+					// Paper-2 Extension 2: drop the OTHER fleet's internal trips.
+					// In the RURAL run urban_intra is dropped; in the URBAN run
+					// rural_intra is dropped. This is what makes the two-run
+					// partition exact (connecting is kept + expanded below;
+					// fleetSide == null leaves everything in place, Kelheim path).
+					if (isOffFleetTag(tagPreCheck, fleetSide)) {
+						filteredByOffFleetTag++;
+						continue;
+					}
 				}
 
 				// Check commute/education status and apply filter
@@ -371,12 +381,31 @@ public class DrtRequestFactory {
 		double seconds = elapsed / 1000.0;
 		log.info("Request building complete: {} requests from {} persons in {}s "
 				+ "(filtered {} by commute filter, {} by spatial/exclusion-zone filter, "
-				+ "{} by excluded mode, {} by external tag)",
+				+ "{} by excluded mode, {} by external tag, {} by off-fleet tag)",
 				requests.size(), totalPersons, String.format("%.1f", seconds),
 				filteredByCommute, filteredBySpatial, filteredByExcludedMode,
-				filteredByExternalTag);
+				filteredByExternalTag, filteredByOffFleetTag);
 
 		return requests;
+	}
+
+	/**
+	 * Paper-2 Extension 2: returns true if a request carrying {@code tag} belongs
+	 * to the OTHER fleet and must be dropped. With {@code fleetSide == RURAL} the
+	 * urban-internal trips ({@code urban_intra}) are dropped; with {@code URBAN}
+	 * the rural-internal trips ({@code rural_intra}) are dropped. {@code connecting}
+	 * is never dropped here (it is expanded afterwards), and {@code external} is
+	 * handled by its own pre-drop. When {@code fleetSide == null} (Kelheim /
+	 * Paper-1 path) or {@code tag == null}, nothing is dropped.
+	 */
+	static boolean isOffFleetTag(String tag, ExMasConfigGroup.FleetSide fleetSide) {
+		if (fleetSide == null || tag == null) {
+			return false;
+		}
+		return switch (fleetSide) {
+			case RURAL -> "urban_intra".equals(tag);
+			case URBAN -> "rural_intra".equals(tag);
+		};
 	}
 
 	/**
