@@ -57,11 +57,14 @@ public class RunHubDetourMatrix {
         List<Hub> hubs = readHubs(hubsPath, network);
         log.info("Loaded {} candidate hubs", hubs.size());
 
-        int rows = 0;
+        int rows = 0, skipped = 0, nanLegs = 0;
         try (BufferedReader reader = new BufferedReader(new FileReader(requestsPath));
              BufferedWriter writer = new BufferedWriter(new FileWriter(outputPath))) {
             writer.write("requestIndex,hubId,hubLinkX,hubLinkY,directTime,oToHubTime,hubToDTime\n");
             String header = reader.readLine();
+            if (header == null) {
+                throw new IOException("Empty requests file: " + requestsPath);
+            }
             Map<String, Integer> col = headerIndex(header);
             int cIdx = req(col, "index"), cOrig = req(col, "originLinkId"),
                 cDest = req(col, "destinationLinkId"), cTime = req(col, "requestTime");
@@ -74,7 +77,11 @@ public class RunHubDetourMatrix {
                 Link oLink = network.getLinks().get(Id.createLinkId(f[cOrig]));
                 Link dLink = network.getLinks().get(Id.createLinkId(f[cDest]));
                 double dep = Double.parseDouble(f[cTime]);
-                if (oLink == null || dLink == null) { log.warn("Req {}: missing O/D link", reqIndex); continue; }
+                if (oLink == null || dLink == null) {
+                    log.warn("Req {}: missing O/D link", reqIndex);
+                    skipped++;
+                    continue;
+                }
 
                 double direct = legTime(router, setup, oLink, dLink, dep);
                 for (Hub h : hubs) {
@@ -82,6 +89,7 @@ public class RunHubDetourMatrix {
                     double oToHub = legTime(router, setup, oLink, h.link(), dep);
                     double depAtHub = Double.isNaN(oToHub) ? dep : dep + oToHub;
                     double hubToD = legTime(router, setup, h.link(), dLink, depAtHub);
+                    if (Double.isNaN(oToHub) || Double.isNaN(hubToD)) nanLegs++;
                     Coord c = h.link().getToNode().getCoord();
                     writer.write(String.format(java.util.Locale.US, "%s,%s,%.2f,%.2f,%s,%s,%s\n",
                             reqIndex, h.id(), c.getX(), c.getY(),
@@ -90,7 +98,8 @@ public class RunHubDetourMatrix {
                 }
             }
         }
-        log.info("Wrote {} detour-matrix rows ({} hubs) -> {}", rows, hubs.size(), outputPath);
+        log.info("Wrote {} detour-matrix rows ({} hubs, {} requests skipped, {} unreachable legs) -> {}",
+                rows, hubs.size(), skipped, nanLegs, outputPath);
     }
 
     /** Travel time of a routed leg incl. destination-link traversal; NaN if unreachable. */
