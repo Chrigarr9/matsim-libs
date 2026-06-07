@@ -69,6 +69,14 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     // de Lyon trips). Null = disabled.
     private String tripFilterExclusionShapefilePath = null;
 
+    // Paper-2 Extension 2: polygon used ONLY to detect which endpoint of a
+    // connecting request is urban during virtual-trip expansion. Decoupled from
+    // the eligibility exclusion zone above so the URBAN fleet run can supply the
+    // metropole geometry WITHOUT it acting as a both-endpoints-inside exclusion
+    // (which would drop the urban_intra trips the urban fleet must serve). Null =
+    // fall back to tripFilterExclusionShapefilePath (rural run / Kelheim default).
+    private String metropolePolygonPath = null;
+
 	// Scoring adapter selection: "auto" (default), "planCalcScore", "dmc", "eqasim"
 	private String scoringAdapter = "auto";
 
@@ -654,6 +662,20 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
     public boolean hasTripExclusionZone() {
         return tripFilterExclusionShapefilePath != null && !tripFilterExclusionShapefilePath.isBlank();
+    }
+
+    @StringGetter("metropolePolygonPath")
+    public String getMetropolePolygonPath() {
+        return metropolePolygonPath;
+    }
+
+    @StringSetter("metropolePolygonPath")
+    public void setMetropolePolygonPath(String metropolePolygonPath) {
+        this.metropolePolygonPath = metropolePolygonPath;
+    }
+
+    public boolean hasMetropolePolygon() {
+        return metropolePolygonPath != null && !metropolePolygonPath.isBlank();
     }
 
     public Set<String> getBaseModes() {

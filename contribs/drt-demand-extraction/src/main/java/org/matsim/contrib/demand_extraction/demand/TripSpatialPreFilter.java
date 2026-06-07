@@ -70,6 +70,46 @@ public class TripSpatialPreFilter {
         gf = factory;
     }
 
+    /**
+     * Polygon-only constructor for {@link #containsPoint} queries: no radius
+     * filter, no eligibility role. Used by Paper-2 Extension 2's virtual-trip
+     * expansion to detect the urban endpoint of a connecting request from the
+     * metropole polygon, independently of any eligibility exclusion zone.
+     */
+    private TripSpatialPreFilter(Geometry polygonOnly) {
+        this.hasSpatialFilter = false;
+        this.spatialCenterX = 0;
+        this.spatialCenterY = 0;
+        this.spatialRadiusSq = 0;
+        this.hasExclusionZone = polygonOnly != null;
+        this.exclusionZone = polygonOnly;
+        this.gf = polygonOnly != null ? new GeometryFactory() : null;
+    }
+
+    /** Builds a polygon-only filter from an in-memory geometry (for tests + reuse). */
+    public static TripSpatialPreFilter forPolygon(Geometry polygon) {
+        return new TripSpatialPreFilter(polygon);
+    }
+
+    /**
+     * Builds a polygon-only filter from a shapefile, unioning all features. Used
+     * as the metropole source for connecting-request expansion when a dedicated
+     * metropole polygon is configured (decoupled from the exclusion zone).
+     */
+    public static TripSpatialPreFilter forPolygonFile(String shapefilePath) {
+        Collection<SimpleFeature> features = GeoFileReader.getAllFeatures(shapefilePath);
+        Geometry zone = null;
+        for (SimpleFeature feature : features) {
+            Geometry geom = (Geometry) feature.getDefaultGeometry();
+            if (geom != null) {
+                zone = (zone == null) ? geom : zone.union(geom);
+            }
+        }
+        log.info("Metropole polygon source loaded from {}: {} feature(s), union geom type={}",
+                shapefilePath, features.size(), zone != null ? zone.getGeometryType() : "null");
+        return new TripSpatialPreFilter(zone);
+    }
+
     /** True if at least one spatial filter is configured. */
     public boolean isActive() {
         return hasSpatialFilter || hasExclusionZone;

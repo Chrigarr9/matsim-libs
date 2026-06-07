@@ -94,4 +94,25 @@ class RunLyonEqasimDemandExtractionParseArgsTest {
         });
         assertEquals(FleetSide.RURAL, p.fleetSide);
     }
+
+    @Test
+    void defaultsLeaveMetropolePolygonNull() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+        });
+        assertNull(p.metropolePolygonPath, "metropole-polygon null by default");
+    }
+
+    @Test
+    void parsesMetropolePolygonFlag() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+                "--metropole-polygon", "/tmp/metropole.shp",
+        });
+        assertEquals("/tmp/metropole.shp", p.metropolePolygonPath);
+    }
 }

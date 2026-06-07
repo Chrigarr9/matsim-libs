@@ -93,6 +93,10 @@ public class RunLyonEqasimDemandExtraction {
 		/** Paper-2 Extension 2: which fleet leg this run generates (RURAL or URBAN).
 		 *  Null = no virtual-trip expansion / no fleetSide tag drop (Kelheim + Paper-1 default). */
 		public final ExMasConfigGroup.FleetSide fleetSide;
+		/** Paper-2 Extension 2: metropole polygon shapefile used ONLY for connecting-request
+		 *  endpoint detection during expansion, decoupled from the eligibility exclusion zone
+		 *  (URBAN run sets this + no exclusion zone). Null = fall back to the exclusion polygon. */
+		public final String metropolePolygonPath;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
@@ -104,7 +108,7 @@ public class RunLyonEqasimDemandExtraction {
 				boolean enableStopBased, boolean enableHyperPooling,
 				boolean enableBudgetAwareConstraints, double maxWalkDistanceMeters,
 				String hubSetGeoJsonPath, String requestClassificationsPath,
-				ExMasConfigGroup.FleetSide fleetSide) {
+				ExMasConfigGroup.FleetSide fleetSide, String metropolePolygonPath) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -129,6 +133,7 @@ public class RunLyonEqasimDemandExtraction {
 			this.hubSetGeoJsonPath = hubSetGeoJsonPath;
 			this.requestClassificationsPath = requestClassificationsPath;
 			this.fleetSide = fleetSide;
+			this.metropolePolygonPath = metropolePolygonPath;
 		}
 	}
 
@@ -157,6 +162,7 @@ public class RunLyonEqasimDemandExtraction {
 		String hubSetGeoJsonPath = null;
 		String requestClassificationsPath = null;
 		ExMasConfigGroup.FleetSide fleetSide = null;
+		String metropolePolygonPath = null;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -185,6 +191,7 @@ public class RunLyonEqasimDemandExtraction {
 				case "--request-classifications" -> requestClassificationsPath = args[++i];
 				case "--fleet-side" -> fleetSide = ExMasConfigGroup.FleetSide.valueOf(
 						args[++i].trim().toUpperCase(java.util.Locale.ROOT));
+				case "--metropole-polygon" -> metropolePolygonPath = args[++i];
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -193,7 +200,7 @@ public class RunLyonEqasimDemandExtraction {
 				tripFilterRadiusKm, noExclusionZone, noPredecessors, noShapley, deterministicRouting,
 				maxPoolingDegree, predecessorsFilterTime,
 				enableStopBased, enableHyperPooling, enableBudgetAwareConstraints, maxWalkDistanceMeters,
-				hubSetGeoJsonPath, requestClassificationsPath, fleetSide);
+				hubSetGeoJsonPath, requestClassificationsPath, fleetSide, metropolePolygonPath);
 	}
 
 	/**
@@ -268,7 +275,7 @@ public class RunLyonEqasimDemandExtraction {
 						"--predecessors-filter-time", "--trip-filter-focus", "--trip-filter-center-x",
 						"--trip-filter-center-y", "--exclusion-zone", "--gate-intercept",
 						"--gate-slope", "--max-walk-distance-meters", "--hub-set",
-						"--request-classifications", "--fleet-side" -> true;
+						"--request-classifications", "--fleet-side", "--metropole-polygon" -> true;
 				default -> false;
 			};
 		}
@@ -321,7 +328,8 @@ public class RunLyonEqasimDemandExtraction {
 					+ "[--enable-budget-aware-constraints] [--max-walk-distance-meters <m>] "
 					+ "[--hub-set <geojson-path>] "
 					+ "[--request-classifications <csv-path>] "
-					+ "[--fleet-side RURAL|URBAN]");
+					+ "[--fleet-side RURAL|URBAN] "
+					+ "[--metropole-polygon <shapefile-path>]");
 			System.exit(1);
 		}
 
@@ -505,6 +513,10 @@ public class RunLyonEqasimDemandExtraction {
 		if (p.fleetSide != null) {
 			log.info("  Override: fleetSide = {}", p.fleetSide);
 			exMas.setFleetSide(p.fleetSide);
+		}
+		if (p.metropolePolygonPath != null) {
+			log.info("  Override: metropolePolygonPath = {}", p.metropolePolygonPath);
+			exMas.setMetropolePolygonPath(p.metropolePolygonPath);
 		}
 	}
 }

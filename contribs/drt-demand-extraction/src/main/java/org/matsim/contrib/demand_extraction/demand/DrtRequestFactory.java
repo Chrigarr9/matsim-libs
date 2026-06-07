@@ -143,22 +143,27 @@ public class DrtRequestFactory {
 			}
 		}
 
-		// Spatial pre-filter (already constructed below for trip filtering) doubles
-		// as the metropole-polygon source for virtual-trip expansion: a coord is
-		// "inside the metropole" iff TripSpatialPreFilter.containsPoint returns
-		// true (the loaded exclusion polygon IS the metropole polygon under the
-		// Lyon Extension 2 config).
+		// Metropole-polygon source for virtual-trip expansion: a coord is "inside
+		// the metropole" iff TripSpatialPreFilter.containsPoint returns true.
+		// Prefer the dedicated metropolePolygonPath (URBAN run: keeps urban_intra
+		// because no exclusion zone is set, yet still has the metropole geometry
+		// for endpoint detection); fall back to the exclusion polygon (RURAL run /
+		// pre-Extension-2 config, where the exclusion polygon IS the metropole).
 		TripSpatialPreFilter expansionMetropoleSource = null;
 		if (hubs != null) {
-			// We need TripSpatialPreFilter to have an exclusion polygon to drive
-			// the rural-vs-urban endpoint detection. The spatial filter below
-			// will be re-constructed; build a dedicated copy here for clarity.
-			expansionMetropoleSource = new TripSpatialPreFilter(exmasConfig);
-			if (!exmasConfig.hasTripExclusionZone()) {
+			String metropolePath = exmasConfig.hasMetropolePolygon()
+					? exmasConfig.getMetropolePolygonPath()
+					: (exmasConfig.hasTripExclusionZone()
+							? exmasConfig.getTripFilterExclusionShapefilePath()
+							: null);
+			if (metropolePath != null) {
+				expansionMetropoleSource = TripSpatialPreFilter.forPolygonFile(metropolePath);
+			} else {
 				log.warn("Virtual-trip expansion is enabled (hubSetGeoJsonPath={}) but no "
-						+ "tripFilterExclusionShapefilePath is configured. The metropole "
-						+ "polygon is required to identify which endpoint of a connecting "
-						+ "request is urban. Falling back to: 'destination is always urban'.",
+						+ "metropolePolygonPath or tripFilterExclusionShapefilePath is "
+						+ "configured. The metropole polygon is required to identify which "
+						+ "endpoint of a connecting request is urban. Falling back to: "
+						+ "'destination is always urban'.",
 						hubSetPath);
 			}
 		}
