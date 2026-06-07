@@ -3,6 +3,8 @@ package org.matsim.contrib.demand_extraction.run;
 import java.io.IOException;
 import java.nio.file.Path;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.population.Person;
@@ -30,6 +32,8 @@ import org.matsim.vehicles.VehicleUtils;
  * their routing is bit-for-bit the phase-2 routing.
  */
 public final class Phase2RoutingSetup {
+    private static final Logger log = LogManager.getLogger(Phase2RoutingSetup.class);
+
     public static final int TRAVEL_TIME_BIN_SIZE = 900;   // 15 min
     public static final int TRAVEL_TIME_END = 36 * 3600;  // 36 h
     private static final double DET_TIME_COEF = 1.0;
@@ -46,6 +50,7 @@ public final class Phase2RoutingSetup {
 
     public static Phase2RoutingSetup load(String networkPath, String travelTimesPath) throws IOException {
         Config config = ConfigUtils.createConfig();
+        // Atlantis CRS placeholder; the network file coords are already EPSG:2154.
         config.global().setCoordinateSystem("Atlantis");
         MutableScenario scenario = (MutableScenario) ScenarioUtils.createScenario(config);
         new MatsimNetworkReader(scenario.getNetwork()).readFile(networkPath);
@@ -62,10 +67,13 @@ public final class Phase2RoutingSetup {
     }
 
     private static TravelTime loadOfflineTravelTimes(String ttFile) throws IOException {
+        log.info("Loading pre-computed travel times from: {}", ttFile);
         TimeDiscretizer td = new TimeDiscretizer(TRAVEL_TIME_END, TRAVEL_TIME_BIN_SIZE);
         java.net.URL ttUrl = Path.of(ttFile).toUri().toURL();
         double[][] matrix = DvrpOfflineTravelTimes.loadLinkTravelTimes(td, ttUrl, "\t");
         TravelTime baseTt = DvrpOfflineTravelTimes.asTravelTime(td, matrix);
+        log.info("Bound pre-computed travel times ({} bins, clamped to {}h)",
+                td.getIntervalCount(), TRAVEL_TIME_END / 3600);
         return (link, time, person, vehicle) ->
                 baseTt.getLinkTravelTime(link, Math.min(time, TRAVEL_TIME_END), person, vehicle);
     }
