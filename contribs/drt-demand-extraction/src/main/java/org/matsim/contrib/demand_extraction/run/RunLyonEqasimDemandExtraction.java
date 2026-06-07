@@ -90,6 +90,9 @@ public class RunLyonEqasimDemandExtraction {
 		public final String hubSetGeoJsonPath;
 		/** Paper-2 Extension 2: path to request-classifications CSV (Phase 2 output). Null = disabled. */
 		public final String requestClassificationsPath;
+		/** Paper-2 Extension 2: which fleet leg this run generates (RURAL or URBAN).
+		 *  Null = no virtual-trip expansion / no fleetSide tag drop (Kelheim + Paper-1 default). */
+		public final ExMasConfigGroup.FleetSide fleetSide;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
@@ -100,7 +103,8 @@ public class RunLyonEqasimDemandExtraction {
 				int maxPoolingDegree, double predecessorsFilterTime,
 				boolean enableStopBased, boolean enableHyperPooling,
 				boolean enableBudgetAwareConstraints, double maxWalkDistanceMeters,
-				String hubSetGeoJsonPath, String requestClassificationsPath) {
+				String hubSetGeoJsonPath, String requestClassificationsPath,
+				ExMasConfigGroup.FleetSide fleetSide) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -124,6 +128,7 @@ public class RunLyonEqasimDemandExtraction {
 			this.maxWalkDistanceMeters = maxWalkDistanceMeters;
 			this.hubSetGeoJsonPath = hubSetGeoJsonPath;
 			this.requestClassificationsPath = requestClassificationsPath;
+			this.fleetSide = fleetSide;
 		}
 	}
 
@@ -151,6 +156,7 @@ public class RunLyonEqasimDemandExtraction {
 		double maxWalkDistanceMeters = Double.NaN;
 		String hubSetGeoJsonPath = null;
 		String requestClassificationsPath = null;
+		ExMasConfigGroup.FleetSide fleetSide = null;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -177,6 +183,8 @@ public class RunLyonEqasimDemandExtraction {
 				case "--max-walk-distance-meters" -> maxWalkDistanceMeters = Double.parseDouble(args[++i]);
 				case "--hub-set" -> hubSetGeoJsonPath = args[++i];
 				case "--request-classifications" -> requestClassificationsPath = args[++i];
+				case "--fleet-side" -> fleetSide = ExMasConfigGroup.FleetSide.valueOf(
+						args[++i].trim().toUpperCase(java.util.Locale.ROOT));
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -185,7 +193,7 @@ public class RunLyonEqasimDemandExtraction {
 				tripFilterRadiusKm, noExclusionZone, noPredecessors, noShapley, deterministicRouting,
 				maxPoolingDegree, predecessorsFilterTime,
 				enableStopBased, enableHyperPooling, enableBudgetAwareConstraints, maxWalkDistanceMeters,
-				hubSetGeoJsonPath, requestClassificationsPath);
+				hubSetGeoJsonPath, requestClassificationsPath, fleetSide);
 	}
 
 	/**
@@ -260,7 +268,7 @@ public class RunLyonEqasimDemandExtraction {
 						"--predecessors-filter-time", "--trip-filter-focus", "--trip-filter-center-x",
 						"--trip-filter-center-y", "--exclusion-zone", "--gate-intercept",
 						"--gate-slope", "--max-walk-distance-meters", "--hub-set",
-						"--request-classifications" -> true;
+						"--request-classifications", "--fleet-side" -> true;
 				default -> false;
 			};
 		}
@@ -312,7 +320,8 @@ public class RunLyonEqasimDemandExtraction {
 					+ "[--enable-stop-based] [--enable-hyperpooling] "
 					+ "[--enable-budget-aware-constraints] [--max-walk-distance-meters <m>] "
 					+ "[--hub-set <geojson-path>] "
-					+ "[--request-classifications <csv-path>]");
+					+ "[--request-classifications <csv-path>] "
+					+ "[--fleet-side RURAL|URBAN]");
 			System.exit(1);
 		}
 
@@ -492,6 +501,10 @@ public class RunLyonEqasimDemandExtraction {
 		if (p.requestClassificationsPath != null) {
 			log.info("  Override: requestClassificationsPath = {}", p.requestClassificationsPath);
 			exMas.setRequestClassificationsPath(p.requestClassificationsPath);
+		}
+		if (p.fleetSide != null) {
+			log.info("  Override: fleetSide = {}", p.fleetSide);
+			exMas.setFleetSide(p.fleetSide);
 		}
 	}
 }

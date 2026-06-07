@@ -1,6 +1,7 @@
 package org.matsim.contrib.demand_extraction.run;
 
 import org.junit.jupiter.api.Test;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.FleetSide;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -60,5 +61,37 @@ class RunLyonEqasimDemandExtractionParseArgsTest {
                 "--request-classifications", "/tmp/cls.csv",
         });
         assertEquals("/tmp/cls.csv", p.requestClassificationsPath);
+    }
+
+    @Test
+    void defaultsLeaveFleetSideNull() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+        });
+        assertNull(p.fleetSide, "fleet-side null by default (Kelheim / Paper-1 path)");
+    }
+
+    @Test
+    void parsesFleetSideUrban() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+                "--fleet-side", "URBAN",
+        });
+        assertEquals(FleetSide.URBAN, p.fleetSide);
+    }
+
+    @Test
+    void parsesFleetSideRuralCaseInsensitive() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+                "--fleet-side", "rural",
+        });
+        assertEquals(FleetSide.RURAL, p.fleetSide);
     }
 }
