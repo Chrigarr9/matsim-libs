@@ -53,4 +53,40 @@ class TripSpatialPreFilterPolygonSourceTest {
         cfg.setMetropolePolygonPath("/tmp/metropole.shp");
         assertTrue(cfg.hasMetropolePolygon());
     }
+
+    // ---- radius UNION inclusion-polygon eligibility (the rural<->urban fix) ----
+
+    @Test
+    void radiusUnionPolygon_endpointInEitherRegionIsIncluded() {
+        // Rural corridor: 1 km radius around (0,0). City polygon: far square,
+        // entirely outside the circle (mirrors the Lyon core outside the corridor).
+        Geometry city = square(10_000.0, 10_000.0, 12_000.0, 12_000.0);
+        TripSpatialPreFilter f = TripSpatialPreFilter.forRadiusUnionPolygon(0.0, 0.0, 1.0, city);
+
+        Coord ruralEnd = new Coord(500.0, 500.0);     // inside radius, outside polygon
+        Coord cityEnd = new Coord(11_000.0, 11_000.0); // inside polygon, outside radius
+        Coord nowhere = new Coord(5_000.0, 5_000.0);   // outside both
+
+        // The fix: a connecting commute (rural origin + metropole-core dest) is now
+        // eligible because each endpoint is inside one of the unioned regions.
+        assertTrue(f.isTripEligible(ruralEnd, cityEnd),
+                "rural end in radius + city end in polygon -> eligible (union)");
+        assertTrue(f.isTripEligible(ruralEnd, ruralEnd), "both in radius -> eligible");
+        assertTrue(f.isTripEligible(cityEnd, cityEnd), "both in polygon -> eligible");
+        assertFalse(f.isTripEligible(ruralEnd, nowhere),
+                "one endpoint outside both regions -> not eligible");
+        assertFalse(f.isTripEligible(nowhere, cityEnd),
+                "one endpoint outside both regions -> not eligible");
+    }
+
+    @Test
+    void radiusOnly_pureRadiusBehaviourPreserved() {
+        // No inclusion polygon -> both endpoints must be within the radius
+        // (Paper-1 / Kelheim behaviour is unchanged).
+        TripSpatialPreFilter f = TripSpatialPreFilter.forRadiusUnionPolygon(0.0, 0.0, 1.0, null);
+        assertTrue(f.isTripEligible(new Coord(500.0, 500.0), new Coord(-500.0, -500.0)),
+                "both in radius -> eligible");
+        assertFalse(f.isTripEligible(new Coord(500.0, 500.0), new Coord(5_000.0, 5_000.0)),
+                "one outside radius, no polygon -> dropped");
+    }
 }

@@ -33,6 +33,16 @@ public class TripSpatialPreFilter {
 
     private final boolean hasExclusionZone;
     private final Geometry exclusionZone;
+
+    // Paper-2 Extension 2: optional inclusion polygon UNIONED with the radius
+    // circle. When present, an endpoint is "included" if it is within the radius
+    // OR inside this polygon (the Lyon metropole). This is how the urban + rural
+    // fleet runs keep connecting commutes whose city-end lies in the metropole
+    // core (outside the rural corridor circle): radius scopes the rural end, the
+    // polygon scopes the city end. Absent (Paper-1, Kelheim) => pure radius.
+    private final boolean hasInclusionPolygon;
+    private final Geometry inclusionPolygon;
+
     private final GeometryFactory gf;
 
     public TripSpatialPreFilter(ExMasConfigGroup config) {
@@ -67,6 +77,24 @@ public class TripSpatialPreFilter {
                     shapePath, features.size(), zone != null ? zone.getGeometryType() : "null");
         }
         exclusionZone = zone;
+
+        hasInclusionPolygon = config.hasMetropolePolygon();
+        Geometry incl = null;
+        if (hasInclusionPolygon) {
+            String inclPath = config.getMetropolePolygonPath();
+            Collection<SimpleFeature> features = GeoFileReader.getAllFeatures(inclPath);
+            for (SimpleFeature feature : features) {
+                Geometry geom = (Geometry) feature.getDefaultGeometry();
+                if (geom != null) {
+                    incl = (incl == null) ? geom : incl.union(geom);
+                }
+            }
+            if (factory == null) factory = new GeometryFactory();
+            log.info("Trip inclusion polygon (unioned with radius) loaded from {}: {} feature(s), union geom type={}",
+                    inclPath, features.size(), incl != null ? incl.getGeometryType() : "null");
+        }
+        inclusionPolygon = incl;
+
         gf = factory;
     }
 
@@ -83,12 +111,39 @@ public class TripSpatialPreFilter {
         this.spatialRadiusSq = 0;
         this.hasExclusionZone = polygonOnly != null;
         this.exclusionZone = polygonOnly;
+        this.hasInclusionPolygon = false;
+        this.inclusionPolygon = null;
         this.gf = polygonOnly != null ? new GeometryFactory() : null;
     }
 
     /** Builds a polygon-only filter from an in-memory geometry (for tests + reuse). */
     public static TripSpatialPreFilter forPolygon(Geometry polygon) {
         return new TripSpatialPreFilter(polygon);
+    }
+
+    /**
+     * Test seam: builds the radius-circle UNION inclusion-polygon eligibility
+     * filter (no exclusion zone) from in-memory parameters, mirroring the
+     * config-driven main constructor's union semantics without a shapefile.
+     * {@code radiusKm <= 0} disables the radius term; {@code inclusionPolygon ==
+     * null} disables the polygon term.
+     */
+    static TripSpatialPreFilter forRadiusUnionPolygon(double centerX, double centerY,
+            double radiusKm, Geometry inclusionPolygon) {
+        return new TripSpatialPreFilter(centerX, centerY, radiusKm, inclusionPolygon);
+    }
+
+    private TripSpatialPreFilter(double centerX, double centerY, double radiusKm, Geometry inclusionPolygon) {
+        this.hasSpatialFilter = radiusKm > 0;
+        this.spatialCenterX = centerX;
+        this.spatialCenterY = centerY;
+        double r = radiusKm * 1000.0;
+        this.spatialRadiusSq = r * r;
+        this.hasExclusionZone = false;
+        this.exclusionZone = null;
+        this.hasInclusionPolygon = inclusionPolygon != null;
+        this.inclusionPolygon = inclusionPolygon;
+        this.gf = new GeometryFactory();
     }
 
     /**
@@ -112,22 +167,38 @@ public class TripSpatialPreFilter {
 
     /** True if at least one spatial filter is configured. */
     public boolean isActive() {
-        return hasSpatialFilter || hasExclusionZone;
+        return hasSpatialFilter || hasExclusionZone || hasInclusionPolygon;
+    }
+
+    /**
+     * Returns true if the endpoint passes the inclusion test: within the radius
+     * circle OR inside the inclusion polygon. When neither inclusion mechanism is
+     * configured this is not called (see {@link #isTripEligible}).
+     */
+    private boolean isEndpointIncluded(Coord c) {
+        if (hasSpatialFilter) {
+            double dx = c.getX() - spatialCenterX, dy = c.getY() - spatialCenterY;
+            if ((dx * dx + dy * dy) <= spatialRadiusSq) return true;
+        }
+        if (hasInclusionPolygon && inclusionPolygon != null) {
+            Point p = gf.createPoint(new org.locationtech.jts.geom.Coordinate(c.getX(), c.getY()));
+            if (inclusionPolygon.contains(p)) return true;
+        }
+        return false;
     }
 
     /**
      * Returns true if the trip passes all active spatial filters.
      * A trip is eligible when:
-     *  - Both O and D are within the radius (if radius filter active), AND
+     *  - Both O and D are inside the inclusion region (radius circle UNION the
+     *    inclusion polygon), if any inclusion mechanism is active, AND
      *  - NOT both O and D are inside the exclusion zone (if exclusion zone active).
      */
     public boolean isTripEligible(Coord oCoord, Coord dCoord) {
         if (oCoord == null || dCoord == null) return false;
 
-        if (hasSpatialFilter) {
-            double dxO = oCoord.getX() - spatialCenterX, dyO = oCoord.getY() - spatialCenterY;
-            double dxD = dCoord.getX() - spatialCenterX, dyD = dCoord.getY() - spatialCenterY;
-            if ((dxO * dxO + dyO * dyO) > spatialRadiusSq || (dxD * dxD + dyD * dyD) > spatialRadiusSq) {
+        if (hasSpatialFilter || hasInclusionPolygon) {
+            if (!isEndpointIncluded(oCoord) || !isEndpointIncluded(dCoord)) {
                 return false;
             }
         }

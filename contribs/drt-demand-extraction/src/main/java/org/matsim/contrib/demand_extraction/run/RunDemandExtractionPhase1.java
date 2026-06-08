@@ -140,6 +140,13 @@ public final class RunDemandExtractionPhase1 {
 		if (p.noExclusionZone) {
 			exMas.setTripFilterExclusionShapefilePath(null);
 		}
+		// Paper-2 Extension 2: pass-0 must classify the SAME universe both fleet
+		// runs build. The urban/rural runs union the corridor radius with the
+		// metropole polygon, so pass-0 needs the polygon too (else metropole-core
+		// trips are unrouted in pass-0, unclassified, and leak as null-tag rows).
+		if (p.metropolePolygonPath != null) {
+			exMas.setMetropolePolygonPath(p.metropolePolygonPath);
+		}
 		if (p.noPredecessors) {
 			exMas.setCalcPredecessors(false);
 		}
