@@ -2,7 +2,6 @@ package org.matsim.contrib.demand_extraction.io.lowmem;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -71,11 +70,61 @@ class PhaseOneDumpRoundTripExtension2Test {
 		}
 	}
 
+	/**
+	 * Paper-2 Task 7 added three trailing columns
+	 * ({@code hubLegRole,transferWaitSeconds,marginalUtilityOfMoney}). Verify they
+	 * survive the dump write+read with their exact values: enum identity for the
+	 * leg role, and doubles within the write precision ({@code %.2f} for
+	 * transferWaitSeconds, {@code %.6f} for marginalUtilityOfMoney).
+	 */
+	@Test
+	void roundTripsHubLegRoleTransferWaitAndMum(@TempDir Path tmp) throws IOException {
+		PhaseOneDumpLayout layout = new PhaseOneDumpLayout(tmp);
+
+		// idx 0: plain rural request — defaults (NONE / 0 / 0) plus a non-default mum.
+		// idx 1: access leg into a hub with a transfer wait.
+		// idx 2: continuation leg out of a hub with a transfer wait.
+		List<DrtRequest> originals = List.of(
+				LowMemTestFixtures.buildRequest(0, "home", "work", 43200.0, 28800.0,
+						"rural_intra", null,
+						DrtRequest.HubLegRole.NONE, 0.0, 0.085),
+				LowMemTestFixtures.buildRequest(1, "home", "work", 43200.0, 28800.0,
+						"connecting", "hub_03",
+						DrtRequest.HubLegRole.ACCESS_LEG, 300.0, 0.085),
+				LowMemTestFixtures.buildRequest(2, "home", "work", 43200.0, 28800.0,
+						"connecting", "hub_03",
+						DrtRequest.HubLegRole.CONTINUATION_LEG, 180.0, 0.012345));
+
+		PhaseOneDumpWriter.Meta meta = new PhaseOneDumpWriter.Meta(
+				"drt", WALK_SPEED, "LOG", MIN_WALK,
+				"test-run-id", 1, 0L, 0L, null);
+
+		PhaseOneDumpWriter.write(layout, originals, meta);
+
+		PhaseOneDumpReader.DumpData loaded = PhaseOneDumpReader.read(layout);
+		assertEquals(3, loaded.requests().size());
+
+		Map<Integer, DrtRequest> reloadedByIdx = loaded.requests().stream()
+				.collect(Collectors.toMap(r -> r.index, r -> r));
+
+		for (DrtRequest original : originals) {
+			DrtRequest reloaded = reloadedByIdx.get(original.index);
+			assertNotNull(reloaded, "reloaded request missing for idx " + original.index);
+			assertEquals(original.hubLegRole, reloaded.hubLegRole,
+					"hubLegRole mismatch for idx " + original.index);
+			assertEquals(original.transferWaitSeconds, reloaded.transferWaitSeconds, 1e-6,
+					"transferWaitSeconds mismatch for idx " + original.index);
+			assertEquals(original.marginalUtilityOfMoney, reloaded.marginalUtilityOfMoney, 1e-6,
+					"marginalUtilityOfMoney mismatch for idx " + original.index);
+		}
+	}
+
 	@Test
 	void backwardCompatibleReadOfOldDumpWithoutNewColumns(@TempDir Path tmp) throws IOException {
 		// First, perform a real round-trip dump so the BIN + JSON + the other CSV
-		// columns are consistent, then rewrite the CSV stripping the two trailing
-		// Extension-2 columns to simulate a legacy dump.
+		// columns are consistent, then rewrite the CSV stripping the three trailing
+		// Paper-2 Task-7 columns (hubLegRole,transferWaitSeconds,marginalUtilityOfMoney)
+		// to simulate a legacy dump written before they existed.
 		PhaseOneDumpLayout layout = new PhaseOneDumpLayout(tmp);
 
 		List<DrtRequest> originals = List.of(
@@ -88,22 +137,35 @@ class PhaseOneDumpRoundTripExtension2Test {
 
 		PhaseOneDumpWriter.write(layout, originals, meta);
 
-		// Strip the two trailing columns ("requestTag,hubId") from every line.
+		// Strip the three trailing Task-7 columns
+		// ("hubLegRole,transferWaitSeconds,marginalUtilityOfMoney") from every line,
+		// leaving requestTag,hubId as the new boundary — a pre-Task-7 legacy dump.
 		Path csv = layout.requestsCsv();
 		List<String> lines = Files.readAllLines(csv);
-		Files.write(csv, lines.stream().map(line -> {
-			int last = line.lastIndexOf(',');
-			int secondLast = line.lastIndexOf(',', last - 1);
-			return line.substring(0, secondLast);
-		}).collect(Collectors.toList()));
+		Files.write(csv, lines.stream().map(line -> stripTrailingColumns(line, 3))
+				.collect(Collectors.toList()));
 
 		PhaseOneDumpReader.DumpData loaded = PhaseOneDumpReader.read(layout);
 		assertEquals(2, loaded.requests().size());
 		for (DrtRequest reloaded : loaded.requests()) {
-			assertNull(reloaded.requestTag,
-					"legacy dump without requestTag column must surface null (idx " + reloaded.index + ")");
-			assertNull(reloaded.hubId,
-					"legacy dump without hubId column must surface null (idx " + reloaded.index + ")");
+			assertEquals(DrtRequest.HubLegRole.NONE, reloaded.hubLegRole,
+					"legacy dump without hubLegRole column must default to NONE (idx " + reloaded.index + ")");
+			assertEquals(0.0, reloaded.transferWaitSeconds, 1e-6,
+					"legacy dump without transferWaitSeconds column must default to 0.0 (idx " + reloaded.index + ")");
+			assertEquals(0.0, reloaded.marginalUtilityOfMoney, 1e-6,
+					"legacy dump without marginalUtilityOfMoney column must default to 0.0 (idx " + reloaded.index + ")");
 		}
+	}
+
+	/** Drop the {@code n} trailing comma-separated columns from one CSV line. */
+	private static String stripTrailingColumns(String line, int n) {
+		int cut = line.length();
+		for (int k = 0; k < n; k++) {
+			cut = line.lastIndexOf(',', cut - 1);
+			if (cut < 0) {
+				throw new IllegalArgumentException("line has fewer than " + n + " columns: " + line);
+			}
+		}
+		return line.substring(0, cut);
 	}
 }

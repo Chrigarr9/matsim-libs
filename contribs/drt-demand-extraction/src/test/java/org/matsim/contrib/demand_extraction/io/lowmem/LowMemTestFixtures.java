@@ -41,6 +41,19 @@ final class LowMemTestFixtures {
 	static DrtRequest buildRequest(int idx, String originActivityType, String destActivityType,
 			double originTypicalDuration, double destTypicalDuration,
 			String requestTag, String hubId) {
+		return buildRequest(idx, originActivityType, destActivityType,
+				originTypicalDuration, destTypicalDuration, requestTag, hubId,
+				DrtRequest.HubLegRole.NONE, 0.0, 0.0);
+	}
+
+	/**
+	 * Variant that additionally stamps the Paper-2 hub-leg fields ({@code hubLegRole},
+	 * {@code transferWaitSeconds}, {@code marginalUtilityOfMoney}) onto the request.
+	 */
+	static DrtRequest buildRequest(int idx, String originActivityType, String destActivityType,
+			double originTypicalDuration, double destTypicalDuration,
+			String requestTag, String hubId,
+			DrtRequest.HubLegRole hubLegRole, double transferWaitSeconds, double marginalUtilityOfMoney) {
 		Id<Link> from = Id.createLinkId("L" + (idx * 2));
 		Id<Link> to = Id.createLinkId("L" + (idx * 2 + 1));
 
@@ -54,6 +67,9 @@ final class LowMemTestFixtures {
 				.bestMode("car")
 				.requestTag(requestTag)
 				.hubId(hubId)
+				.hubLegRole(hubLegRole)
+				.transferWaitSeconds(transferWaitSeconds)
+				.marginalUtilityOfMoney(marginalUtilityOfMoney)
 				.originLinkId(from)
 				.destinationLinkId(to)
 				.originX(0.0).originY(0.0)
