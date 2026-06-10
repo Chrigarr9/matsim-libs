@@ -88,6 +88,8 @@ public class RunLyonEqasimDemandExtraction {
 		public final double maxWalkDistanceMeters;
 		/** Paper-2 Extension 2: path to hub-set GeoJSON (Phase 3 output). Null = disabled. */
 		public final String hubSetGeoJsonPath;
+		/** Paper-2 Extension 2: scheduled hub transfer slack (seconds). NaN = keep config default (300). */
+		public final double hubTransferBufferSeconds;
 		/** Paper-2 Extension 2: path to request-classifications CSV (Phase 2 output). Null = disabled. */
 		public final String requestClassificationsPath;
 		/** Paper-2 Extension 2: which fleet leg this run generates (RURAL or URBAN).
@@ -111,7 +113,8 @@ public class RunLyonEqasimDemandExtraction {
 				int maxPoolingDegree, double predecessorsFilterTime,
 				boolean enableStopBased, boolean enableHyperPooling,
 				boolean enableBudgetAwareConstraints, double maxWalkDistanceMeters,
-				String hubSetGeoJsonPath, String requestClassificationsPath,
+				String hubSetGeoJsonPath, double hubTransferBufferSeconds,
+				String requestClassificationsPath,
 				ExMasConfigGroup.FleetSide fleetSide, String metropolePolygonPath,
 				long maxOrderingNodes) {
 			this.sample = sample;
@@ -136,6 +139,7 @@ public class RunLyonEqasimDemandExtraction {
 			this.enableBudgetAwareConstraints = enableBudgetAwareConstraints;
 			this.maxWalkDistanceMeters = maxWalkDistanceMeters;
 			this.hubSetGeoJsonPath = hubSetGeoJsonPath;
+			this.hubTransferBufferSeconds = hubTransferBufferSeconds;
 			this.requestClassificationsPath = requestClassificationsPath;
 			this.fleetSide = fleetSide;
 			this.metropolePolygonPath = metropolePolygonPath;
@@ -166,6 +170,7 @@ public class RunLyonEqasimDemandExtraction {
 		boolean enableBudgetAwareConstraints = false;
 		double maxWalkDistanceMeters = Double.NaN;
 		String hubSetGeoJsonPath = null;
+		double hubTransferBufferSeconds = Double.NaN;
 		String requestClassificationsPath = null;
 		ExMasConfigGroup.FleetSide fleetSide = null;
 		String metropolePolygonPath = null;
@@ -195,6 +200,7 @@ public class RunLyonEqasimDemandExtraction {
 				case "--enable-budget-aware-constraints" -> enableBudgetAwareConstraints = true;
 				case "--max-walk-distance-meters" -> maxWalkDistanceMeters = Double.parseDouble(args[++i]);
 				case "--hub-set" -> hubSetGeoJsonPath = args[++i];
+				case "--hub-transfer-buffer" -> hubTransferBufferSeconds = Double.parseDouble(args[++i]);
 				case "--request-classifications" -> requestClassificationsPath = args[++i];
 				case "--fleet-side" -> fleetSide = ExMasConfigGroup.FleetSide.valueOf(
 						args[++i].trim().toUpperCase(java.util.Locale.ROOT));
@@ -208,7 +214,7 @@ public class RunLyonEqasimDemandExtraction {
 				tripFilterRadiusKm, noExclusionZone, noPredecessors, noShapley, deterministicRouting,
 				maxPoolingDegree, predecessorsFilterTime,
 				enableStopBased, enableHyperPooling, enableBudgetAwareConstraints, maxWalkDistanceMeters,
-				hubSetGeoJsonPath, requestClassificationsPath, fleetSide, metropolePolygonPath,
+				hubSetGeoJsonPath, hubTransferBufferSeconds, requestClassificationsPath, fleetSide, metropolePolygonPath,
 				maxOrderingNodes);
 	}
 
@@ -284,6 +290,7 @@ public class RunLyonEqasimDemandExtraction {
 						"--predecessors-filter-time", "--trip-filter-focus", "--trip-filter-center-x",
 						"--trip-filter-center-y", "--exclusion-zone", "--gate-intercept",
 						"--gate-slope", "--max-walk-distance-meters", "--hub-set",
+						"--hub-transfer-buffer",
 						"--request-classifications", "--fleet-side", "--metropole-polygon",
 						"--max-ordering-nodes" -> true;
 				default -> false;
@@ -337,6 +344,7 @@ public class RunLyonEqasimDemandExtraction {
 					+ "[--enable-stop-based] [--enable-hyperpooling] "
 					+ "[--enable-budget-aware-constraints] [--max-walk-distance-meters <m>] "
 					+ "[--hub-set <geojson-path>] "
+					+ "[--hub-transfer-buffer <seconds>] "
 					+ "[--request-classifications <csv-path>] "
 					+ "[--fleet-side RURAL|URBAN] "
 					+ "[--metropole-polygon <shapefile-path>]");
@@ -515,6 +523,10 @@ public class RunLyonEqasimDemandExtraction {
 		if (p.hubSetGeoJsonPath != null) {
 			log.info("  Override: hubSetGeoJsonPath = {}", p.hubSetGeoJsonPath);
 			exMas.setHubSetGeoJsonPath(p.hubSetGeoJsonPath);
+		}
+		if (!Double.isNaN(p.hubTransferBufferSeconds)) {
+			log.info("  Override: hubTransferBufferSeconds = {}", p.hubTransferBufferSeconds);
+			exMas.setHubTransferBufferSeconds(p.hubTransferBufferSeconds);
 		}
 		if (p.requestClassificationsPath != null) {
 			log.info("  Override: requestClassificationsPath = {}", p.requestClassificationsPath);

@@ -499,6 +499,15 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	 */
 	private String requestClassificationsPath = null;
 
+	/**
+	 * Paper-2 Extension 2: scheduled transfer slack at the hub, in seconds. The
+	 * urban (continuation) virtual leg is scheduled this long after the rural
+	 * leg's direct arrival at the hub, and the slack is charged as waiting
+	 * disutility on the continuation leg. Only used when virtual-trip expansion
+	 * is active (hubSetGeoJsonPath + fleetSide set).
+	 */
+	private double hubTransferBufferSeconds = 300.0;
+
     public ExMasConfigGroup() {
         super(GROUP_NAME);
     }
@@ -1453,6 +1462,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.fleetSide = fleetSide;
 	}
 
+	@StringGetter("hubTransferBufferSeconds")
+	public double getHubTransferBufferSeconds() {
+		return hubTransferBufferSeconds;
+	}
+
+	@StringSetter("hubTransferBufferSeconds")
+	public void setHubTransferBufferSeconds(double hubTransferBufferSeconds) {
+		this.hubTransferBufferSeconds = hubTransferBufferSeconds;
+	}
+
 	@StringGetter("requestClassificationsPath")
 	public String getRequestClassificationsPath() {
 		return requestClassificationsPath;
@@ -1664,6 +1683,11 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				+ "columns tolerated). When set, DrtRequestFactory loads it via "
 				+ "RequestClassificationLoader and stamps each DrtRequest.requestTag. Default: null "
 				+ "(disabled — DrtRequest.requestTag stays null, preserving Kelheim behaviour).");
+
+		map.put("hubTransferBufferSeconds",
+				"Paper-2 Ext-2: scheduled hub transfer slack in seconds; urban virtual legs are "
+				+ "shifted by ruralLegTime + buffer and charged the buffer as waiting disutility. "
+				+ "Default: 300.");
 
         return map;
     }
