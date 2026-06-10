@@ -233,6 +233,8 @@ public final class OrderingEnumerator {
 		if (constraints == null) return;
 		int n = requestIndices.length;
 
+		EnumerationStats.get().probeSetStart();
+
 		Boolean[][] origAdj = new Boolean[n][n];
 		for (int a = 0; a < n; a++) {
 			for (int b = a + 1; b < n; b++) {
@@ -264,6 +266,8 @@ public final class OrderingEnumerator {
 				minIn, totalMinInInit,
 				budgetAwareConstraints,
 				evaluator, connTT, connDist, connUtil);
+
+		EnumerationStats.get().probeSetEnd(n);
 	}
 
 	private static int[] remapToLocal(int[] globalOrder, int[] requestIndices) {
@@ -330,6 +334,13 @@ public final class OrderingEnumerator {
 			boolean budgetAwareConstraints,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
+
+		EnumerationStats probeStats = EnumerationStats.get();
+		probeStats.probeNode();
+		// Per-set node budget (Design A): once the post-first-valid tail is spent,
+		// abort this subtree. bestRide is already held by the evaluator; the monotone
+		// predicate makes every further node entry return immediately, unwinding the set.
+		if (probeStats.orderingBudgetExhausted()) return;
 
 		if (depth == n) {
 			// All origins placed — enumerate destination orderings with parent-consistent seed.
@@ -915,15 +926,22 @@ public final class OrderingEnumerator {
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
+		EnumerationStats stats = EnumerationStats.get();
+		stats.probeNode();
+		// Per-set node budget (Design A): abort once the post-first-valid tail is spent.
+		if (stats.orderingBudgetExhausted()) return;
+
 		if (depth == n) {
 			// Complete ordering — call evaluator inline with pre-routed segment data.
+			// Watch bestValidDist across the accept to time first-valid / last-improvement.
+			double bestBefore = bestValidDist[0];
 			evaluator.accept(new Ordering(origPerm.clone(), perm.clone(), partialDist,
 					connTT.clone(), connDist.clone(), connUtil.clone()));
+			stats.probeAccept(bestBefore, bestValidDist[0]);
 			return;
 		}
 
 		// Check A: prune entire subtree if any in-vehicle passenger already exceeds maxTravelTime.
-		EnumerationStats stats = EnumerationStats.get();
 		for (int p = 0; p < n; p++) {
 			if (used[p]) continue; // already dropped off
 			double inVehicleTime = currentTime - pickupTimes[p];

@@ -64,7 +64,112 @@ public final class EnumerationStats {
 	public long timeRideConstruction;
 	public long timeBudgetValidation;
 
+	// ---- Per-set ordering-budget probe (transient scratch, reset per set) ----
+	/** DFS nodes entered while processing the current set (origin + dest recursion calls). */
+	public long curSetNodes;
+	/** curSetNodes value when the first budget-valid ordering was accepted (-1 = none yet). */
+	public long curSetNodesFirstValid = -1;
+	/** curSetNodes value at the last bestValidDist improvement (-1 = none). */
+	public long curSetNodesBest = -1;
+
+	// ---- Per-set ordering node budget (Design A; 0 = disabled) ----
+	// Caps the per-set DFS *after* the first budget-valid ordering is found. The
+	// descend-to-first-valid floor is unconditional (the predicate requires
+	// curSetNodesFirstValid >= 0), so every feasible set still yields a ride and
+	// only the post-first-valid tail is bounded. Global config constant for the
+	// whole run, set once before the worker pool starts (write happens-before the
+	// worker threads), then read-only on the lock-free per-thread counters above.
+	private static volatile long maxOrderingNodesAfterFirstValid = 0;
+
+	/** Set the per-set ordering node budget B (0 = disabled). Negative values clamp to 0. */
+	public static void setMaxOrderingNodesAfterFirstValid(long b) {
+		maxOrderingNodesAfterFirstValid = Math.max(0L, b);
+	}
+
+	/** Current per-set ordering node budget B (0 = disabled). */
+	public static long getMaxOrderingNodesAfterFirstValid() {
+		return maxOrderingNodesAfterFirstValid;
+	}
+
+	/**
+	 * True once the current set has spent its post-first-valid node budget. Always
+	 * false when B is disabled or before the first valid ordering exists (so the
+	 * descend-to-first-valid guard is unconditional). Monotone within a set: once
+	 * true it stays true, so checking it at each DFS node entry unwinds the rest of
+	 * the set cheaply, leaving the best ride found in [firstValid, firstValid + B].
+	 */
+	public boolean orderingBudgetExhausted() {
+		long b = maxOrderingNodesAfterFirstValid;
+		return b > 0 && curSetNodesFirstValid >= 0
+				&& (curSetNodes - curSetNodesFirstValid) > b;
+	}
+
+	// ---- Optional per-set probe sink (enabled by -Dbamas.orderingProbe=<csv path>) ----
+	// Sizes a per-set ordering node budget: records, per high-degree set, how many
+	// DFS nodes were entered in total, before the first valid ordering (feasibility
+	// floor for any budget), and before the last bestValidDist improvement (quality
+	// target). Inert unless the property is set; counters themselves are always live
+	// (one long++ per node) so the same counter can later drive a runtime cap.
+	private static final String PROBE_PATH = System.getProperty("bamas.orderingProbe");
+	/** Minimum degree to record (the explosion lives at high degree; low degrees are noise). */
+	private static final int PROBE_MIN_DEGREE = Integer.getInteger("bamas.orderingProbeMinDegree", 6);
+	private static java.io.Writer probeWriter;
+
+	static {
+		if (PROBE_PATH != null) {
+			Runtime.getRuntime().addShutdownHook(new Thread(EnumerationStats::probeClose));
+		}
+	}
+
 	public static EnumerationStats get() { return THREAD_LOCAL.get(); }
+
+	/** Reset the per-set probe scratch at the start of one set's enumeration. */
+	public void probeSetStart() {
+		curSetNodes = 0;
+		curSetNodesFirstValid = -1;
+		curSetNodesBest = -1;
+	}
+
+	/** Record one DFS node entry for the current set. */
+	public void probeNode() { curSetNodes++; }
+
+	/**
+	 * Observe a just-completed accept: if bestValidDist improved, mark first-valid
+	 * (once) and update last-improvement node position. The first valid ordering
+	 * always improves the bound (initial bound = maxRideDistance), so
+	 * curSetNodesFirstValid is exactly the node index of the first valid ordering.
+	 */
+	public void probeAccept(double bestBefore, double bestAfter) {
+		if (bestAfter < bestBefore) {
+			if (curSetNodesFirstValid < 0) curSetNodesFirstValid = curSetNodes;
+			curSetNodesBest = curSetNodes;
+		}
+	}
+
+	/** Emit one per-set record (no-op unless the probe is enabled and degree >= min). */
+	public void probeSetEnd(int degree) {
+		if (PROBE_PATH == null || degree < PROBE_MIN_DEGREE) return;
+		writeProbeRow(degree, curSetNodes, curSetNodesFirstValid, curSetNodesBest);
+	}
+
+	private static synchronized void writeProbeRow(int degree, long nodes, long firstValid, long best) {
+		try {
+			if (probeWriter == null) {
+				probeWriter = new java.io.BufferedWriter(new java.io.FileWriter(PROBE_PATH));
+				probeWriter.write("degree,nodesTotal,nodesToFirstValid,nodesToBest\n");
+			}
+			probeWriter.write(degree + "," + nodes + "," + firstValid + "," + best + "\n");
+			probeWriter.flush();
+		} catch (java.io.IOException e) {
+			// best-effort probe; ignore IO failures
+		}
+	}
+
+	private static synchronized void probeClose() {
+		if (probeWriter != null) {
+			try { probeWriter.close(); } catch (java.io.IOException e) { /* ignore */ } finally { probeWriter = null; }
+		}
+	}
 
 	public static void reset() { THREAD_LOCAL.set(new EnumerationStats()); }
 

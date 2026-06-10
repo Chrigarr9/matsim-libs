@@ -178,6 +178,42 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private double searchHorizon = 600.0; // Time horizon for pairing requests (seconds, 10 minutes)
 	private int maxPoolingDegree = Integer.MAX_VALUE; // Maximum number of passengers per ride
 
+	/**
+	 * Per-set ordering-enumeration node budget B (Design A). 0 (default) = disabled
+	 * = exact, current behaviour. When &gt; 0, the high-degree ordering DFS descends
+	 * to the first budget-valid ordering unconditionally (so every feasible set keeps
+	 * a ride), then explores at most B more DFS nodes before returning the best ride
+	 * found so far. Bounds the post-first-valid tail that dominates high-degree cost
+	 * (deg-8/9), making BAMAS extension tractable without reducing pooling degree.
+	 *
+	 * <p><b>This is an ABSOLUTE node count, not a per-degree factor — by design.</b>
+	 * The quality window (nodes from first-valid to the best ordering) grows roughly
+	 * 10x per degree (deg6 p95 ~17k -&gt; deg9 ~77M on the 1% urban smoke), so a fixed
+	 * B keeps the exact best at low degree (where it never binds: deg6/7 medians are
+	 * 27k/400k total nodes) and forces a near-best ride at high degree (where the cap
+	 * is needed). A degree-scaling B would loosen the cap exactly where cost explodes,
+	 * re-admitting the deg-9 blow-up the cap exists to remove. Do NOT make it adaptive.
+	 *
+	 * <p><b>Recommended values</b> (fraction = sets keeping the exact-best ride;
+	 * speedup = node reduction; 0 rides are ever lost at any B since descend-to-first-
+	 * valid is unconditional):
+	 * <ul>
+	 *   <li>0 — off, exact (current behaviour).</li>
+	 *   <li>200000 — aggressive: ~97% exact-best, ~5.4x fewer nodes.</li>
+	 *   <li>1000000 — conservative: ~99% exact-best, ~3x fewer nodes.</li>
+	 * </ul>
+	 * Practical floor ~100k (below the ~108k improvement-window p95 the exact-best
+	 * fraction drops steeply). Those fractions are from the 1% urban smoke; at 100%
+	 * the high-degree population grows so the exact-best fraction at a given B is
+	 * lower (degrades gracefully, still no rides lost).
+	 *
+	 * <p><b>Caveat:</b> B caps only the post-first-valid tail; it does NOT bound
+	 * {@code nodesToFirstValid} (the floor), so a deep-first-valid high-degree set
+	 * still costs {@code firstValid + B}. Bounding the floor needs a separate hard
+	 * total-node cap (deferred), which would drop those sets' rides.
+	 */
+	private long maxOrderingNodesAfterFirstValid = 0;
+
 	// Network routing settings
 	// If true, uses OnlyTimeDependentTravelDisutility for deterministic routing (ignores tolls)
 	// If false, uses mode-specific TravelDisutility which may include tolls and other costs
@@ -901,6 +937,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.maxPoolingDegree = maxPoolingDegree;
 	}
 
+	@StringGetter("maxOrderingNodesAfterFirstValid")
+	public long getMaxOrderingNodesAfterFirstValid() {
+		return maxOrderingNodesAfterFirstValid;
+	}
+
+	@StringSetter("maxOrderingNodesAfterFirstValid")
+	public void setMaxOrderingNodesAfterFirstValid(long maxOrderingNodesAfterFirstValid) {
+		this.maxOrderingNodesAfterFirstValid = Math.max(0L, maxOrderingNodesAfterFirstValid);
+	}
+
 	@StringGetter("useDeterministicNetworkRouting")
 	public boolean isUseDeterministicNetworkRouting() {
 		return useDeterministicNetworkRouting;
@@ -1467,6 +1513,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Time horizon for pairing requests in ExMAS algorithm (seconds). Requests within this window can be paired. Default: 600 (10 min)");
 		map.put("maxPoolingDegree",
 				"Maximum number of passengers per shared ride. Default: 2");
+		map.put("maxOrderingNodesAfterFirstValid",
+				"Per-set ordering-enumeration node budget B (0 = off, exact). When >0, the high-degree " +
+				"ordering DFS descends to the first budget-valid ordering, then explores at most B more " +
+				"DFS nodes before returning the best ride found (bounds the post-first-valid tail that " +
+				"dominates deg-8/9 cost; never loses a feasible ride). Absolute node count, NOT per-degree. " +
+				"Recommended: 200000 (~97% exact-best, ~5.4x fewer nodes) or 1000000 (~99% exact, ~3x). " +
+				"Default: 0");
 		map.put("useDeterministicNetworkRouting",
 				"If true, uses time-only travel disutility (deterministic but ignores tolls). " +
 				"If false, uses mode-specific travel disutility (includes tolls but may have slight variation). Default: false");

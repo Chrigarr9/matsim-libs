@@ -134,6 +134,16 @@ public final class BamasRideExtender {
 		log.info("  {} base rides in {} unique request sets, {} threads",
 				parents.size(), uniqueBaseSets.size(), parallelism);
 
+		// Per-set ordering node budget B (Design A; 0 = off). Static config constant
+		// for the whole run, set once here before the worker pool starts so the write
+		// happens-before every worker thread reads it during enumeration.
+		long orderingNodeBudget = exMasConfig.getMaxOrderingNodesAfterFirstValid();
+		EnumerationStats.setMaxOrderingNodesAfterFirstValid(orderingNodeBudget);
+		if (orderingNodeBudget > 0) {
+			log.info("  ordering node budget: {} nodes after first-valid per set (high-degree tail cap)",
+					orderingNodeBudget);
+		}
+
 		// Streaming dedup: single producer walks parents in sorted order,
 		// claims each unique child-set hash, and offers tasks to a bounded
 		// queue. Workers drain the queue in parallel. Claim order = producer

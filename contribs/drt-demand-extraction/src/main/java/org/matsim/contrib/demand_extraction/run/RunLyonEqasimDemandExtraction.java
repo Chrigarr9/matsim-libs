@@ -97,6 +97,10 @@ public class RunLyonEqasimDemandExtraction {
 		 *  endpoint detection during expansion, decoupled from the eligibility exclusion zone
 		 *  (URBAN run sets this + no exclusion zone). Null = fall back to the exclusion polygon. */
 		public final String metropolePolygonPath;
+		/** Per-set ordering-enumeration node budget B (Design A). -1 = off (exact);
+		 *  >=0 caps the post-first-valid DFS tail per set without dropping feasible rides.
+		 *  See {@link ExMasConfigGroup#getMaxOrderingNodesAfterFirstValid()}. */
+		public final long maxOrderingNodes;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
@@ -108,7 +112,8 @@ public class RunLyonEqasimDemandExtraction {
 				boolean enableStopBased, boolean enableHyperPooling,
 				boolean enableBudgetAwareConstraints, double maxWalkDistanceMeters,
 				String hubSetGeoJsonPath, String requestClassificationsPath,
-				ExMasConfigGroup.FleetSide fleetSide, String metropolePolygonPath) {
+				ExMasConfigGroup.FleetSide fleetSide, String metropolePolygonPath,
+				long maxOrderingNodes) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -134,6 +139,7 @@ public class RunLyonEqasimDemandExtraction {
 			this.requestClassificationsPath = requestClassificationsPath;
 			this.fleetSide = fleetSide;
 			this.metropolePolygonPath = metropolePolygonPath;
+			this.maxOrderingNodes = maxOrderingNodes;
 		}
 	}
 
@@ -163,6 +169,7 @@ public class RunLyonEqasimDemandExtraction {
 		String requestClassificationsPath = null;
 		ExMasConfigGroup.FleetSide fleetSide = null;
 		String metropolePolygonPath = null;
+		long maxOrderingNodes = -1;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -192,6 +199,7 @@ public class RunLyonEqasimDemandExtraction {
 				case "--fleet-side" -> fleetSide = ExMasConfigGroup.FleetSide.valueOf(
 						args[++i].trim().toUpperCase(java.util.Locale.ROOT));
 				case "--metropole-polygon" -> metropolePolygonPath = args[++i];
+				case "--max-ordering-nodes" -> maxOrderingNodes = Long.parseLong(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -200,7 +208,8 @@ public class RunLyonEqasimDemandExtraction {
 				tripFilterRadiusKm, noExclusionZone, noPredecessors, noShapley, deterministicRouting,
 				maxPoolingDegree, predecessorsFilterTime,
 				enableStopBased, enableHyperPooling, enableBudgetAwareConstraints, maxWalkDistanceMeters,
-				hubSetGeoJsonPath, requestClassificationsPath, fleetSide, metropolePolygonPath);
+				hubSetGeoJsonPath, requestClassificationsPath, fleetSide, metropolePolygonPath,
+				maxOrderingNodes);
 	}
 
 	/**
@@ -275,7 +284,8 @@ public class RunLyonEqasimDemandExtraction {
 						"--predecessors-filter-time", "--trip-filter-focus", "--trip-filter-center-x",
 						"--trip-filter-center-y", "--exclusion-zone", "--gate-intercept",
 						"--gate-slope", "--max-walk-distance-meters", "--hub-set",
-						"--request-classifications", "--fleet-side", "--metropole-polygon" -> true;
+						"--request-classifications", "--fleet-side", "--metropole-polygon",
+						"--max-ordering-nodes" -> true;
 				default -> false;
 			};
 		}
@@ -517,6 +527,10 @@ public class RunLyonEqasimDemandExtraction {
 		if (p.metropolePolygonPath != null) {
 			log.info("  Override: metropolePolygonPath = {}", p.metropolePolygonPath);
 			exMas.setMetropolePolygonPath(p.metropolePolygonPath);
+		}
+		if (p.maxOrderingNodes >= 0) {
+			log.info("  Override: maxOrderingNodesAfterFirstValid = {}", p.maxOrderingNodes);
+			exMas.setMaxOrderingNodesAfterFirstValid(p.maxOrderingNodes);
 		}
 	}
 }
