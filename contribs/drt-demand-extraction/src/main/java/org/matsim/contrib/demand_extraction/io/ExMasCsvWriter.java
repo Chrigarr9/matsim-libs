@@ -57,7 +57,8 @@ public final class ExMasCsvWriter {
 					"originLinkCoordFromX,originLinkCoordFromY,originLinkCoordToX,originLinkCoordToY," +
 					"destinationLinkCoordFromX,destinationLinkCoordFromY,destinationLinkCoordToX,destinationLinkCoordToY," +
 					"maxWalkDistance,maxWaitTime," +
-					"requestTag,hubId");
+					"requestTag,hubId," +
+					"hubLegRole,transferWaitSeconds,marginalUtilityOfMoney");
 			writer.newLine();
 
 			for (DrtRequest req : requests) {
@@ -66,7 +67,7 @@ public final class ExMasCsvWriter {
 						: Double.MAX_VALUE;
 				writer.write(String.format(java.util.Locale.US,
 						"%d,%s,%s,%d,%b,%b,%.4f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%s,%.2f,%.2f,%.4f,%.4f,"
-								+ "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%.4f,%s,%s",
+								+ "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%.4f,%s,%s,%s,%.2f,%.6f",
 						req.index, req.personId, req.groupId, req.tripIndex, req.isCommute, req.isEducation,
 						req.budget, req.requestTime,
 						req.originLinkId, req.destinationLinkId,
@@ -84,7 +85,9 @@ public final class ExMasCsvWriter {
 						req.destinationLinkCoordToX, req.destinationLinkCoordToY,
 						req.maxWalkDistance, req.maxWaitTime,
 						req.requestTag != null ? req.requestTag : "",
-						req.hubId != null ? req.hubId : ""));
+						req.hubId != null ? req.hubId : "",
+						req.hubLegRole != null ? req.hubLegRole.name() : DrtRequest.HubLegRole.NONE.name(),
+						req.transferWaitSeconds, req.marginalUtilityOfMoney));
 				writer.newLine();
 			}
 		} catch (IOException e) {

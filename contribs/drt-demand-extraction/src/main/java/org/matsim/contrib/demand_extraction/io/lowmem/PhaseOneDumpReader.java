@@ -256,6 +256,11 @@ public final class PhaseOneDumpReader {
 				// request carries null for both fields.
 				.requestTag(optionalString(f, col, "requestTag"))
 				.hubId(optionalString(f, col, "hubId"))
+				// Paper-2 Ext-2 hub-leg fields — appended after requestTag/hubId.
+				// Absent in older dumps: default to NONE / 0.0 / 0.0.
+				.hubLegRole(parseHubLegRole(optString(f, col, "hubLegRole", "NONE")))
+				.transferWaitSeconds(optionalD(f, col, "transferWaitSeconds"))
+				.marginalUtilityOfMoney(optionalD(f, col, "marginalUtilityOfMoney"))
 				.originActivityType(nullableString(s(f, col, "originActivityType")))
 				.destinationActivityType(nullableString(s(f, col, "destinationActivityType")))
 				.carTravelTime(d(f, col, "carTravelTime"))
@@ -292,6 +297,25 @@ public final class PhaseOneDumpReader {
 		if (idx == null) return null;
 		String v = f[idx];
 		return v.isEmpty() ? null : v;
+	}
+
+	/** Same as {@link #optionalString} but returns {@code def} (rather than null) when the
+	 *  column is absent or empty. Used for enum-backed columns with a non-null default. */
+	private static String optString(String[] f, Map<String, Integer> col, String key, String def) {
+		Integer idx = col.get(key);
+		if (idx == null) return def;
+		String v = f[idx];
+		return v.isEmpty() ? def : v;
+	}
+
+	/** Parse a {@link DrtRequest.HubLegRole} name, falling back to NONE for unknown/blank values. */
+	private static DrtRequest.HubLegRole parseHubLegRole(String name) {
+		if (name == null || name.isEmpty()) return DrtRequest.HubLegRole.NONE;
+		try {
+			return DrtRequest.HubLegRole.valueOf(name);
+		} catch (IllegalArgumentException e) {
+			return DrtRequest.HubLegRole.NONE;
+		}
 	}
 
 	private static int i(String[] f, Map<String, Integer> col, String key) {

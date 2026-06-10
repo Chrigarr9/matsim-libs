@@ -46,7 +46,26 @@ public class DrtRequest {
     /** Hub identifier for virtual trips on connecting commuters; null for non-virtual requests. */
     public final String hubId;
 
-    
+    /** Paper-2 Ext-2: role of a virtual hub leg in the two-leg journey. NONE for
+     * all non-virtual requests. ACCESS_LEG (rural O->hub) is scored as a normal
+     * door-to-door DRT trip and carries the single journey ASC + origin access
+     * walk + the hub-side egress walk (= the physical transfer walk).
+     * CONTINUATION_LEG (urban hub->D) is scored WITHOUT the mode constant and
+     * WITHOUT an access walk, and is charged {@link #transferWaitSeconds} as
+     * waiting disutility — so the SUM of the two leg scores equals the utility
+     * of the actual intermodal journey (one ASC, one access, one transfer walk,
+     * one transfer wait, one egress). */
+    public enum HubLegRole { NONE, ACCESS_LEG, CONTINUATION_LEG }
+
+    public final HubLegRole hubLegRole;
+    /** Scheduled hub transfer slack charged as waiting time (CONTINUATION_LEG only). */
+    public final double transferWaitSeconds;
+    /** Person- and distance-specific marginal utility of money (utils/EUR) for
+     * this request's direct leg; used downstream to convert fares into the
+     * utility budget. 0.0 when not computed. */
+    public final double marginalUtilityOfMoney;
+
+
     // Location (link-based for MATSim routing)
     // Coordinates are derived from link centroids to ensure consistency with routing
     public final Id<Link> originLinkId;
@@ -200,6 +219,9 @@ public class DrtRequest {
         this.bestMode = builder.bestMode;
         this.requestTag = builder.requestTag;
         this.hubId = builder.hubId;
+        this.hubLegRole = builder.hubLegRole != null ? builder.hubLegRole : HubLegRole.NONE;
+        this.transferWaitSeconds = builder.transferWaitSeconds;
+        this.marginalUtilityOfMoney = builder.marginalUtilityOfMoney;
         this.originLinkId = builder.originLinkId;
         this.destinationLinkId = builder.destinationLinkId;
         this.originX = builder.originX;
@@ -246,6 +268,9 @@ public class DrtRequest {
             .bestMode(this.bestMode)
             .requestTag(this.requestTag)
             .hubId(this.hubId)
+            .hubLegRole(this.hubLegRole)
+            .transferWaitSeconds(this.transferWaitSeconds)
+            .marginalUtilityOfMoney(this.marginalUtilityOfMoney)
             .originLinkId(this.originLinkId)
             .destinationLinkId(this.destinationLinkId)
             .originX(this.originX)
@@ -349,6 +374,11 @@ public class DrtRequest {
         // pre-Extension-2 callers that don't yet know about request tags).
         private String requestTag;
         private String hubId;
+        // Paper-2 Ext-2 hub-leg fields (default NONE / 0.0 = backward-compatible
+        // with callers that don't set them; non-virtual requests stay NONE).
+        private HubLegRole hubLegRole = HubLegRole.NONE;
+        private double transferWaitSeconds = 0.0;
+        private double marginalUtilityOfMoney = 0.0;
         private Id<Link> originLinkId;
         private Id<Link> destinationLinkId;
         private double originX;
@@ -388,6 +418,9 @@ public class DrtRequest {
 		public Builder bestMode(String bestMode) {this.bestMode = bestMode; return this;}
         public Builder requestTag(String requestTag) { this.requestTag = requestTag; return this; }
         public Builder hubId(String hubId) { this.hubId = hubId; return this; }
+        public Builder hubLegRole(HubLegRole hubLegRole) { this.hubLegRole = hubLegRole; return this; }
+        public Builder transferWaitSeconds(double transferWaitSeconds) { this.transferWaitSeconds = transferWaitSeconds; return this; }
+        public Builder marginalUtilityOfMoney(double marginalUtilityOfMoney) { this.marginalUtilityOfMoney = marginalUtilityOfMoney; return this; }
         public Builder originLinkId(Id<Link> originLinkId) { this.originLinkId = originLinkId; return this; }
         public Builder destinationLinkId(Id<Link> destinationLinkId) { this.destinationLinkId = destinationLinkId; return this; }
         public Builder originX(double originX) { this.originX = originX; return this; }
