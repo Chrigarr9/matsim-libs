@@ -158,6 +158,14 @@ public final class BamasRideExtender {
 		AtomicInteger setsProcessed = new AtomicInteger();
 		AtomicInteger resultsFound = new AtomicInteger();
 		AtomicInteger totalEnqueued = new AtomicInteger(0);
+		// Progress is reported against the KNOWN input size (parents.size()), not
+		// the streamed child-set counts. The producer blocks on the bounded queue
+		// when workers lag, so parentsProcessed tracks real end-to-end throughput
+		// to within one queue length and yields a meaningful ETA. (The old
+		// done/totalEnqueued ratio sat ~one queue-length apart by construction, so
+		// its ETA was structurally always ~1s. See git history.)
+		AtomicInteger parentsProcessed = new AtomicInteger();
+		final int parentsTotal = parents.size();
 		AtomicLong lastProgressLogTime = new AtomicLong(System.currentTimeMillis());
 		ConcurrentHashMap<Long, EnumerationStats> threadStatsMap = new ConcurrentHashMap<>();
 
@@ -194,13 +202,13 @@ public final class BamasRideExtender {
 					long prev = lastProgressLogTime.get();
 					if (now - prev >= 30_000 && lastProgressLogTime.compareAndSet(prev, now)) {
 						double elapsed = (now - phaseStartTime) / 1000.0;
-						double rate = done / Math.max(0.001, elapsed);
-						int total = totalEnqueued.get();
-						String etaStr = (total > done)
-								? formatExtensionDuration((total - done) / Math.max(0.001, rate))
+						int pDone = parentsProcessed.get();
+						double pRate = pDone / Math.max(0.001, elapsed);
+						String etaStr = (parentsTotal > pDone)
+								? formatExtensionDuration((parentsTotal - pDone) / Math.max(0.001, pRate))
 								: "—";
-						log.info("  Progress: {}/{} sets ({} results), {} sets/s, ETA {}",
-								done, total, resultsFound.get(), String.format("%.0f", rate), etaStr);
+						log.info("  Progress: {}/{} parents ({} child-sets, {} results), {} parents/s, ETA {}",
+								pDone, parentsTotal, done, resultsFound.get(), String.format("%.0f", pRate), etaStr);
 					}
 				}
 			});
@@ -243,6 +251,10 @@ public final class BamasRideExtender {
 					totalEnqueued.incrementAndGet();
 					queue.put(new ExtensionTask(parentRide, newSet, newSetHash));
 				}
+				// All children of this parent are claimed+enqueued. The bounded
+				// queue throttles the producer to ~one queue length ahead of the
+				// workers, so this counter tracks real progress for the ETA.
+				parentsProcessed.incrementAndGet();
 			}
 			enumerationCounters[0] = totalEnumerated;
 			enumerationCounters[1] = claimedHashes.size();
