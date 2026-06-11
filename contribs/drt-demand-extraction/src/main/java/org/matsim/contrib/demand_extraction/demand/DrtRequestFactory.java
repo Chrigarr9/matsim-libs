@@ -359,7 +359,7 @@ public class DrtRequestFactory {
 		// path), preserving prior request-list contents exactly.
 		int connectingExpanded = 0;
 		int virtualEmitted = 0;
-		int virtualDroppedTemporal = 0;
+		int virtualDroppedExpansion = 0;
 		int virtualDroppedBudget = 0;
 		if (hubs != null && fleetSide != null) {
 			Predicate<Coord> isInsideMetropole = (expansionMetropoleSource != null)
@@ -377,7 +377,9 @@ public class DrtRequestFactory {
 					List<DrtRequest> copies = expandConnecting(
 							r, hubs, fleetSide, isInsideMetropole, network, router,
 							transferBuffer);
-					int droppedTemporal = hubs.size() - copies.size();
+					// expandConnecting drops hubs for routing failure OR temporal
+					// infeasibility (both manifest as fewer copies than hubs).
+					int droppedExpansion = hubs.size() - copies.size();
 					int droppedBudget = 0;
 					for (DrtRequest copy : copies) {
 						DrtRequest done = finalizeVirtualLeg(copy, person, budgetValidator);
@@ -385,7 +387,7 @@ public class DrtRequestFactory {
 						expanded.add(done);
 						virtualEmitted++;
 					}
-					virtualDroppedTemporal += droppedTemporal;
+					virtualDroppedExpansion += droppedExpansion;
 					virtualDroppedBudget += droppedBudget;
 					connectingExpanded++;
 				} else {
@@ -394,10 +396,10 @@ public class DrtRequestFactory {
 			}
 			requests = renumber(expanded);
 			log.info("Virtual-trip expansion: {} connecting -> {} virtual legs "
-					+ "(|H|={}, fleetSide={}, dropped {} temporal-infeasible, "
+					+ "(|H|={}, fleetSide={}, dropped {} unroutable-or-temporal-infeasible, "
 					+ "{} non-positive leg budget)",
 					connectingExpanded, virtualEmitted, hubs.size(), fleetSide,
-					virtualDroppedTemporal, virtualDroppedBudget);
+					virtualDroppedExpansion, virtualDroppedBudget);
 		}
 
 		long elapsed = System.currentTimeMillis() - startTime;
