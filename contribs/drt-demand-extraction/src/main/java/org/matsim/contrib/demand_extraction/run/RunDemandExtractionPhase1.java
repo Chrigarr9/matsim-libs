@@ -120,8 +120,11 @@ public final class RunDemandExtractionPhase1 {
 
 	/** Minimal mirror of {@code RunLyonEqasimDemandExtraction#applyCliOverrides} —
 	 *  duplicated rather than promoted so Phase-1 doesn't silently inherit future
-	 *  Lyon-specific CLI changes. Keep in sync intentionally. */
-	private static void applyParsedArgs(ExMasConfigGroup exMas, RunLyonEqasimDemandExtraction.ParsedArgs p) {
+	 *  Lyon-specific CLI changes. Keep in sync intentionally.
+	 *
+	 *  <p>Package-private so the Phase-1 wiring test can call it directly without
+	 *  standing up the full MATSim/eqasim Controler. */
+	static void applyParsedArgs(ExMasConfigGroup exMas, RunLyonEqasimDemandExtraction.ParsedArgs p) {
 		if (!Double.isNaN(p.searchHorizon)) {
 			exMas.setSearchHorizon(p.searchHorizon);
 		}
@@ -161,6 +164,22 @@ public final class RunDemandExtractionPhase1 {
 		}
 		if (!Double.isNaN(p.predecessorsFilterTime)) {
 			exMas.setPredecessorsFilterTime(p.predecessorsFilterTime);
+		}
+		// HyperPool / stop-based gate knobs — required for faithful two-phase gate runs.
+		if (p.enableStopBased) {
+			exMas.setEnableStopBased(true);
+		}
+		if (p.enableHyperPooling) {
+			exMas.setEnableHyperPooling(true);
+		}
+		if (p.enableBudgetAwareConstraints) {
+			exMas.setEnableBudgetAwareConstraints(true);
+		}
+		if (!Double.isNaN(p.maxWalkDistanceMeters)) {
+			exMas.setMaxWalkDistanceMeters(p.maxWalkDistanceMeters);
+		}
+		if (p.maxOrderingNodes >= 0) {
+			exMas.setMaxOrderingNodesAfterFirstValid(p.maxOrderingNodes);
 		}
 	}
 

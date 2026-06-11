@@ -2,10 +2,12 @@ package org.matsim.contrib.demand_extraction.run;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 
 import org.junit.jupiter.api.Test;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.io.lowmem.PhaseOneDumpLayout;
 
 /**
@@ -50,6 +52,108 @@ class RunDemandExtractionPhase1WiringTest {
 		Path outDir = Path.of("/tmp/output");
 		Path resolved = RunDemandExtractionPhase1.resolveDumpRoot(null, outDir);
 		assertEquals(outDir.resolve(PhaseOneDumpLayout.SUBDIR), resolved);
+	}
+
+	// ------------------------------------------------------------------ //
+	// Gap 1: applyParsedArgs mirror — HyperPool / stop-based knobs         //
+	// ------------------------------------------------------------------ //
+
+	@Test
+	void applyParsedArgsMirrorsEnableStopBased() {
+		ExMasConfigGroup cfg = new ExMasConfigGroup();
+		RunLyonEqasimDemandExtraction.ParsedArgs p = buildArgs(b -> b.enableStopBased = true);
+		RunDemandExtractionPhase1.applyParsedArgs(cfg, p);
+		assertTrue(cfg.isEnableStopBased(), "enableStopBased should be mirrored");
+	}
+
+	@Test
+	void applyParsedArgsMirrorsEnableHyperPooling() {
+		ExMasConfigGroup cfg = new ExMasConfigGroup();
+		RunLyonEqasimDemandExtraction.ParsedArgs p = buildArgs(b -> b.enableHyperPooling = true);
+		RunDemandExtractionPhase1.applyParsedArgs(cfg, p);
+		assertTrue(cfg.isEnableHyperPooling(), "enableHyperPooling should be mirrored");
+	}
+
+	@Test
+	void applyParsedArgsMirrorsEnableBudgetAwareConstraints() {
+		ExMasConfigGroup cfg = new ExMasConfigGroup();
+		RunLyonEqasimDemandExtraction.ParsedArgs p = buildArgs(b -> b.enableBudgetAwareConstraints = true);
+		RunDemandExtractionPhase1.applyParsedArgs(cfg, p);
+		assertTrue(cfg.isEnableBudgetAwareConstraints(), "enableBudgetAwareConstraints should be mirrored");
+	}
+
+	@Test
+	void applyParsedArgsMirrorsMaxWalkDistanceMeters() {
+		ExMasConfigGroup cfg = new ExMasConfigGroup();
+		RunLyonEqasimDemandExtraction.ParsedArgs p = buildArgs(b -> b.maxWalkDistanceMeters = 750.0);
+		RunDemandExtractionPhase1.applyParsedArgs(cfg, p);
+		assertEquals(750.0, cfg.getMaxWalkDistanceMeters(), 1e-12);
+	}
+
+	@Test
+	void applyParsedArgsMirrorsMaxOrderingNodes() {
+		ExMasConfigGroup cfg = new ExMasConfigGroup();
+		RunLyonEqasimDemandExtraction.ParsedArgs p = buildArgs(b -> b.maxOrderingNodes = 5000L);
+		RunDemandExtractionPhase1.applyParsedArgs(cfg, p);
+		assertEquals(5000L, cfg.getMaxOrderingNodesAfterFirstValid());
+	}
+
+	@Test
+	void applyParsedArgsDoesNotSetStopBasedWhenFalse() {
+		ExMasConfigGroup cfg = new ExMasConfigGroup();
+		cfg.setEnableStopBased(false);
+		RunLyonEqasimDemandExtraction.ParsedArgs p = buildArgs(b -> {}); // all defaults
+		RunDemandExtractionPhase1.applyParsedArgs(cfg, p);
+		// should stay false
+		org.junit.jupiter.api.Assertions.assertFalse(cfg.isEnableStopBased());
+	}
+
+	// Helper to build a ParsedArgs with a customizer lambda without requiring
+	// all 26 constructor parameters to be repeated in each test.
+	private static RunLyonEqasimDemandExtraction.ParsedArgs buildArgs(
+			java.util.function.Consumer<ArgsBuilder> customizer) {
+		ArgsBuilder b = new ArgsBuilder();
+		customizer.accept(b);
+		return new RunLyonEqasimDemandExtraction.ParsedArgs(
+				b.sample, b.scenarioDir, b.prefix, b.travelTimesPath, b.outputDir,
+				b.searchHorizon, b.maxDetourFactor, b.minDrtCostPerKm, b.pruningCoverageK,
+				b.algorithm, b.tripFilterRadiusKm, b.noExclusionZone, b.noPredecessors,
+				b.noShapley, b.deterministicRouting, b.maxPoolingDegree, b.predecessorsFilterTime,
+				b.enableStopBased, b.enableHyperPooling, b.enableBudgetAwareConstraints,
+				b.maxWalkDistanceMeters, b.hubSetGeoJsonPath, b.hubTransferBufferSeconds,
+				b.requestClassificationsPath, b.fleetSide, b.metropolePolygonPath,
+				b.maxOrderingNodes);
+	}
+
+	/** Mutable builder so tests can override individual fields in a lambda. */
+	private static class ArgsBuilder {
+		int sample = 1;
+		String scenarioDir = "/tmp/s";
+		String prefix = "p_";
+		String travelTimesPath = "/tmp/tt.tsv";
+		String outputDir = null;
+		double searchHorizon = Double.NaN;
+		double maxDetourFactor = Double.NaN;
+		double minDrtCostPerKm = Double.NaN;
+		int pruningCoverageK = -1;
+		ExMasConfigGroup.Algorithm algorithm = ExMasConfigGroup.Algorithm.BAMAS;
+		double tripFilterRadiusKm = Double.NaN;
+		boolean noExclusionZone = false;
+		boolean noPredecessors = false;
+		boolean noShapley = false;
+		boolean deterministicRouting = false;
+		int maxPoolingDegree = -1;
+		double predecessorsFilterTime = Double.NaN;
+		boolean enableStopBased = false;
+		boolean enableHyperPooling = false;
+		boolean enableBudgetAwareConstraints = false;
+		double maxWalkDistanceMeters = Double.NaN;
+		String hubSetGeoJsonPath = null;
+		double hubTransferBufferSeconds = Double.NaN;
+		String requestClassificationsPath = null;
+		ExMasConfigGroup.FleetSide fleetSide = null;
+		String metropolePolygonPath = null;
+		long maxOrderingNodes = -1;
 	}
 
 }

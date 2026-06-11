@@ -76,6 +76,26 @@ public final class RunDemandExtractionPhase2 {
 				Path.of(travelTimesTsv), Path.of(outputDir));
 	}
 
+	/**
+	 * Rejects a v1 dump when stop-based or HyperPool generation is enabled.
+	 * A v1 dump has {@code maxWalkDistance=0} for every request; running
+	 * stop-based or HyperPool off it silently produces wrong rides because the
+	 * per-pax walk-distance caps would default to zero.
+	 *
+	 * @throws IllegalStateException when {@code scoringContextsVersion < 2} and
+	 *                               either stop-based or HyperPool is enabled.
+	 */
+	static void assertDumpSupportsConfig(int scoringContextsVersion, ExMasConfigGroup cfg) {
+		if (scoringContextsVersion < 2 && (cfg.isEnableStopBased() || cfg.isEnableHyperPooling())) {
+			throw new IllegalStateException(
+					"v1 dump is not compatible with stop-based/hyperpool: the scoring_contexts.bin "
+					+ "v1 format does not persist per-request maxWalkDistance caps, so enabling "
+					+ "stop-based or HyperPool generation would silently produce wrong rides. "
+					+ "Re-run Phase 1 with a v2 build (current build) to obtain a v2 dump, "
+					+ "then re-run Phase 2.");
+		}
+	}
+
 	/** Publish the Phase-1 request dump under the canonical
 	 *  {@code <demandDir>/<runId>.drt_requests.csv} name expected by downstream
 	 *  Python tooling. Uses a hard link when the FS supports it (NTFS does
@@ -128,16 +148,18 @@ public final class RunDemandExtractionPhase2 {
 		log.info("PHASE 2 STEP 1: reading Phase-1 dump");
 		PhaseOneDumpReader.DumpData dump = PhaseOneDumpReader.read(layout);
 		List<DrtRequest> requests = dump.requests();
-		log.info("PHASE 2 STEP 1: loaded {} requests (runId={}, samplePct={})",
-				requests.size(), dump.meta().runId(), dump.meta().sampleSize());
+		log.info("PHASE 2 STEP 1: loaded {} requests (runId={}, samplePct={}, scoringContextsVersion={})",
+				requests.size(), dump.meta().runId(), dump.meta().sampleSize(), dump.scoringContextsVersion());
 
 		log.info("PHASE 2 STEP 2: building Phase2Module graph");
 		Phase2Module.Phase2Config p2 = new Phase2Module.Phase2Config(
 				configXml, a.networkXml, a.travelTimesTsv, a.outputDir, dump.meta());
 		Injector injector = Guice.createInjector(new Phase2Module(p2));
 
-		log.info("PHASE 2 STEP 3: running {} algorithm",
-				injector.getInstance(ExMasConfigGroup.class).getAlgorithm());
+		ExMasConfigGroup exMasCfg = injector.getInstance(ExMasConfigGroup.class);
+		assertDumpSupportsConfig(dump.scoringContextsVersion(), exMasCfg);
+
+		log.info("PHASE 2 STEP 3: running {} algorithm", exMasCfg.getAlgorithm());
 		ExMasAlgorithm algorithm = injector.getInstance(ExMasAlgorithm.class);
 		// Take a heap snapshot RIGHT before the algorithm starts. Together with
 		// Phase 1's "Used heap at dump" line this gives the operator the
@@ -167,13 +189,12 @@ public final class RunDemandExtractionPhase2 {
 				a.phase1Dir, demandDir, runId);
 		log.info("PHASE 2 STEP 5: published canonical requests CSV to {}", publishedRequests);
 
-		ExMasConfigGroup exMas = injector.getInstance(ExMasConfigGroup.class);
-		if (exMas.isCalcPredecessors()) {
+		if (exMasCfg.isCalcPredecessors()) {
 			Path connectionCacheCsv = demandDir.resolve(runId + ".connection_cache.csv");
 			MatsimNetworkCache networkCache = injector.getInstance(MatsimNetworkCache.class);
 			try {
 				ConnectionCacheWriter.writeConnectionCache(connectionCacheCsv.toString(), rides,
-						networkCache, exMas.getNetworkTimeBinSize(), exMas.getConnectionCacheExportMode());
+						networkCache, exMasCfg.getNetworkTimeBinSize(), exMasCfg.getConnectionCacheExportMode());
 				log.info("PHASE 2 STEP 5: wrote connection cache to {}", connectionCacheCsv);
 			} catch (IOException e) {
 				log.error("Failed to write connection cache", e);

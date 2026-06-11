@@ -10,6 +10,64 @@ import org.junit.jupiter.api.Test;
 
 class RunDemandExtractionPhase2ArgsTest {
 
+	// ------------------------------------------------------------------ //
+	// Gap 2: assertDumpSupportsConfig guard                                //
+	// ------------------------------------------------------------------ //
+
+	@Test
+	void guardThrowsWhenV1DumpAndStopBasedEnabled() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		cfg.setEnableStopBased(true);
+		org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+				() -> RunDemandExtractionPhase2.assertDumpSupportsConfig(1, cfg),
+				"v1 dump with stop-based enabled should throw");
+	}
+
+	@Test
+	void guardThrowsWhenV1DumpAndHyperPoolEnabled() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		cfg.setEnableHyperPooling(true);
+		org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+				() -> RunDemandExtractionPhase2.assertDumpSupportsConfig(1, cfg),
+				"v1 dump with hyperpool enabled should throw");
+	}
+
+	@Test
+	void guardDoesNotThrowWhenV2DumpAndStopBasedEnabled() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		cfg.setEnableStopBased(true);
+		// Should not throw
+		RunDemandExtractionPhase2.assertDumpSupportsConfig(2, cfg);
+	}
+
+	@Test
+	void guardDoesNotThrowWhenV1DumpAndBothDisabled() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		// defaults: enableStopBased=false, enableHyperPooling=false
+		// Should not throw
+		RunDemandExtractionPhase2.assertDumpSupportsConfig(1, cfg);
+	}
+
+	@Test
+	void guardMessageMentionsRelevantContext() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		cfg.setEnableStopBased(true);
+		IllegalStateException ex = org.junit.jupiter.api.Assertions.assertThrows(
+				IllegalStateException.class,
+				() -> RunDemandExtractionPhase2.assertDumpSupportsConfig(1, cfg));
+		String msg = ex.getMessage().toLowerCase();
+		assertTrue(msg.contains("v1"), "message should mention v1 dump");
+		assertTrue(msg.contains("stop-based") || msg.contains("hyperpool") || msg.contains("stop"),
+				"message should mention stop-based/hyperpool");
+		assertTrue(msg.contains("re-run") || msg.contains("phase 1") || msg.contains("phase-1"),
+				"message should mention re-running Phase 1");
+	}
+
 	@Test
 	void parsesAllRequiredFlags() {
 		String[] args = {

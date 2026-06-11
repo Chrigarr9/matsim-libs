@@ -45,7 +45,7 @@ import org.matsim.core.scoring.functions.ScoringParameters;
  */
 public final class PhaseOneDumpReader {
 
-	public record DumpData(List<DrtRequest> requests, Meta meta) {}
+	public record DumpData(List<DrtRequest> requests, Meta meta, int scoringContextsVersion) {}
 
 	public record Meta(
 			String drtMode,
@@ -82,8 +82,8 @@ public final class PhaseOneDumpReader {
 	public static DumpData read(PhaseOneDumpLayout layout) throws IOException {
 		Meta meta = readMeta(layout.metaJson());
 		List<DrtRequest> requests = readRequestsCsv(layout.requestsCsv());
-		attachScoringContexts(requests, layout.scoringContextsBin(), meta);
-		return new DumpData(requests, meta);
+		int scoringContextsVersion = attachScoringContexts(requests, layout.scoringContextsBin(), meta);
+		return new DumpData(requests, meta, scoringContextsVersion);
 	}
 
 	// ---------- meta.json ----------
@@ -332,12 +332,15 @@ public final class PhaseOneDumpReader {
 
 	// ---------- scoring_contexts.bin → ScoringContext per request ----------
 
-	private static void attachScoringContexts(List<DrtRequest> requests, Path bin, Meta meta) throws IOException {
+	/** Attaches scoring contexts to each request and returns the BIN format version. */
+	private static int attachScoringContexts(List<DrtRequest> requests, Path bin, Meta meta) throws IOException {
 		Map<Integer, DrtRequest> byIdx = new HashMap<>(requests.size() * 2);
 		for (DrtRequest r : requests) byIdx.put(r.index, r);
 
+		int version;
 		try (ScoringContextsBinReader r = new ScoringContextsBinReader(bin)) {
 			ScoringContextsBinReader.Header header = r.readHeader();
+			version = header.version();
 
 			Map<String, ActivityUtilityParameters> sharedActParams = buildSharedActivityParams(header.activityTypes());
 			String[] typeByIdx = new String[header.activityTypes().size()];
@@ -364,6 +367,7 @@ public final class PhaseOneDumpReader {
 						matched, requests.size()));
 			}
 		}
+		return version;
 	}
 
 	/**
