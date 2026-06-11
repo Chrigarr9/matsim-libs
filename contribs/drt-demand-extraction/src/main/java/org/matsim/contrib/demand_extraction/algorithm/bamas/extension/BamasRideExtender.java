@@ -429,6 +429,17 @@ public final class BamasRideExtender {
 	 * <p>Distances within {@link #EPSILON} are treated as equal to prevent
 	 * FP noise from flipping canonical parent choices between runs.
 	 *
+	 * <p><b>Stub-path equivalence (Plan A seam a):</b> for stub parents the
+	 * distance fed here is {@link StubScaling#fromDeci(int)}, i.e. an exact
+	 * multiple of 0.1. Since {@code EPSILON}=1e-9 ≪ 0.1, distinct decimetre
+	 * values always differ by ≥0.1 and are ordered, while equal decimetre
+	 * values give {@code diff==0} and fall through to the lex tie-break —
+	 * exactly what an {@code Integer.compare(dmA, dmB)} on the raw decimetre
+	 * columns would yield. So this {@code double}+EPSILON form is bit-for-bit
+	 * equivalent to a no-epsilon int comparison on every input; the byte-identical
+	 * parity gate confirms it. (Replacing it with a literal int comparison is
+	 * deferred to the Task-15 scaling-purity review, item (b).)
+	 *
 	 * <p>Package-private for unit testing — keep the signature primitive
 	 * so tests don't need to construct full {@link Ride} fixtures.
 	 */
