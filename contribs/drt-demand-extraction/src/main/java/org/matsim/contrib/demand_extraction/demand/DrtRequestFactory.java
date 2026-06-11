@@ -359,6 +359,8 @@ public class DrtRequestFactory {
 		// path), preserving prior request-list contents exactly.
 		int connectingExpanded = 0;
 		int virtualEmitted = 0;
+		int virtualDroppedTemporal = 0;
+		int virtualDroppedBudget = 0;
 		if (hubs != null && fleetSide != null) {
 			Predicate<Coord> isInsideMetropole = (expansionMetropoleSource != null)
 					? expansionMetropoleSource::containsPoint
@@ -375,17 +377,27 @@ public class DrtRequestFactory {
 					List<DrtRequest> copies = expandConnecting(
 							r, hubs, fleetSide, isInsideMetropole, network, router,
 							transferBuffer);
-					expanded.addAll(copies);
+					int droppedTemporal = hubs.size() - copies.size();
+					int droppedBudget = 0;
+					for (DrtRequest copy : copies) {
+						DrtRequest done = finalizeVirtualLeg(copy, person, budgetValidator);
+						if (done == null) { droppedBudget++; continue; }
+						expanded.add(done);
+						virtualEmitted++;
+					}
+					virtualDroppedTemporal += droppedTemporal;
+					virtualDroppedBudget += droppedBudget;
 					connectingExpanded++;
-					virtualEmitted += copies.size();
 				} else {
 					expanded.add(r);
 				}
 			}
-			requests = expanded;
-			log.info("Virtual-trip expansion: expanded {} connecting request(s) into {} "
-					+ "virtual DrtRequest(s) (|H|={}, fleetSide={})",
-					connectingExpanded, virtualEmitted, hubs.size(), fleetSide);
+			requests = renumber(expanded);
+			log.info("Virtual-trip expansion: {} connecting -> {} virtual legs "
+					+ "(|H|={}, fleetSide={}, dropped {} temporal-infeasible, "
+					+ "{} non-positive leg budget)",
+					connectingExpanded, virtualEmitted, hubs.size(), fleetSide,
+					virtualDroppedTemporal, virtualDroppedBudget);
 		}
 
 		long elapsed = System.currentTimeMillis() - startTime;
@@ -435,6 +447,33 @@ public class DrtRequestFactory {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Budget-derived service caps, shared by {@link #buildRequest} and virtual-leg
+	 * finalization ({@link #finalizeVirtualLeg}). Returns
+	 * {@code {maxAbsoluteDetour, maxWalk, maxWait}}.
+	 *
+	 * <p>{@code draft} supplies the {@code directTravelTime} and
+	 * {@code directDistance} used as the denominator for the detour fraction
+	 * and as inputs to the constraint calculators. For normal requests these
+	 * are the full O→D direct attributes; for virtual hub-leg copies they are
+	 * the per-leg routed attributes (already written onto the copy before this
+	 * is called).
+	 */
+	double[] budgetDerivedCaps(double budget, Person person, DrtRequest draft) {
+		double budgetDerivedDetour = budgetToConstraintsCalculator.budgetToMaxDetourTime(
+				budget, person, draft.directTravelTime, draft.directDistance, draft);
+		double configMaxDetour = draft.directTravelTime * (exmasConfig.getMaxDetourFactor() - 1.0);
+		double maxAbsoluteDetour = Math.min(budgetDerivedDetour, configMaxDetour);
+		if (exmasConfig.getMaxAbsoluteDetour() != null) {
+			maxAbsoluteDetour = Math.min(maxAbsoluteDetour, (double) exmasConfig.getMaxAbsoluteDetour());
+		}
+		double maxWalk = exmasConfig.isEnableBudgetAwareConstraints()
+				? budgetToConstraintsCalculator.budgetToMaxWalkDistance(budget, person, draft) : 0.0;
+		double maxWait = exmasConfig.isEnableBudgetAwareConstraints()
+				? budgetToConstraintsCalculator.budgetToMaxWaitingTime(budget, person, draft) : 0.0;
+		return new double[] {maxAbsoluteDetour, maxWalk, maxWait};
 	}
 
 	/**
@@ -582,26 +621,11 @@ public class DrtRequestFactory {
 		}
 
 		// maxDetourFactor = min(budget-derived detour, config cap, absolute cap if configured)
-		double budgetDerivedDetour = budgetToConstraintsCalculator.budgetToMaxDetourTime(
-				budget, person, drtAttrs.travelTime(), drtAttrs.distance(), draft);
-		double configMaxDetour = drtAttrs.travelTime() * (exmasConfig.getMaxDetourFactor() - 1.0);
-		double maxAbsoluteDetour = Math.min(budgetDerivedDetour, configMaxDetour);
-		if (exmasConfig.getMaxAbsoluteDetour() != null) {
-			maxAbsoluteDetour = Math.min(maxAbsoluteDetour, (double) exmasConfig.getMaxAbsoluteDetour());
-		}
+		double[] caps = budgetDerivedCaps(budget, person, draft);
+		double maxAbsoluteDetour = caps[0];
 		double effectiveMaxDetourFactor = 1.0 + (maxAbsoluteDetour / drtAttrs.travelTime());
-
-		// maxWalkDistance — ideal-DRT walk cap derived from the person's remaining budget.
-		// Gated on enableBudgetAwareConstraints; flag off leaves the field at 0.0 (current behaviour).
-		double budgetDerivedMaxWalk = exmasConfig.isEnableBudgetAwareConstraints()
-				? budgetToConstraintsCalculator.budgetToMaxWalkDistance(budget, person, draft)
-				: 0.0;
-
-		// maxWaitTime — ideal-DRT wait cap derived from the person's remaining budget.
-		// Gated on enableBudgetAwareConstraints; flag off leaves the field at 0.0 (current behaviour).
-		double budgetDerivedMaxWait = exmasConfig.isEnableBudgetAwareConstraints()
-				? budgetToConstraintsCalculator.budgetToMaxWaitingTime(budget, person, draft)
-				: 0.0;
+		double budgetDerivedMaxWalk = caps[1];
+		double budgetDerivedMaxWait = caps[2];
 
 		// Temporal flexibility (departure/arrival windows) — independent from detour.
 		double originFlex = flexibilityCalculator.calculateOriginFlexibility(person, trip.getOriginActivity(), maxAbsoluteDetour);
@@ -637,6 +661,55 @@ public class DrtRequestFactory {
 		}
 
 		throw new IllegalStateException("Activity has neither coordinate nor link ID: " + activity);
+	}
+
+	/**
+	 * Per-virtual-copy finalization: fresh scoring context (the copy's endpoint
+	 * coords/requestTime differ from the original's), recomputed per-LEG budget
+	 * (drop if the ideal leg can't beat the full-trip baseline), and budget-derived
+	 * caps off the leg's own direct attributes. Returns {@code null} when dropped.
+	 *
+	 * <p>Package-private so the test harness in the same package can call it
+	 * without reflection.
+	 */
+	DrtRequest finalizeVirtualLeg(DrtRequest copy, Person person,
+			BudgetValidator validator) {
+		copy.setScoringContext(validator.computeScoringContext(copy, person));
+		double legBudget = validator.calculateBudget(copy);
+		if (legBudget <= 0.0) {
+			return null;
+		}
+		double[] caps = budgetDerivedCaps(legBudget, person, copy);
+		double effectiveMaxDetourFactor = 1.0 + (caps[0] / copy.directTravelTime);
+		DrtRequest done = copy.toBuilder()
+				.budget(legBudget)
+				.maxDetourFactor(effectiveMaxDetourFactor)
+				.maxWalkDistance(caps[1])
+				.maxWaitTime(caps[2])
+				.build();
+		done.setScoringContext(copy.getScoringContext());
+		return done;
+	}
+
+	/**
+	 * Restores the invariant {@code requests.get(i).index == i} (broken by
+	 * expansion, which copies the original's index onto every hub copy).
+	 *
+	 * <p>Scoring contexts are preserved by reference on any request that needs
+	 * renaming. Package-private + static so tests can call it directly.
+	 */
+	static List<DrtRequest> renumber(List<DrtRequest> requests) {
+		List<DrtRequest> out = new ArrayList<>(requests.size());
+		for (int i = 0; i < requests.size(); i++) {
+			DrtRequest r = requests.get(i);
+			if (r.index != i) {
+				DrtRequest c = r.toBuilder().index(i).build();
+				c.setScoringContext(r.getScoringContext());
+				r = c;
+			}
+			out.add(r);
+		}
+		return out;
 	}
 
 	/** Routes one virtual-leg OD pair. @return {travelTime_s, distance_m}, or
