@@ -2,12 +2,14 @@ package org.matsim.contrib.demand_extraction.io;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStore;
 import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
@@ -113,6 +115,24 @@ public final class ExMasCsvWriter {
 	 * @throws RuntimeException if writing fails
 	 */
 	public static void writeRides(String filename, List<Ride> rides) {
+		writeRideBatches(filename, rides);
+	}
+
+	/**
+	 * Write ExMAS rides to CSV file, consuming from a {@link RideStore}.
+	 *
+	 * <p>Materializes the store into a {@code List<Ride>} at the top and
+	 * delegates to {@link #writeRideBatches}. The full list is needed because
+	 * {@link #writeRideRows} sorts rows by index — streaming without
+	 * materializing is deferred to the stub-backing phase.
+	 *
+	 * @param filename output file path
+	 * @param store    RideStore to read from
+	 * @throws RuntimeException if writing fails
+	 */
+	public static void writeRides(String filename, RideStore store) {
+		List<Ride> rides = new ArrayList<>(store.size());
+		store.forEachMaterialized(rides::add);
 		writeRideBatches(filename, rides);
 	}
 

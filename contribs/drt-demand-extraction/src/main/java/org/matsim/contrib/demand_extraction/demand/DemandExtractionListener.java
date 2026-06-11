@@ -12,6 +12,7 @@ import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.demand_extraction.algorithm.AlgorithmResult;
 import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithm;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.MaterializedRideStore;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.engine.RidePostProcessor;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
@@ -171,7 +172,7 @@ public class DemandExtractionListener implements ShutdownListener {
 			return budgetToConstraintsCalculator.budgetToMaxCost(budget, person, tt, dist, request);
 		};
 		RidePostProcessor postProcessor = new RidePostProcessor(exMasConfig, networkCache, maxCostResolver);
-		rides = postProcessor.process(rides);
+		rides = postProcessor.process(new MaterializedRideStore(rides));
 
 		// 5. Write DRT Requests Output + rides + connection cache
 		log.info("");
@@ -186,7 +187,7 @@ public class DemandExtractionListener implements ShutdownListener {
 		log.info("Wrote {} requests to: {}", requests.size(), requestsFilename);
 
 		String ridesFilename = demandOutputDir + "/" + config.controller().getRunId() + ".exmas_rides.csv";
-		ExMasCsvWriter.writeRides(ridesFilename, rides);
+		ExMasCsvWriter.writeRides(ridesFilename, new MaterializedRideStore(rides));
 		log.info("Wrote {} rides to: {}", rides.size(), ridesFilename);
 
 		// HyperPool Stage-2 outputs use a distinct schema (multi-stop sequences,
