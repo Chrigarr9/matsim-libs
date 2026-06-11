@@ -382,8 +382,10 @@ public final class PostExtensionPruner {
 		if (metric == ABS_SAVINGS) {
 			return sumDirect - rideDistance;
 		}
-		// RATIO_SAVINGS (the only other metric instance constructed by the factories).
-		return sumDirect > 0 ? 1.0 - rideDistance / sumDirect : 0.0;
+		if (metric == RATIO_SAVINGS) {
+			return sumDirect > 0 ? 1.0 - rideDistance / sumDirect : 0.0;
+		}
+		throw new IllegalStateException("metricValue: unsupported QualityMetric " + metric);
 	}
 
 	private static void copyRow(StubColumns src, int row, StubColumns dst) {

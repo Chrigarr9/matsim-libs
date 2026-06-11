@@ -151,7 +151,7 @@ public final class BamasRideExtender {
 		int targetDegree = parentStubs.size() == 0 ? 0 : parentStubs.degree() + 1;
 		List<ParentView> parentViews = new ArrayList<>(parentStubs.size());
 		for (int row = 0; row < parentStubs.size(); row++) {
-			parentViews.add(new StubParentView(parentStubs, row, requestTable));
+			parentViews.add(new StubParentView(parentStubs, row));
 		}
 		return extendParents(parentViews, targetDegree, nextRideIndex);
 	}
@@ -503,7 +503,7 @@ public final class BamasRideExtender {
 		private final int row;
 		// Cached sorted request set (the stored slice is already sorted ascending).
 		private final int[] sortedSet;
-		StubParentView(StubColumns cols, int row, DrtRequest[] requestTable) {
+		StubParentView(StubColumns cols, int row) {
 			this.cols = cols;
 			this.row = row;
 			this.sortedSet = cols.requestIndices(row); // defensive copy, sorted ascending

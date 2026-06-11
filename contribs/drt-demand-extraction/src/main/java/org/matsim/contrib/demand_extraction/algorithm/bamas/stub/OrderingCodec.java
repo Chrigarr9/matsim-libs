@@ -18,6 +18,10 @@ public final class OrderingCodec {
 	public static long pack(int[] order) {
 		long p = 0L;
 		for (int i = 0; i < order.length; i++) {
+			if (order[i] >= 16) {
+				throw new IllegalArgumentException("OrderingCodec.pack: local position " + order[i]
+						+ " exceeds 4-bit capacity (degree must be <= 16)");
+			}
 			p |= ((long) (order[i] & 0xF)) << (4 * i);
 		}
 		return p;
