@@ -1,9 +1,10 @@
 package org.matsim.contrib.demand_extraction.algorithm.bamas.extension;
 
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -90,7 +91,7 @@ public final class BamasRideExtender {
 	 *
 	 * <p>Streaming producer/consumer: a single producer thread walks parent rides
 	 * in deterministic sort order, claims each unique child-set hash in a
-	 * {@link HashSet}, and offers {@link ExtensionTask}s to a bounded
+	 * {@link LongOpenHashSet}, and offers {@link ExtensionTask}s to a bounded
 	 * {@link ArrayBlockingQueue}. N workers drain the queue in parallel and
 	 * call {@link #processSet} (enumerate orderings, route, validate). Claim
 	 * order follows producer iteration, so canonical parent selection is
@@ -152,8 +153,8 @@ public final class BamasRideExtender {
 		//
 		// Memory win vs the prior two-phase design: the CanonicalExtension
 		// map materialized ~64M entries at deg-4/25% (~6-8 GB). Here the only
-		// dedup state is a HashSet<Long> of claimed hashes (~3-4 GB at the
-		// same scale) plus a bounded queue of at most 4 * parallelism tasks.
+		// dedup state is a LongOpenHashSet of claimed hashes (~1 GB at the
+		// same scale, ~3x leaner than HashSet<Long>) plus a bounded queue of at most 4 * parallelism tasks.
 		ConcurrentHashMap<Long, Ride> resultBySetHash = new ConcurrentHashMap<>();
 		AtomicInteger setsProcessed = new AtomicInteger();
 		AtomicInteger resultsFound = new AtomicInteger();
@@ -227,11 +228,10 @@ public final class BamasRideExtender {
 		boolean producerCompleted = false;
 		try {
 			// expectedClaimed is the expected element count (~= parents.size() * 4
-			// at deg-4/25 %, ~64 M at scale). HashSet(int) takes the underlying
-			// table *capacity*, not element count — so we pre-divide by the load
-			// factor (0.75) and add 1 to avoid rehashing mid-run.
+			// at deg-4/25 %, ~64 M at scale). LongOpenHashSet(int) takes the expected
+			// element count directly and handles load factor internally — no pre-division needed.
 			int expectedClaimed = Math.max(1024, parents.size() * 4);
-			HashSet<Long> claimedHashes = new HashSet<>((int) (expectedClaimed / 0.75f) + 1, 0.75f);
+			LongOpenHashSet claimedHashes = new LongOpenHashSet(expectedClaimed);
 			int totalEnumerated = 0;
 			for (Ride parentRide : parents) {
 				int[] baseSetIndices = sortedRequestIndices(parentRide);
