@@ -83,6 +83,19 @@ public class DrtRequestFactory {
 	 */
 	private volatile List<HubSetLoader.Hub> hubs;
 
+	/**
+	 * Paper-2 Extension 2: drop/detour diagnostics from the most recent
+	 * virtual-trip expansion (null until {@link #buildRequests} runs an
+	 * expansion). The listener writes these to a per-(commuter, hub) diagnostic
+	 * CSV. Not part of the request list so it stays out of the hot path.
+	 */
+	private volatile ExpansionDropStats lastExpansionDropStats;
+
+	/** @return the last expansion's drop/detour stats, or null if none ran. */
+	public ExpansionDropStats getLastExpansionDropStats() {
+		return lastExpansionDropStats;
+	}
+
 	@Inject
 	public DrtRequestFactory(ExMasConfigGroup config, ModeRoutingCache modeRoutingCache,
 			ChainIdentifier chainIdentifier, CommuteIdentifier commuteIdentifier,
@@ -396,6 +409,7 @@ public class DrtRequestFactory {
 				}
 			}
 			requests = renumber(expanded);
+			this.lastExpansionDropStats = dropStats;
 			log.info("Virtual-trip expansion: {} connecting -> {} virtual legs "
 					+ "(|H|={}, fleetSide={}, dropped {} at expansion [{} unroutable rural-leg, "
 					+ "{} unroutable urban-leg, {} temporal-infeasible], {} non-positive leg budget)",
@@ -795,6 +809,37 @@ public class DrtRequestFactory {
 		int unroutableRuralLeg;
 		int unroutableUrbanLeg;
 		int temporalInfeasible;
+		final List<HubDetour> detours = new ArrayList<>();
+	}
+
+	/**
+	 * Per-(commuter, hub) detour diagnostic row (Paper-2 Ext-2). {@code detourTime}
+	 * is the via-hub journey time minus the original direct time; a hub is
+	 * temporally feasible iff {@code detourTime <= slack}, where {@code slack =
+	 * latestArrival - requestTime - directTime} is the traveller's arrival
+	 * flexibility (destFlex). {@code maxAbsDetour = (maxDetourFactor-1)*directTime}
+	 * is the budget/config-capped absolute detour allowance baked into the
+	 * original request; slack is ~half of it under the default rel=0.5 flexibility.
+	 * Lets us see, for feasible AND dropped legs, how much detour the hubs
+	 * introduce versus what each traveller can absorb.
+	 */
+	record HubDetour(String personId, int tripIndex, String fleetSide, String hubId,
+			double directTime, double ruralLegTime, double urbanLegTime, double buffer,
+			double detourTime, double slack, double maxAbsDetour, boolean kept, String reason) {}
+
+	private static void recordDetour(ExpansionDropStats stats, DrtRequest o, FleetSide side,
+			HubSetLoader.Hub hub, double ruralLegT, double urbanLegT, double buffer,
+			boolean kept, String reason) {
+		if (stats == null) return;
+		double directTime = o.directTravelTime;
+		double slack = o.latestArrival - o.requestTime - directTime;
+		boolean bothRouted = !Double.isNaN(ruralLegT) && !Double.isNaN(urbanLegT);
+		double detour = bothRouted
+				? (ruralLegT + urbanLegT + buffer) - directTime : Double.NaN;
+		double maxAbsDetour = (o.maxDetourFactor - 1.0) * directTime;
+		stats.detours.add(new HubDetour(o.personId.toString(), o.tripIndex,
+				side.toString(), hub.id(), directTime, ruralLegT, urbanLegT, buffer,
+				detour, slack, maxAbsDetour, kept, reason));
 	}
 
 	/** Convenience overload without diagnostics (used by unit tests). */
@@ -884,13 +929,21 @@ public class DrtRequestFactory {
 			// time drives the temporal split (urban shift / rural deadline).
 			double[] ruralLeg = legRouter.route(ruralEndLink, hubLinkId, original.requestTime);
 			if (ruralLeg == null || ruralLeg[0] <= 0.0 || ruralLeg[1] <= 0.0) {
-				if (stats != null) stats.unroutableRuralLeg++;
+				if (stats != null) {
+					stats.unroutableRuralLeg++;
+					recordDetour(stats, original, fleetSide, hub, Double.NaN, Double.NaN,
+							transferBufferSeconds, false, "unroutable_rural_leg");
+				}
 				continue;
 			}
 			double[] urbanLeg = legRouter.route(hubLinkId, urbanEndLink,
 					original.requestTime + ruralLeg[0] + transferBufferSeconds);
 			if (urbanLeg == null || urbanLeg[0] <= 0.0 || urbanLeg[1] <= 0.0) {
-				if (stats != null) stats.unroutableUrbanLeg++;
+				if (stats != null) {
+					stats.unroutableUrbanLeg++;
+					recordDetour(stats, original, fleetSide, hub, ruralLeg[0], Double.NaN,
+							transferBufferSeconds, false, "unroutable_urban_leg");
+				}
 				continue;
 			}
 
@@ -915,7 +968,11 @@ public class DrtRequestFactory {
 				// traveller's full-trip deadline.
 				double legLatestArrival = original.latestArrival - urbanLeg[0] - transferBufferSeconds;
 				if (original.requestTime + ruralLeg[0] > legLatestArrival) { // hub doesn't fit
-					if (stats != null) stats.temporalInfeasible++;
+					if (stats != null) {
+						stats.temporalInfeasible++;
+						recordDetour(stats, original, fleetSide, hub, ruralLeg[0], urbanLeg[0],
+								transferBufferSeconds, false, "temporal_infeasible");
+					}
 					continue;
 				}
 				b.directTravelTime(ruralLeg[0]).directDistance(ruralLeg[1])
@@ -927,7 +984,11 @@ public class DrtRequestFactory {
 				// arrival plus the transfer buffer; keeps the full-trip deadline.
 				double shift = ruralLeg[0] + transferBufferSeconds;
 				if (original.requestTime + shift + urbanLeg[0] > original.latestArrival) {
-					if (stats != null) stats.temporalInfeasible++;
+					if (stats != null) {
+						stats.temporalInfeasible++;
+						recordDetour(stats, original, fleetSide, hub, ruralLeg[0], urbanLeg[0],
+								transferBufferSeconds, false, "temporal_infeasible");
+					}
 					continue;
 				}
 				b.directTravelTime(urbanLeg[0]).directDistance(urbanLeg[1])
@@ -940,7 +1001,11 @@ public class DrtRequestFactory {
 			DrtRequest copy = b.build();
 			copy.setScoringContext(original.getScoringContext()); // rebuilt in Task 10
 			copies.add(copy);
-			if (stats != null) stats.kept++;
+			if (stats != null) {
+				stats.kept++;
+				recordDetour(stats, original, fleetSide, hub, ruralLeg[0], urbanLeg[0],
+						transferBufferSeconds, true, "kept");
+			}
 		}
 		return copies;
 	}

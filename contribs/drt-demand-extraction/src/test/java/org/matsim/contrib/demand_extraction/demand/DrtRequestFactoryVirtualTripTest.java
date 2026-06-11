@@ -372,6 +372,16 @@ public class DrtRequestFactoryVirtualTripTest {
                 fakeRouter(hubs, network), 300.0, ok);
         assertEquals(hubs.size(), ok.kept);
         assertEquals(0, ok.unroutableRuralLeg + ok.unroutableUrbanLeg + ok.temporalInfeasible);
+
+        // Detour diagnostics: one row per hub attempt, regardless of outcome.
+        assertEquals(hubs.size(), ok.detours.size());
+        assertTrue(ok.detours.stream().allMatch(d -> d.kept() && "kept".equals(d.reason())));
+        assertEquals(hubs.size(), dead.detours.size());
+        assertTrue(dead.detours.stream()
+                .allMatch(d -> "unroutable_rural_leg".equals(d.reason())));
+        assertEquals(hubs.size(), slow.detours.size());
+        assertTrue(slow.detours.stream()
+                .allMatch(d -> "temporal_infeasible".equals(d.reason())));
     }
 
     @Test

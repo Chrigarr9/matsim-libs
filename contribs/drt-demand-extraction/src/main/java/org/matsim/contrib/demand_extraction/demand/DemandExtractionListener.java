@@ -149,7 +149,43 @@ public class DemandExtractionListener implements ShutdownListener {
 		ExMasCsvWriter.writeModeCache(modeCacheFilename, modeRoutingCache.getAllModeAttributes());
 		log.info("Wrote mode cache to: {}", modeCacheFilename);
 
+		// Paper-2 Ext-2: per-(commuter, hub) detour diagnostic from virtual-trip
+		// expansion (drop reasons + hub-introduced detour vs traveller slack).
+		writeConnectingDetourDiag(demandOutputDir + "/" + config.controller().getRunId()
+				+ ".connecting_detour_diag.csv");
+
 		return requests;
+	}
+
+	/**
+	 * Paper-2 Ext-2: dump the per-(commuter, hub) detour diagnostic gathered during
+	 * virtual-trip expansion. No-op when no expansion ran (e.g. the Kelheim path).
+	 */
+	private void writeConnectingDetourDiag(String filename) {
+		DrtRequestFactory.ExpansionDropStats stats = requestFactory.getLastExpansionDropStats();
+		if (stats == null || stats.detours.isEmpty()) {
+			return;
+		}
+		StringBuilder sb = new StringBuilder(
+				"personId,tripIndex,fleetSide,hubId,directTime,ruralLegTime,urbanLegTime,"
+				+ "buffer,detourTime,slack,maxAbsDetour,kept,reason\n");
+		for (DrtRequestFactory.HubDetour d : stats.detours) {
+			sb.append(d.personId()).append(',').append(d.tripIndex()).append(',')
+			  .append(d.fleetSide()).append(',').append(d.hubId()).append(',')
+			  .append(d.directTime()).append(',').append(d.ruralLegTime()).append(',')
+			  .append(d.urbanLegTime()).append(',').append(d.buffer()).append(',')
+			  .append(d.detourTime()).append(',').append(d.slack()).append(',')
+			  .append(d.maxAbsDetour()).append(',').append(d.kept()).append(',')
+			  .append(d.reason()).append('\n');
+		}
+		try {
+			Files.writeString(Paths.get(filename), sb.toString());
+			log.info("Wrote {} connecting-detour diagnostic rows to: {}",
+					stats.detours.size(), filename);
+		} catch (IOException e) {
+			log.warn("Failed to write connecting-detour diagnostic to {}: {}",
+					filename, e.getMessage());
+		}
 	}
 
 	/**
