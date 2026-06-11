@@ -73,9 +73,11 @@ public final class Phase2EqasimAdapter implements DemandExtractionScoringAdapter
 				}
 			}
 		}
-		double utility = drtAlpha_u
-				+ drtBetaTravelTime_u_min * travelTime_min
+		double utility = drtBetaTravelTime_u_min * travelTime_min
 				+ drtBetaAccessEgressTime_u_min * accessEgressTime_min;
+		if (!request.excludeModeConstant()) {
+			utility += drtAlpha_u;
+		}
 		return new TripScoreResult(utility, "eqasim-phase2:DrtDirect");
 	}
 

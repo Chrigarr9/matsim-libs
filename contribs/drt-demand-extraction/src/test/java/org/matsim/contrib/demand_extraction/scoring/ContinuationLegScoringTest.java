@@ -23,6 +23,7 @@ import org.matsim.core.scoring.functions.ScoringParameters;
 import org.matsim.examples.ExamplesUtils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for Task 9: continuation-leg scoring — single ASC, no second access
@@ -274,18 +275,30 @@ class ContinuationLegScoringTest {
     // Regression: NONE role is completely unchanged (no flag, no wait charge)
     // -------------------------------------------------------------------------
 
+    /**
+     * NONE role scores equal a closed-form expected value:
+     * {@code ASC - IVT_COEFF*600 - 2*WALK_COEFF*MIN_WALK_TIME}.
+     *
+     * <p>This is a real regression guard: if any of the new conditionals were deleted
+     * (e.g. ASC omitted, or walk terms dropped), this test would fail. The previous
+     * version compared two identical NONE requests and could never fail even if all
+     * conditionals were removed.
+     */
     @Test
     void noneRole_isIdenticalToBaseline() {
         BudgetValidator validator = buildValidator();
 
-        // Two NONE requests with the same data must produce equal scores.
         DrtRequest r1 = buildRequestWithContext(DrtRequest.HubLegRole.NONE, 0.0);
-        DrtRequest r2 = buildRequestWithContext(DrtRequest.HubLegRole.NONE, 0.0);
 
-        double s1 = validator.calculateDrtScoreWithWalks(r1, 0.0, 600.0, 6000.0, MIN_WALK, MIN_WALK);
-        double s2 = validator.calculateDrtScoreWithWalks(r2, 0.0, 600.0, 6000.0, MIN_WALK, MIN_WALK);
+        double score = validator.calculateDrtScoreWithWalks(r1, 0.0, 600.0, 6000.0, MIN_WALK, MIN_WALK);
 
-        assertEquals(s1, s2, 1e-9, "Two NONE requests with identical inputs must score identically");
+        // Closed-form: one ASC + IVT over 600s + two walk legs each of MIN_WALK_TIME
+        double expected = ASC
+                - IVT_COEFF * 600.0
+                - 2.0 * WALK_COEFF * MIN_WALK_TIME;
+
+        assertEquals(expected, score, 1e-9,
+                "NONE baseline score must match: ASC - IVT_COEFF*600 - 2*WALK_COEFF*MIN_WALK_TIME");
     }
 
     // -------------------------------------------------------------------------
@@ -306,5 +319,45 @@ class ContinuationLegScoringTest {
 
         assertEquals(noneScore, accessScore, 1e-9,
                 "ACCESS_LEG must score identically to NONE (ASC present, access walk present)");
+    }
+
+    // -------------------------------------------------------------------------
+    // BudgetValidator.calculateBudget: continuation vs none
+    // -------------------------------------------------------------------------
+
+    /**
+     * {@link BudgetValidator#calculateBudget} is the public entry point called by
+     * {@code DrtRequestFactory} for each constructed request. Verify that the
+     * continuation path (no ASC, no access walk) produces a STRICTLY GREATER budget
+     * than the equivalent NONE path (ASC present, access walk present).
+     *
+     * <p>With the small {@code TRANSFER_WAIT_S=300} buffer, the gain from dropping ASC
+     * (+1.0) and the access walk (+WALK_COEFF*MIN_WALK_TIME ≈ +0.149) easily dominates
+     * the transfer-wait charge (M_WAIT_S*300 ≈ -0.5), so the net delta is positive and
+     * strictly discriminates the two branches.
+     */
+    @Test
+    void calculateBudget_continuationIsStrictlyGreaterThanNone() {
+        BudgetValidator validator = buildValidator();
+
+        // Both requests have zero bestModeScore so calculateBudget == drtScore.
+        // The DrtRequest.builder sets budget=0 and bestModeScore=0 in baseBuilder.
+        DrtRequest noneReq = buildRequestWithContext(DrtRequest.HubLegRole.NONE, 0.0);
+        DrtRequest continuationReq = buildRequestWithContext(
+                DrtRequest.HubLegRole.CONTINUATION_LEG, TRANSFER_WAIT_S);
+
+        double noneBudget = validator.calculateBudget(noneReq);
+        double continuationBudget = validator.calculateBudget(continuationReq);
+
+        // continuation must be strictly more attractive (higher budget)
+        // because no ASC charge and no access walk more than compensate for transfer wait
+        double expectedDelta = -ASC                       // = +1.0  (ASC dropped)
+                + WALK_COEFF * MIN_WALK_TIME              // access walk dropped
+                + M_WAIT_S * TRANSFER_WAIT_S;             // transfer wait charged (negative)
+
+        assertEquals(expectedDelta, continuationBudget - noneBudget, 1e-9,
+                "calculateBudget delta (continuation - none) must match: +ASC_drop + access_walk_drop + transfer_wait");
+        assertTrue(continuationBudget > noneBudget,
+                "continuation budget must be strictly greater than NONE budget for these inputs");
     }
 }
