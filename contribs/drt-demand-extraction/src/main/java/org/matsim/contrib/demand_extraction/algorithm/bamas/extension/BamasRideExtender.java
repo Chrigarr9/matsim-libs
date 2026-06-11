@@ -680,6 +680,31 @@ public final class BamasRideExtender {
 									   DrtRequest[] destsOrdered, int index,
 									   double[] preConnTT, double[] preConnDist,
 									   double[] preConnUtil) {
+		// Extension rides are always MIXED-kind (the ordering enumerator does not
+		// distinguish FIFO/LIFO). Pair (degree-2) materialization needs to restore
+		// the original FIFO/LIFO kind from the stub's flags — see the kind-aware
+		// overload below, used only by RideMaterializer.
+		return buildRideFromOrdering(network, originsOrdered, destsOrdered, index,
+				preConnTT, preConnDist, preConnUtil, RideKind.MIXED);
+	}
+
+	/**
+	 * Kind-aware variant of {@link #buildRideFromOrdering}. Identical routing /
+	 * metric / budget logic; the only difference is the {@link RideKind} stamped on
+	 * the built ride.
+	 *
+	 * <p>Required for degree-2 pair materialization (Task 13): a pair stub carries
+	 * its original FIFO/LIFO kind in {@code flags}, and the CSV output writes
+	 * {@code ride.getKind()} verbatim, so a materialized pair must reproduce
+	 * FIFO/LIFO — not the {@link RideKind#MIXED} the extension path uses. Degree-3+
+	 * stubs encode MIXED in their flags ({@code RideStub.fromRide}), so passing the
+	 * decoded kind is a no-op for them.
+	 */
+	static Ride buildRideFromOrdering(MatsimNetworkCache network,
+									   DrtRequest[] originsOrdered,
+									   DrtRequest[] destsOrdered, int index,
+									   double[] preConnTT, double[] preConnDist,
+									   double[] preConnUtil, RideKind rideKind) {
 		int degree = originsOrdered.length;
 		DrtRequest[] requests = originsOrdered; // requests[] IS origin ordering
 
@@ -783,7 +808,7 @@ public final class BamasRideExtender {
 		double[] adjDelays = optimizeDelays(delays, effMaxNeg, effMaxPos);
 		if (adjDelays == null) return null;
 
-		RideKind kind = RideKind.MIXED;
+		RideKind kind = rideKind;
 
 		return Ride.builder()
 				.index(index)
