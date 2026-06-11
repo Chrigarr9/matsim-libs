@@ -174,8 +174,12 @@ public class BudgetValidator {
 		double minWalk = exMasConfig.getMinDrtAccessEgressDistance();
 		for (int i = 0; i < ride.getDegree(); i++) {
 			DrtRequest request = requests[i];
+			// CONTINUATION_LEG has no origin access walk (hub transfer walk is charged on the
+			// ACCESS_LEG side); ACCESS_LEG and NONE use the standard minWalk for access.
+			double accessWalk = request.hubLegRole == DrtRequest.HubLegRole.CONTINUATION_LEG
+					? 0.0 : minWalk;
 			double drtScore = calculateDrtScoreWithWalks(request, delays[i], travelTimes[i], distances[i],
-					minWalk, minWalk);
+					accessWalk, minWalk);
 			remainingBudgets[i] = drtScore - request.bestModeScore;
 		}
 		return remainingBudgets;
@@ -184,8 +188,11 @@ public class BudgetValidator {
 	/** Calculate budget for a single request (direct travel, no delay, min walk). */
 	public double calculateBudget(DrtRequest request) {
 		double minWalk = exMasConfig.getMinDrtAccessEgressDistance();
+		// CONTINUATION_LEG has no origin access walk.
+		double accessWalk = request.hubLegRole == DrtRequest.HubLegRole.CONTINUATION_LEG
+				? 0.0 : minWalk;
 		double drtScore = calculateDrtScoreWithWalks(request, 0.0, request.getTravelTime(), request.getDistance(),
-				minWalk, minWalk);
+				accessWalk, minWalk);
 		return drtScore - request.bestModeScore;
 	}
 

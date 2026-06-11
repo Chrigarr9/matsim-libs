@@ -45,6 +45,11 @@ public class DmcMatSimTripAdapter implements DemandExtractionScoringAdapter {
 
 	@Override
 	public TripScoreResult scoreTrip(TripScoreRequest request) {
+		if (request.excludeModeConstant()) {
+			throw new UnsupportedOperationException(
+					"excludeModeConstant (Paper-2 continuation legs) is only supported by "
+					+ "the eqasim adapter; got " + getName());
+		}
 		// Build DMC trip from our request
 		DiscreteModeChoiceTrip dmcTrip = new DiscreteModeChoiceTrip(
 				request.originActivity(),

@@ -81,9 +81,11 @@ public class EqasimScoringAdapter implements DemandExtractionScoringAdapter {
 		}
 
 		// DRT cost is zero (ZeroCostModel / best-case DRT)
-		double utility = modeParameters.drt.alpha_u
-				+ modeParameters.drt.betaTravelTime_u_min * travelTime_min
+		double utility = modeParameters.drt.betaTravelTime_u_min * travelTime_min
 				+ modeParameters.drt.betaAccessEgressTime_u_min * accessEgressTime_min;
+		if (!request.excludeModeConstant()) {
+			utility += modeParameters.drt.alpha_u;
+		}
 		// betaCost * interaction * 0 = 0 (no DRT fare in utility)
 
 		return new TripScoreResult(utility, "eqasim:DrtDirect");

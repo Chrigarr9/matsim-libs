@@ -55,6 +55,11 @@ public class PlanCalcScoreAdapter implements DemandExtractionScoringAdapter {
 
 	@Override
 	public TripScoreResult scoreTrip(TripScoreRequest request) {
+		if (request.excludeModeConstant()) {
+			throw new UnsupportedOperationException(
+					"excludeModeConstant (Paper-2 continuation legs) is only supported by "
+					+ "the eqasim adapter; got " + getName());
+		}
 		ScoringParameters params = scoringParametersForPerson.getScoringParameters(request.person());
 		double score = 0.0;
 

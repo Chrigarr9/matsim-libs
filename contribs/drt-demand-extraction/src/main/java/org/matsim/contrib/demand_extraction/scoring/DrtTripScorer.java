@@ -51,6 +51,14 @@ public final class DrtTripScorer {
 			return Double.NEGATIVE_INFINITY;
 		}
 
+		// CONTINUATION_LEG (urban hub->D) has no origin access walk: the physical transfer
+		// walk is already charged on the ACCESS_LEG side (hub egress). Zeroing it here
+		// ensures the per-leg budget gate correctly models the actual journey split.
+		boolean isContinuation = request.hubLegRole == DrtRequest.HubLegRole.CONTINUATION_LEG;
+		if (isContinuation) {
+			accessWalkDist = 0.0;
+		}
+
 		double accessTime = accessWalkDist / walkSpeed;
 		double egressTime = egressWalkDist / walkSpeed;
 		double pickupTime = request.requestTime + delay;
@@ -79,10 +87,16 @@ public final class DrtTripScorer {
 		TripScoreRequest scoreRequest = new TripScoreRequest(
 				ctx.person(), drtMode, elements,
 				ctx.syntheticOriginActivity(), ctx.syntheticDestActivity(),
-				request.requestTime, null, request.tripIndex);
+				request.requestTime, null, request.tripIndex,
+				List.of(), isContinuation);
 
 		TripScoreResult result = adapter.scoreTrip(scoreRequest);
 		double score = result.utility();
+
+		if (request.transferWaitSeconds > 0) {
+			score += ctx.scoringParams().marginalUtilityOfWaitingPt_s
+					* request.transferWaitSeconds;
+		}
 
 		if (!result.waitingDisutilityIncluded()) {
 			double marginalUtilityOfWaitingPt_s = ctx.scoringParams().marginalUtilityOfWaitingPt_s;
