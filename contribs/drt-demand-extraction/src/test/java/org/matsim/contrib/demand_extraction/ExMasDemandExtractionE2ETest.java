@@ -235,7 +235,7 @@ public class ExMasDemandExtractionE2ETest {
 					System.err.println("Line: " + line);
 					System.err.println("Fields: " + java.util.Arrays.toString(parts));
 				}
-				Assertions.assertEquals(39, parts.length, "Each request should have 39 fields (includes originLinkCoord/destinationLinkCoord 8 fields + maxWalkDistance + maxWaitTime)");
+				Assertions.assertEquals(44, parts.length, "Each request should have 44 fields (39 baseline + Ext-2 requestTag/hubId + Task-11 hubLegRole/transferWaitSeconds/marginalUtilityOfMoney)");
 
 				String personId = parts[1];
 				double budget = Double.parseDouble(parts[6]);
@@ -276,10 +276,10 @@ public class ExMasDemandExtractionE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// 35 baseline columns (incl. HyperPool stop-based pooling fields)
+				// 36 baseline columns (incl. HyperPool stop-based pooling fields)
 				// + 2 Extension-2 per-pax columns (requestTags, hubIds)
-				// + 1 Extension-2 per-ride column (peak_pax, Task 7.2) appended.
-				Assertions.assertEquals(38, parts.length, "Each ride should have 38 fields (with HyperPool stop fields)");
+				// + 2 per-ride columns (peak_pax Task 7.2, reposTimeMeanOutgoing Task 4) appended.
+				Assertions.assertEquals(40, parts.length, "Each ride should have 40 fields (with HyperPool stop fields)");
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();

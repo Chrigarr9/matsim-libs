@@ -399,10 +399,11 @@ public class ExMasClusteredHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// 35 baseline columns + 2 Extension-2 per-pax columns
-				// (requestTags, hubIds) + 1 Extension-2 per-ride column
-				// (peak_pax, Task 7.2) appended at the end of exmas_rides.csv.
-				Assertions.assertEquals(38, parts.length, "Each ride should have 38 fields");
+				// 36 baseline columns + 2 Extension-2 per-pax columns
+				// (requestTags, hubIds) + 2 per-ride columns appended at the end
+				// of exmas_rides.csv: peak_pax (Task 7.2) + reposTimeMeanOutgoing
+				// (chained_timebin Task 4).
+				Assertions.assertEquals(40, parts.length, "Each ride should have 40 fields");
 
 				String variant = parts[3];
 				if (variant.equals("DOOR_TO_DOOR")) doorToDoorCount++;

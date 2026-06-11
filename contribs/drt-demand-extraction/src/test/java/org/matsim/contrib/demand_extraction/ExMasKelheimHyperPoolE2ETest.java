@@ -357,8 +357,9 @@ public class ExMasKelheimHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// Current format: 39 fields (incl. originLinkCoord/destinationLinkCoord 8 fields + maxWalkDistance + maxWaitTime)
-				Assertions.assertEquals(39, parts.length, "Each request should have 39 fields");
+				// Current format: 44 fields (39 baseline + Ext-2 requestTag/hubId
+				// + Task-11 hubLegRole/transferWaitSeconds/marginalUtilityOfMoney)
+				Assertions.assertEquals(44, parts.length, "Each request should have 44 fields");
 
 				String personId = parts[1]; // personId is column 1 (after index)
 				double budget = Double.parseDouble(parts[6]); // budget is column 6 (after isEducation)
@@ -405,10 +406,10 @@ public class ExMasKelheimHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// 35 baseline columns (incl. isEducations col 9, maxCostsPerKm col 18)
+				// 36 baseline columns (incl. isEducations col 9, maxCostsPerKm col 18)
 				// + 2 Extension-2 per-pax columns (requestTags, hubIds)
-				// + 1 Extension-2 per-ride column (peak_pax, Task 7.2) appended.
-				Assertions.assertEquals(38, parts.length, "Each ride should have 38 fields");
+				// + 2 per-ride columns (peak_pax Task 7.2, reposTimeMeanOutgoing Task 4) appended.
+				Assertions.assertEquals(40, parts.length, "Each ride should have 40 fields");
 
 				int degree = Integer.parseInt(parts[1]);
 				String variant = parts[3]; // DOOR_TO_DOOR, STOP_TO_STOP, or HYPER_POOLED

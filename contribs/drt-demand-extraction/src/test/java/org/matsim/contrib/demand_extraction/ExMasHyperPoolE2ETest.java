@@ -220,7 +220,7 @@ public class ExMasHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				Assertions.assertEquals(39, parts.length, "Each request should have 39 fields (includes originLinkCoord/destinationLinkCoord 8 fields + maxWalkDistance + maxWaitTime)");
+				Assertions.assertEquals(44, parts.length, "Each request should have 44 fields (39 baseline + Ext-2 requestTag/hubId + Task-11 hubLegRole/transferWaitSeconds/marginalUtilityOfMoney)");
 
 				String personId = parts[1];
 				double budget = Double.parseDouble(parts[6]);
@@ -256,23 +256,24 @@ public class ExMasHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// 35 baseline columns + 2 Extension-2 per-pax columns
-				// (requestTags, hubIds) + 1 Extension-2 per-ride column
-				// (peak_pax, Task 7.2) appended at the end of exmas_rides.csv.
-				Assertions.assertEquals(38, parts.length, "Each ride should have 38 fields (with HyperPool)");
+				// 36 baseline columns + 2 Extension-2 per-pax columns
+				// (requestTags, hubIds) + 2 per-ride columns appended at the end
+				// of exmas_rides.csv: peak_pax (Task 7.2) + reposTimeMeanOutgoing (Task 4).
+				Assertions.assertEquals(40, parts.length, "Each ride should have 40 fields (with HyperPool)");
 
 				int degree = Integer.parseInt(parts[1]);
 				String variant = parts[3]; // DOOR_TO_DOOR, STOP_TO_STOP, or HYPER_POOLED
 				String requestIndices = parts[4];
-				String remainingBudgets = parts[15];
+				String remainingBudgets = parts[17];
 
-				// Stop-related fields (indices 23-32)
-				String pickupStopLinkId = parts[23];
-				String pickupStopX = parts[24];
-				String pickupStopY = parts[25];
-				String dropoffStopLinkId = parts[27];
-				String accessWalkDistances = parts[31];
-				String egressWalkDistances = parts[32];
+				// Stop-related fields (current schema: pickupStop* 26-29,
+				// dropoffStop* 30-33, access/egressWalkDistances 34-35).
+				String pickupStopLinkId = parts[26];
+				String pickupStopX = parts[27];
+				String pickupStopY = parts[28];
+				String dropoffStopLinkId = parts[30];
+				String accessWalkDistances = parts[34];
+				String egressWalkDistances = parts[35];
 
 				// Track by degree and variant
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
@@ -323,7 +324,7 @@ public class ExMasHyperPoolE2ETest {
 
 				// Store ride for comparison
 				RideRecord record = new RideRecord(variant, degree, budgets,
-					Double.parseDouble(parts[21]), Double.parseDouble(parts[22])); // rideTravelTime, rideDistance
+					Double.parseDouble(parts[24]), Double.parseDouble(parts[25])); // rideTravelTime, rideDistance
 				ridesByRequestSet.computeIfAbsent(requestIndices, k -> new ArrayList<>()).add(record);
 
 				rideCount++;
