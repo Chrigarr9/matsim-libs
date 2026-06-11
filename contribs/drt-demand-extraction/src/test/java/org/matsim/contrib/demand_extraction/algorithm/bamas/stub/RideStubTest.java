@@ -79,9 +79,11 @@ class RideStubTest {
         DrtRequest req4099  = request(4099);
         DrtRequest req65537 = request(65537);
 
-        // requests[] — the canonical "index order" array (order doesn't matter for
-        // the round-trip test; we use ascending global order for clarity).
-        DrtRequest[] requests = { req17, req4099, req65537 };
+        // requests[] — deliberately NON-SORTED to exercise the Arrays.sort in fromRide.
+        // Production getRequestIndices() may arrive in any order; fromRide must sort
+        // before packing.  If fromRide forgets to sort, binarySearch returns negative
+        // positions and the round-trip fails or throws.
+        DrtRequest[] requests = { req65537, req17, req4099 };
 
         // Pickup order: 4099 first, then 17, then 65537
         DrtRequest[] origins = { req4099, req17, req65537 };
@@ -138,9 +140,14 @@ class RideStubTest {
         // Extract stub.
         RideStub stub = RideStub.fromRide(ride);
 
+        // Verify the fixture is actually non-sorted (guards test quality: if this
+        // fails the fixture accidentally uses sorted requests[] and loses discriminating power).
+        assertArrayEquals(new int[]{ 65537, 17, 4099 }, ride.getRequestIndices(),
+                "fixture: getRequestIndices() must be non-sorted {65537, 17, 4099} to exercise the sort");
+
         // (a) sortedSet, distDm, ttDs, kind
         assertArrayEquals(new int[]{ 17, 4099, 65537 }, stub.sortedSet,
-                "sortedSet must be ascending: {17, 4099, 65537}");
+                "sortedSet must be ascending: {17, 4099, 65537} (fromRide must sort even when requests[] is not)");
         assertEquals(12345, stub.distDm,
                 "distDm must be toDeci(1234.5) == 12345");
         assertEquals(6789, stub.ttDs,
