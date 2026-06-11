@@ -158,11 +158,32 @@ public final class BamasEngine {
 		log.info("======================================================================");
 		int nextRideIndex = allRides.size();
 		int extensionStartIdx = nextRideIndex; // first index of extension rides in allRides
+		final boolean stubMode = exMasConfig.isStubModeEnabled();
+		// Stub mode (Task 11): degree-3+ extension rides are held as per-degree StubColumns,
+		// NOT appended to allRides as fat Ride objects. We accumulate the per-degree layers
+		// here and batch-materialize them once at the end, concatenating with the still-fat
+		// singles + pairs already in allRides. The fat `extended` list returned by extendRides
+		// is still produced (Task 10 is additive) but used only for control flow + degree-graph;
+		// it is not retained past each iteration. Task 12 makes export streaming.
+		List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> stubLayers =
+				stubMode ? new ArrayList<>() : null;
+		// Previous degree's captured (and possibly RATIO-pruned) stub layer, fed as the
+		// next degree's parents. Null on the first iteration (degree 2→3 uses fat pairs).
+		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns prevStubLayer = null;
 		DegreeGraph prevDegreeGraph = null;
 		for (int degree = 2; degree < maxDegree; degree++) {
 			BamasRideExtender extender = new BamasRideExtender(network, graph, budgetValidator,
 													 requests, exMasConfig, prevDegreeGraph);
-			List<Ride> extended = extender.extendRides(currentDegreeRides, nextRideIndex);
+
+			// Seam (a): degree 2→3 has FAT pair parents; degree 3→4+ has STUB parents
+			// (the previous iteration's captured layer). prevStubLayer is null on the
+			// first iteration, so the fat overload runs there.
+			List<Ride> extended;
+			if (stubMode && prevStubLayer != null) {
+				extended = extender.extendRides(prevStubLayer, reqArray, nextRideIndex);
+			} else {
+				extended = extender.extendRides(currentDegreeRides, nextRideIndex);
+			}
 			long graphBuildStart = System.currentTimeMillis();
 			prevDegreeGraph = extender.buildDegreeGraph(degree + 1);
 			long graphBuildMs = System.currentTimeMillis() - graphBuildStart;
@@ -174,19 +195,35 @@ public final class BamasEngine {
 				break;
 			}
 
-			// RATIO_THRESHOLD inter-degree pruning only (legacy keep-fraction gate).
-			// COVERAGE_TOPK is applied once after the full cascade — see post-loop block below.
 			int generatedCount = extended.size();
-			if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.RATIO_THRESHOLD) {
-				PostExtensionPruner pruner = buildPruner(exMasConfig);
-				if (pruner != null) {
-					extended = pruner.prune(extended);
+			if (stubMode) {
+				// Capture this degree's compact layer (sorted lex, same total order as the
+				// fat `extended` list). RATIO_THRESHOLD inter-degree pruning, when active,
+				// runs over the stub layer (seam b); COVERAGE_TOPK runs once post-loop.
+				org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer =
+						extender.getLastDegreeStubs();
+				if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.RATIO_THRESHOLD) {
+					PostExtensionPruner pruner = buildPruner(exMasConfig);
+					if (pruner != null) {
+						layer = pruner.pruneStubLayer(layer, reqArray);
+					}
 				}
+				stubLayers.add(layer);
+				prevStubLayer = layer; // next degree extends this (pruned) layer
+			} else {
+				// RATIO_THRESHOLD inter-degree pruning only (legacy keep-fraction gate).
+				// COVERAGE_TOPK is applied once after the full cascade — see post-loop block below.
+				if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.RATIO_THRESHOLD) {
+					PostExtensionPruner pruner = buildPruner(exMasConfig);
+					if (pruner != null) {
+						extended = pruner.prune(extended);
+					}
+				}
+				allRides.addAll(extended);
+				currentDegreeRides = extended;
 			}
 
 			nextRideIndex += generatedCount; // index space reserved for all generated rides
-			allRides.addAll(extended);
-			currentDegreeRides = extended;
 		}
 
 		// Post-extension COVERAGE_TOPK pruning: applied once to all extension rides after the
@@ -194,16 +231,52 @@ public final class BamasEngine {
 		if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.COVERAGE_TOPK) {
 			PostExtensionPruner pruner = buildPruner(exMasConfig);
 			if (pruner != null) {
-				List<Ride> extensionRides = new java.util.ArrayList<>(allRides.subList(extensionStartIdx, allRides.size()));
-				extensionRides = pruner.prune(extensionRides);
-				allRides = new java.util.ArrayList<>(allRides.subList(0, extensionStartIdx));
-				allRides.addAll(extensionRides);
+				if (stubMode) {
+					// Prune each per-degree stub layer in place (each layer is one degree,
+					// so per-degree COVERAGE_TOPK == per-layer pruning).
+					for (int i = 0; i < stubLayers.size(); i++) {
+						stubLayers.set(i, pruner.pruneStubLayer(stubLayers.get(i), reqArray));
+					}
+				} else {
+					List<Ride> extensionRides = new java.util.ArrayList<>(allRides.subList(extensionStartIdx, allRides.size()));
+					extensionRides = pruner.prune(extensionRides);
+					allRides = new java.util.ArrayList<>(allRides.subList(0, extensionStartIdx));
+					allRides.addAll(extensionRides);
+				}
 			}
 		}
 
+		// Stub mode: batch-materialize the degree-3+ layers into fat Ride objects and
+		// concatenate with the still-fat singles + pairs already in allRides. The existing
+		// final sort + reindex (below) then runs UNCHANGED, exactly as in the fat path.
+		// NON-DEFERRED: materialize replays buildRideFromOrdering + validateAndPopulateBudgets,
+		// so remainingBudgets is populated inline (see RideMaterializer).
+		if (stubMode) {
+			org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer materializer =
+					new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
+							network, budgetValidator);
+			int materialized = 0;
+			for (org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer : stubLayers) {
+				for (int row = 0; row < layer.size(); row++) {
+					allRides.add(materializer.materialize(layer, row, reqArray));
+					materialized++;
+				}
+			}
+			log.info("Stub mode: materialized {} degree-3+ extension rides from {} per-degree layers",
+					materialized, stubLayers.size());
+		}
+
+		// Seam (c): the deferred-budget batch is being moved to the export pass (Task 12).
+		// In stub mode there are no fat extension rides to batch here — RideMaterializer
+		// already populates remainingBudgets inline via validateAndPopulateBudgets during
+		// materialization above, exactly as the non-deferred per-ordering path does. The
+		// gate scenario is NON-DEFERRED, so this block never runs there regardless.
+		// Do NOT run populateBudgetsBatch in stub mode: the materialized rides already carry
+		// budgets, and the stub layers themselves carry none.
+		//
 		// If extension skipped per-ordering budget validation, populate remainingBudgets now.
 		// Safe on scenarios where budget never rejects (e.g. Bavaria); see BudgetValidator docs.
-		if (exMasConfig.isDeferExtensionBudgetValidation()) {
+		if (!stubMode && exMasConfig.isDeferExtensionBudgetValidation()) {
 			log.info("");
 			log.info("Populating deferred budgets for {} rides...", allRides.size());
 			org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler

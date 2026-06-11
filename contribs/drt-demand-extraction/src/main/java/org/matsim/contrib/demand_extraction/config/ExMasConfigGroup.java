@@ -510,12 +510,15 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	/**
 	 * Kill-switch for the slim-ride stub lifecycle (compact per-degree ride
-	 * storage). Default {@code false} until the stub path is fully wired; a later
-	 * task flips the default to {@code true} once the end-to-end path is complete.
-	 * This is a bring-up safety switch, NOT a quality knob — the stub lifecycle
-	 * is an exact replacement of the current path, not an approximation.
+	 * storage). Flipped to {@code true} in Task 11 now that the end-to-end stub
+	 * path is wired: degree-3+ extension rides are held as per-degree StubColumns,
+	 * consumed by the extender (parents) and the pruner, and materialized back to
+	 * full Ride objects before export. This is a bring-up safety switch, NOT a
+	 * quality knob — the stub lifecycle is an exact (byte-identical) replacement of
+	 * the fat path, not an approximation. Set to {@code false} to fall back to the
+	 * legacy fat-ride path.
 	 */
-	private boolean stubModeEnabled = false;
+	private boolean stubModeEnabled = true;
 
     public ExMasConfigGroup() {
         super(GROUP_NAME);
@@ -1710,9 +1713,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 		map.put("stubModeEnabled",
 				"Enable the slim-ride stub lifecycle (compact per-degree ride storage). "
-				+ "Default: false until the stub path is fully wired; flipped to true in a later task "
-				+ "once the end-to-end path is complete. Bring-up kill-switch, NOT a quality knob — "
-				+ "the stub lifecycle is an exact replacement of the current path.");
+				+ "Default: true (Task 11) — degree-3+ extension rides are held as per-degree "
+				+ "StubColumns and materialized before export. Bring-up kill-switch, NOT a quality "
+				+ "knob — the stub lifecycle is an exact (byte-identical) replacement of the fat path. "
+				+ "Set to false to fall back to the legacy fat-ride path.");
 
         return map;
     }
