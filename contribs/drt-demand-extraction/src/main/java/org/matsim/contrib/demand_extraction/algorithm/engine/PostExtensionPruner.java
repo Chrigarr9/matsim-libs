@@ -325,9 +325,14 @@ public final class PostExtensionPruner {
 		}
 		int[] cov = new int[maxIdx + 1];
 
-		// Mark survivors by row, then emit in original row order so the resulting layer
-		// stays lex-sorted (the engine re-sorts before export anyway, but keeping lex
-		// order means a later degree consuming this layer as parents sees the same order).
+		// Mark survivors, then emit in `order` (quality-descending, lex tie-break) — NOT
+		// row order. This must mirror the fat path's pruneCoverageTopK, which builds `kept`
+		// via `for (idx : order) kept.add(...)`, i.e. survivors in quality-descending order.
+		// The engine's final sort (variant, degree, first-PICKUP index) is STABLE and only
+		// ties-breaks on the first-pickup index, so within a tie group it preserves the
+		// pruner's emission order. With Paper-2 Ext-2 hub copies, many degree-3/4 rides share
+		// a first-pickup index, so emitting row (lex) order here instead of quality order
+		// flips ~21 tied rides at the tail vs the fat golden (byte drift, identical multiset).
 		boolean[] keepRow = new boolean[n];
 		int keptAtDegree = 0;
 		int requestsCovered = 0;
@@ -348,8 +353,8 @@ public final class PostExtensionPruner {
 		}
 
 		StubColumns kept = new StubColumns(degree);
-		for (int i = 0; i < n; i++) {
-			if (keepRow[i]) copyRow(layer, i, kept);
+		for (int idx : order) {
+			if (keepRow[idx]) copyRow(layer, idx, kept);
 		}
 		log.info("Post-extension pruning (COVERAGE_TOPK, stub): degree {} kept {}/{} K={}, {} requests covered",
 				degree, keptAtDegree, n, effectiveK, requestsCovered);
