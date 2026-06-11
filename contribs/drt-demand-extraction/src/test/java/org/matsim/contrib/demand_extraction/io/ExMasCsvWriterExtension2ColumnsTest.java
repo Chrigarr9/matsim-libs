@@ -14,11 +14,12 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
 /**
  * Verifies that {@link ExMasCsvWriter#writeRequests(String, List)} emits the
- * Extension-2 schema additions ({@code requestTag} and {@code hubId}) as the
- * last two columns of {@code drt_requests.csv}, with null {@code hubId}
- * rendered as the empty string.
+ * Extension-2 schema additions as the last columns of {@code drt_requests.csv}:
+ * {@code requestTag}, {@code hubId}, {@code hubLegRole}, {@code transferWaitSeconds},
+ * {@code marginalUtilityOfMoney}. Null values render as empty string / "NONE" / 0.0
+ * respectively.
  *
- * <p>Schema discipline: the two columns are APPENDED — never inserted in the
+ * <p>Schema discipline: all five columns are APPENDED — never inserted in the
  * middle — so any downstream tooling that reads by column name still works,
  * and tooling that walks trailing columns also picks them up.
  */
@@ -46,30 +47,35 @@ class ExMasCsvWriterExtension2ColumnsTest {
         assertEquals(5, lines.size());
 
         String header = lines.get(0);
-        // Trailing two columns must be exactly `requestTag,hubId` (appended).
-        assertTrue(header.endsWith(",requestTag,hubId"),
-                "Header must end with requestTag,hubId — was: " + header);
+        // Trailing columns must be exactly the five Extension-2 additions (appended).
+        assertTrue(header.endsWith(",requestTag,hubId,hubLegRole,transferWaitSeconds,marginalUtilityOfMoney"),
+                "Header must end with requestTag,hubId,hubLegRole,transferWaitSeconds,marginalUtilityOfMoney — was: " + header);
 
         // Pre-existing leading columns survive untouched (sanity check).
         assertTrue(header.startsWith("index,personId,groupId,tripIndex,"),
                 "Existing leading header schema unchanged — was: " + header);
 
         String[] headerCols = header.split(",", -1);
-        int tagIdx = headerCols.length - 2;
-        int hubIdx = headerCols.length - 1;
-        assertEquals("requestTag", headerCols[tagIdx]);
-        assertEquals("hubId", headerCols[hubIdx]);
+        int tagIdx  = headerCols.length - 5;
+        int hubIdx  = headerCols.length - 4;
+        int roleIdx = headerCols.length - 3;
+        assertEquals("requestTag",              headerCols[tagIdx]);
+        assertEquals("hubId",                   headerCols[hubIdx]);
+        assertEquals("hubLegRole",              headerCols[roleIdx]);
+        assertEquals("transferWaitSeconds",     headerCols[headerCols.length - 2]);
+        assertEquals("marginalUtilityOfMoney",  headerCols[headerCols.length - 1]);
 
-        // Per-row tag values match insertion order, and null hubId renders empty.
-        assertRow(lines.get(1), headerCols.length, tagIdx, hubIdx, "rural_intra", "");
-        assertRow(lines.get(2), headerCols.length, tagIdx, hubIdx, "urban_intra", "");
-        assertRow(lines.get(3), headerCols.length, tagIdx, hubIdx, "connecting", "hub_03");
-        assertRow(lines.get(4), headerCols.length, tagIdx, hubIdx, "external", "");
+        // Per-row tag/hubId values match insertion order; null hubId renders empty;
+        // hubLegRole defaults to "NONE" for plain (non-virtual) requests.
+        assertRow(lines.get(1), headerCols.length, tagIdx, hubIdx, roleIdx, "rural_intra", "", "NONE");
+        assertRow(lines.get(2), headerCols.length, tagIdx, hubIdx, roleIdx, "urban_intra", "", "NONE");
+        assertRow(lines.get(3), headerCols.length, tagIdx, hubIdx, roleIdx, "connecting", "hub_03", "NONE");
+        assertRow(lines.get(4), headerCols.length, tagIdx, hubIdx, roleIdx, "external", "", "NONE");
     }
 
-    private static void assertRow(String line, int expectedCols, int tagIdx, int hubIdx,
-                                   String expectedTag, String expectedHubId) {
-        // -1 limit so trailing empty hubId still becomes a real column.
+    private static void assertRow(String line, int expectedCols, int tagIdx, int hubIdx, int roleIdx,
+                                   String expectedTag, String expectedHubId, String expectedRole) {
+        // -1 limit so trailing empty field still becomes a real column.
         String[] cols = line.split(",", -1);
         assertEquals(expectedCols, cols.length,
                 "Row column count mismatch — line: " + line);
@@ -77,6 +83,8 @@ class ExMasCsvWriterExtension2ColumnsTest {
                 "requestTag mismatch — line: " + line);
         assertEquals(expectedHubId, cols[hubIdx],
                 "hubId mismatch (null must serialise as empty string) — line: " + line);
+        assertEquals(expectedRole, cols[roleIdx],
+                "hubLegRole mismatch (null must serialise as NONE) — line: " + line);
     }
 
     /**

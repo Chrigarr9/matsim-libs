@@ -642,6 +642,7 @@ public class DrtRequestFactory {
 				.maxDetourFactor(effectiveMaxDetourFactor)
 				.maxWalkDistance(budgetDerivedMaxWalk)
 				.maxWaitTime(budgetDerivedMaxWait)
+				.marginalUtilityOfMoney(budgetValidator.marginalUtilityOfMoney(draft, person))
 				.build();
 		finalRequest.setScoringContext(draft.getScoringContext());
 		return finalRequest;
@@ -688,6 +689,7 @@ public class DrtRequestFactory {
 				.maxDetourFactor(effectiveMaxDetourFactor)
 				.maxWalkDistance(caps[1])
 				.maxWaitTime(caps[2])
+				.marginalUtilityOfMoney(validator.marginalUtilityOfMoney(copy, person))
 				.build();
 		done.setScoringContext(copy.getScoringContext());
 		return done;

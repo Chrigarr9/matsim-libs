@@ -343,6 +343,20 @@ public class BudgetValidator {
 	}
 
 	/**
+	 * Person- and distance-specific marginal utility of money for a request's
+	 * direct leg (utils/EUR); feeds the downstream fare-to-utility conversion.
+	 * Uses the Euclidean distance between origin and destination as the distance
+	 * input to the scoring adapter (consistent with how income-dependent adapters
+	 * look up marginal utility by distance band).
+	 */
+	public double marginalUtilityOfMoney(DrtRequest request, Person person) {
+		double euclid_km = Math.hypot(
+				request.destinationX - request.originX,
+				request.destinationY - request.originY) / 1000.0;
+		return adapter.getMarginalUtilityOfMoney(person, euclid_km);
+	}
+
+	/**
 	 * Score a DRT trip via the request's pre-built scoring context. Public entry point
 	 * used by stop-based and hyperpool ride generators that have explicit walk distances.
 	 */
