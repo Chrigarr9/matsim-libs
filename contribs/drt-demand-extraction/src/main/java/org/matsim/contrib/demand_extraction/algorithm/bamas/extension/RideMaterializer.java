@@ -56,16 +56,27 @@ public final class RideMaterializer {
 	 * layer (fat-stub path), in which case a degree-2 materialize is a hard error.
 	 */
 	private final PairGenerator pairGenerator;
+	/**
+	 * Task 13: the raw generation request array (same instance whose positions
+	 * {@code PairGenerator.generatePairStubs} recorded into the pair layer). The degree-2
+	 * branch resolves a pair's requests by {@code reqArray[position]} — the exact generation
+	 * COPY — NOT by {@code requestById.get(index)}, because Paper-2 Extension-2 hub copies
+	 * collide on one {@code index} and the map's last-write-wins canonical copy can carry a
+	 * different origin/dest than the one the pair was routed from. Null on the no-pair paths
+	 * (degree-2 materialize is a hard error there).
+	 */
+	private final DrtRequest[] reqArray;
 
 	public RideMaterializer(MatsimNetworkCache network, BudgetValidator budgetValidator) {
-		this(network, budgetValidator, null);
+		this(network, budgetValidator, null, null);
 	}
 
 	public RideMaterializer(MatsimNetworkCache network, BudgetValidator budgetValidator,
-			PairGenerator pairGenerator) {
+			PairGenerator pairGenerator, DrtRequest[] reqArray) {
 		this.network = network;
 		this.budgetValidator = budgetValidator;
 		this.pairGenerator = pairGenerator;
+		this.reqArray = reqArray;
 	}
 
 	/**
@@ -80,14 +91,26 @@ public final class RideMaterializer {
 	 * @param row          row index within {@code cols}
 	 * @param requestById  global request lookup keyed by {@link DrtRequest#index},
 	 *                     built identically to the extender's {@code requestMap}
-	 *                     (last-write-wins on a shared index). Positional indexing
-	 *                     is NOT safe: Paper-2 Extension-2 hub expansion emits
-	 *                     virtual copies that share the parent's {@code index}, so
+	 *                     (last-write-wins on a shared index). Used by the DEGREE-3+
+	 *                     branch only. Positional indexing into reqArray is NOT safe
+	 *                     for degree-3+: Paper-2 Extension-2 hub expansion emits virtual
+	 *                     copies that share the parent's {@code index}, so
 	 *                     {@code index != array position} and several requests can
-	 *                     collide on one index. The fat extender always resolves a
-	 *                     set member through this same map, so the winning ride is
-	 *                     built from the map's canonical copy; resolving here the
-	 *                     same way reproduces the exact origin/dest links.
+	 *                     collide on one index. The fat extender resolves every set
+	 *                     member through {@code requestMap.get(newSet[i])} (canonical
+	 *                     last-write-wins), so the winning degree-3+ ride is built from
+	 *                     the map's canonical copy — the pair's original copy identity
+	 *                     is intentionally FORGOTTEN at extension. Resolving here the
+	 *                     same way reproduces the exact degree-3+ origin/dest links.
+	 *
+	 *                     <p>The DEGREE-2 branch does the OPPOSITE: it resolves each
+	 *                     pair request by {@code reqArray[position]} (the raw generation
+	 *                     copy), using the position column the pair layer stored at
+	 *                     generation. A pair was routed from specific reqArray copies;
+	 *                     {@code requestById.get(index)} could return a different
+	 *                     colliding copy (different OD) and break the route. So degree-2
+	 *                     keeps copy identity (positions), degree-3+ uses the canonical
+	 *                     copy (index) — mirroring master in BOTH cases.
 	 * @return the materialized, budget-populated ride (index 0; the engine re-indexes
 	 *         after the final sort)
 	 */
@@ -106,14 +129,19 @@ public final class RideMaterializer {
 			// on-demand unreachable. So we rebuild via PairGenerator.rebuildPair at the same fixed
 			// bin, reproducing the generator's segments (and thus distance/time) bit-for-bit. The
 			// distDm/ttDs self-check below guards the reproduction.
-			if (pairGenerator == null) {
+			if (pairGenerator == null || reqArray == null) {
 				throw new IllegalStateException(
-						"Degree-2 stub layer encountered with no PairGenerator wired into RideMaterializer "
+						"Degree-2 stub layer encountered with no PairGenerator/reqArray wired into RideMaterializer "
 						+ "(row " + row + "); pair stubs can only be materialized on the streaming pairStubPath");
 			}
+			// Resolve by reqArray POSITION, not requestById — the pair layer stored the exact
+			// generation copy's position (Task 13). Under Ext-2 hub-index collision, resolving
+			// by index would pick a different colliding copy (different OD) than the one the pair
+			// was routed from, yielding a ~1.8x-wrong route and the distDm/ttDs self-check crash.
+			int[] positions = cols.positionIndices(row); // aligned to sortedSet
 			// pickup order: reqI = first pickup (local 0), reqJ = second pickup (local 1)
-			DrtRequest reqI = requestById.get(sortedSet[originsLocal[0]]);
-			DrtRequest reqJ = requestById.get(sortedSet[originsLocal[1]]);
+			DrtRequest reqI = reqArray[positions[originsLocal[0]]];
+			DrtRequest reqJ = reqArray[positions[originsLocal[1]]];
 			ride = pairGenerator.rebuildPair(reqI, reqJ, kind);
 		} else {
 			int[] destsLocal = OrderingCodec.unpack(cols.destOrder(row), degree);

@@ -2,6 +2,7 @@ package org.matsim.contrib.demand_extraction.algorithm.generation;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -135,6 +136,15 @@ public final class PairGenerator {
 		long startTime = System.currentTimeMillis();
 		List<PairCandidate> candidates = collectSortedCandidates(requests, startTime);
 
+		// Identity position lookup: each reqArray element object → its position. The pair
+		// candidates' reqI/reqJ are the SAME objects as elements of `requests` (TimeFilter
+		// shallow-clones the array), so an identity lookup recovers the exact reqArray
+		// position. This is the copy handle the stub must carry: under Paper-2 Extension-2
+		// hub expansion several DrtRequest copies share one `index`, so the index alone
+		// cannot recover the generation copy — the reqArray POSITION can. (See Task 13.)
+		IdentityHashMap<DrtRequest, Integer> idPos = new IdentityHashMap<>(requests.length * 2);
+		for (int p = 0; p < requests.length; p++) idPos.put(requests[p], p);
+
 		// Phase 3: Validate sequentially, emit stubs in the same order as the fat path.
 		StubColumns pairStubs = new StubColumns(2);
 		int nextRideIndex = requests.length; // Start after single rides (mirrors the fat path)
@@ -146,7 +156,27 @@ public final class PairGenerator {
 			Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
 			if (validated != null) {
 				RideStub s = RideStub.fromRide(validated);
-				pairStubs.addRow(s.sortedSet, s.originPacked, s.destPacked, s.distDm, s.ttDs, s.flags);
+				// Positions aligned to s.sortedSet: for each sorted global index, pick whichever
+				// of the pair's two request objects has that index, then look up its reqArray
+				// position. A pair always has two DISTINCT indices (different parents), so the
+				// mapping is unambiguous; guards below fail loud if either assumption breaks.
+				if (c.reqI.index == c.reqJ.index) {
+					throw new IllegalStateException(
+							"Pair candidate has two requests sharing index " + c.reqI.index
+							+ " — degree-2 sorted-set/position alignment is ambiguous");
+				}
+				int[] positions = new int[s.sortedSet.length];
+				for (int k = 0; k < s.sortedSet.length; k++) {
+					DrtRequest member = (s.sortedSet[k] == c.reqI.index) ? c.reqI : c.reqJ;
+					Integer pos = idPos.get(member);
+					if (pos == null) {
+						throw new IllegalStateException(
+								"Pair request object (index " + member.index + ") is not a reqArray "
+								+ "element — identity position lookup failed; reqArray identity assumption broken");
+					}
+					positions[k] = pos;
+				}
+				pairStubs.addRow(s.sortedSet, s.originPacked, s.destPacked, s.distDm, s.ttDs, s.flags, positions);
 				nextRideIndex++;
 				if (c.kind == RideKind.FIFO) fifoCreated++;
 				else lifoCreated++;

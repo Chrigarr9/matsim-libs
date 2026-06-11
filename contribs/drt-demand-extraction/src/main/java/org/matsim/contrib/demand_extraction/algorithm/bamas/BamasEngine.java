@@ -179,7 +179,7 @@ public final class BamasEngine {
 			// Best-per-set dedup + distance gate + top-fraction over the stub universe. The
 			// full pair universe is dropped here (only the survivor layer is retained), so
 			// the fat pair universe never coexists with the extension cascade.
-			pairSurvivorStubs = maybePrunePairStubsAfterGraph(allPairStubs, requestById);
+			pairSurvivorStubs = maybePrunePairStubsAfterGraph(allPairStubs, reqArray);
 		} else {
 			List<Ride> pairRides = pairGen.generatePairs(reqArray);
 
@@ -405,9 +405,12 @@ public final class BamasEngine {
 			// Task 13: pass pairGen so RideMaterializer can rebuild degree-2 pair stubs via the
 			// generator's fixed-time routing (buildRideFromOrdering's cumulative clock would miss
 			// unwarmed time bins for pairs). On the pairStubPath stubLayers[0] is the pair layer.
+			// Task 13: wire the SAME reqArray instance whose positions generatePairStubs recorded,
+			// so the degree-2 materialize resolves each pair request by reqArray[position] (the
+			// exact generation copy) instead of the index-collision-prone requestById.
 			org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer materializer =
 					new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
-							network, budgetValidator, pairGen);
+							network, budgetValidator, pairGen, reqArray);
 			log.info("Stub mode (streaming): exporting {} D2D rides ({} fat singles+pairs + {} stub rows) "
 					+ "via StubRideStore — no batch-materialize, no fat sort/reindex",
 					totalD2D, allRides.size(), stubLayerRows);
@@ -834,13 +837,16 @@ public final class BamasEngine {
 	 *       picks the same winner.</li>
 	 *   <li><b>FP operand order (contract #2):</b> request distances are summed in PICKUP
 	 *       order (the fat path sums {@code Arrays.stream(r.getRequests())} where
-	 *       {@code requests[] == originsOrdered}). We reconstruct pickup order from
-	 *       {@code originOrder} and resolve each request via {@code requestById}.</li>
+	 *       {@code requests[] == {reqI, reqJ}}, i.e. pickup order for pairs). We reconstruct
+	 *       pickup order from {@code originOrder} and resolve each request via
+	 *       {@code reqArray[position]} (the exact generation copy — never {@code requestById},
+	 *       which can return a different Ext-2 hub copy on a shared index), then sum with the
+	 *       same compensated {@code Arrays.stream(...).sum()}.</li>
 	 * </ul>
 	 */
 	private org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns maybePrunePairStubsAfterGraph(
 			org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns pairStubs,
-			java.util.Map<Integer, DrtRequest> requestById) {
+			DrtRequest[] reqArray) {
 		if (pairStubs.size() == 0) {
 			return pairStubs;
 		}
@@ -879,7 +885,7 @@ public final class BamasEngine {
 			final int degree = 2;
 			List<Integer> gated = new ArrayList<>(result.size());
 			for (int row : result) {
-				double sumDistances = sumRequestDistancesPickupOrder(pairStubs, row, requestById);
+				double sumDistances = sumRequestDistancesPickupOrder(pairStubs, row, reqArray);
 				if (!(sumDistances > 0)) {
 					gated.add(row);
 					continue;
@@ -892,7 +898,7 @@ public final class BamasEngine {
 			}
 			result = gated;
 			double diagSum = result.isEmpty() ? 0
-					: sumRequestDistancesPickupOrder(pairStubs, result.get(0), requestById);
+					: sumRequestDistancesPickupOrder(pairStubs, result.get(0), reqArray);
 			double diagGate = diagSum > 0
 					? org.matsim.contrib.demand_extraction.algorithm.bamas.extension.BamasRideExtender
 							.computeMaxAllowedRideDistance(degree, diagSum, exMasConfig) / diagSum
@@ -910,7 +916,7 @@ public final class BamasEngine {
 			double[] savings = new double[result.size()];
 			for (int i = 0; i < result.size(); i++) {
 				int row = result.get(i);
-				double sumDist = sumRequestDistancesPickupOrder(pairStubs, row, requestById);
+				double sumDist = sumRequestDistancesPickupOrder(pairStubs, row, reqArray);
 				savings[i] = sumDist > 0 ? 1.0 - pairDistance(pairStubs, row) / sumDist : 0;
 			}
 			double[] sorted = savings.clone();
@@ -936,9 +942,12 @@ public final class BamasEngine {
 		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns survivors =
 				new org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns(2);
 		for (int row : result) {
+			// Carry the reqArray-position column through to the survivor layer so the later
+			// degree-2 materialize + sum still resolve the exact generation copy (Task 13).
 			survivors.addRow(pairStubs.requestIndices(row), pairStubs.originOrder(row),
 					pairStubs.destOrder(row), pairStubs.rideDistanceDm(row),
-					pairStubs.travelTimeDs(row), pairStubs.flags(row));
+					pairStubs.travelTimeDs(row), pairStubs.flags(row),
+					pairStubs.positionIndices(row));
 		}
 
 		log.info("Pair-ride base pruning (after graph, stub): {} -> {} total ({} removed, {} reduction)",
@@ -955,23 +964,31 @@ public final class BamasEngine {
 	}
 
 	/**
-	 * Sum the per-request direct distances in PICKUP order for a stub row (contract #2:
-	 * the fat path sums {@code Arrays.stream(r.getRequests())} where {@code requests[]} is
-	 * the pickup-ordered request array). Resolves requests via {@code requestById} (never
-	 * positional indexing — Ext-2 hub copies collide on index; see {@code requestById} docs).
+	 * Sum the per-request direct distances in PICKUP order for a degree-2 pair stub row,
+	 * bit-identical to the fat pair gate. The fat gate computes
+	 * {@code Arrays.stream(r.getRequests()).mapToDouble(DrtRequest::getDistance).sum()} where
+	 * {@code r.getRequests() == {c.reqI, c.reqJ}} — the raw generation copies, in pickup order
+	 * (pairs always pick up reqI then reqJ). We mirror it exactly:
+	 * <ul>
+	 *   <li>Resolve each request via {@code reqArray[position]} (the exact generation copy),
+	 *       NOT {@code requestById.get(index)} — Ext-2 hub copies collide on index, so the map
+	 *       can return a different OD copy and shift the sum (see {@code reqArray}/positions docs).</li>
+	 *   <li>Use {@code Arrays.stream(...).sum()} (Kahan-Babuška-Neumaier compensated), not a naive
+	 *       {@code +=} loop, so the FP result is bit-identical to the fat path even at n=2.</li>
+	 * </ul>
 	 */
 	private static double sumRequestDistancesPickupOrder(
 			org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns cols, int row,
-			java.util.Map<Integer, DrtRequest> requestById) {
+			DrtRequest[] reqArray) {
 		int degree = cols.degree();
 		int[] originLocal = org.matsim.contrib.demand_extraction.algorithm.bamas.stub.OrderingCodec
 				.unpack(cols.originOrder(row), degree);
-		int[] sortedSet = cols.requestIndices(row);
-		double sum = 0.0;
+		int[] positions = cols.positionIndices(row); // aligned to sortedSet
+		DrtRequest[] pickupOrdered = new DrtRequest[degree];
 		for (int i = 0; i < degree; i++) {
-			sum += requestById.get(sortedSet[originLocal[i]]).getDistance();
+			pickupOrdered[i] = reqArray[positions[originLocal[i]]];
 		}
-		return sum;
+		return Arrays.stream(pickupOrdered).mapToDouble(DrtRequest::getDistance).sum();
 	}
 
 	/**

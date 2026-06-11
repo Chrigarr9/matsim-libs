@@ -53,6 +53,22 @@ public final class StubColumns {
 	/** Flags byte per row. */
 	private byte[] flags;
 
+	/**
+	 * OPTIONAL parallel reqArray-position column, same layout as {@link #setsFlat}
+	 * (row r occupies {@code [r*d, r*d+d)}). {@code positionsFlat[r*d + k]} is the
+	 * {@code reqArray} position of the request whose sorted global index is
+	 * {@code setsFlat[r*d + k]}.
+	 *
+	 * <p>NULL by default and only ever allocated on the degree-2 PAIR path
+	 * (Task 13). Degree-3+ layers never carry positions → zero memory overhead for
+	 * the memory-critical extension layers (the whole point of Plan A). The pair
+	 * layer needs it because Paper-2 Extension-2 hub expansion emits virtual request
+	 * COPIES sharing one {@link DrtRequest#index}, so the global index alone cannot
+	 * recover the exact generation copy a pair was routed from; the {@code reqArray}
+	 * position can.
+	 */
+	private int[] positionsFlat;
+
 	/** Number of rows currently stored. */
 	private int size;
 
@@ -110,6 +126,38 @@ public final class StubColumns {
 		return size++;
 	}
 
+	/**
+	 * Append one row that ALSO carries the {@code reqArray}-position column (degree-2
+	 * pair path only — Task 13).
+	 *
+	 * <p>Lazily allocates {@link #positionsFlat} on first use, sized like
+	 * {@link #setsFlat} (capacity × degree) so it grows with {@link #ensureCapacity}.
+	 * Pre-existing rows added through the no-position {@link #addRow(int[],long,long,int,int,byte)}
+	 * before the first positions row would have undefined position slices — the pair
+	 * path always uses this overload exclusively, so that mixed case never arises.
+	 *
+	 * @param positions reqArray positions aligned to {@code sortedSet}: {@code positions[k]}
+	 *                  is the reqArray position of the request whose sorted global index is
+	 *                  {@code sortedSet[k]} (length must equal {@link #degree()})
+	 * @return row index of the newly added row (= previous {@link #size()})
+	 * @throws IllegalArgumentException if {@code sortedSet.length != degree()} or
+	 *         {@code positions.length != degree()}
+	 */
+	public int addRow(int[] sortedSet, long originPacked, long destPacked,
+			int distDm, int ttDs, byte flags, int[] positions) {
+		if (positions.length != degree) {
+			throw new IllegalArgumentException(
+					"positions length " + positions.length + " != degree " + degree);
+		}
+		int row = addRow(sortedSet, originPacked, destPacked, distDm, ttDs, flags);
+		if (positionsFlat == null) {
+			// Size like setsFlat (capacity × degree) so ensureCapacity grows it in lockstep.
+			positionsFlat = new int[setsFlat.length];
+		}
+		System.arraycopy(positions, 0, positionsFlat, row * degree, degree);
+		return row;
+	}
+
 	// -----------------------------------------------------------------------
 	// Getters
 	// -----------------------------------------------------------------------
@@ -143,6 +191,24 @@ public final class StubColumns {
 	 */
 	public int[] requestIndices(int row) {
 		return Arrays.copyOfRange(setsFlat, row * degree, row * degree + degree);
+	}
+
+	/**
+	 * Return a length-{@code d} copy of the {@code reqArray}-position slice for row
+	 * {@code row}, aligned to {@link #requestIndices(int)} (Task 13, pair path only).
+	 *
+	 * <p>Returns a defensive copy.
+	 *
+	 * @throws IllegalStateException if this layer never stored positions (i.e. it is a
+	 *         degree-3+ layer, or a pair layer built via the no-position {@code addRow})
+	 */
+	public int[] positionIndices(int row) {
+		if (positionsFlat == null) {
+			throw new IllegalStateException(
+					"positionIndices requested on a layer that never stored reqArray positions "
+					+ "(row " + row + "); only the degree-2 pair layer carries positions");
+		}
+		return Arrays.copyOfRange(positionsFlat, row * degree, row * degree + degree);
 	}
 
 	// -----------------------------------------------------------------------
@@ -211,6 +277,9 @@ public final class StubColumns {
 	 * @throws IllegalArgumentException if {@code parts} is empty or buffers have
 	 *         differing degrees
 	 */
+	// NOTE: mergeSorted is degree-3+ only — the degree-2 pair layer is never merged
+	// through here (it is built/pruned via sequential addRow in BamasEngine), so the
+	// optional positionsFlat column need not be propagated by this method.
 	public static StubColumns mergeSorted(Collection<StubColumns> parts) {
 		if (parts.isEmpty()) {
 			throw new IllegalArgumentException(
@@ -308,5 +377,10 @@ public final class StubColumns {
 		rideDistanceDm = Arrays.copyOf(rideDistanceDm, newCap);
 		travelTimeDs  = Arrays.copyOf(travelTimeDs,  newCap);
 		flags         = Arrays.copyOf(flags,         newCap);
+		// Grow the optional positions column in lockstep, but only if it was allocated
+		// (degree-2 pair path). Degree-3+ layers keep it null and pay zero overhead.
+		if (positionsFlat != null) {
+			positionsFlat = Arrays.copyOf(positionsFlat, newCap * degree);
+		}
 	}
 }
