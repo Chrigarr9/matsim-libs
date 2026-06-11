@@ -367,6 +367,7 @@ public class DrtRequestFactory {
 					: c -> false;
 
 			double transferBuffer = exmasConfig.getHubTransferBufferSeconds();
+			ExpansionDropStats dropStats = new ExpansionDropStats();
 
 			List<DrtRequest> expanded = new ArrayList<>(requests.size());
 			for (DrtRequest r : requests) {
@@ -376,7 +377,7 @@ public class DrtRequestFactory {
 							modeRoutingCache.routeDrtOd(person, from, to, dep);
 					List<DrtRequest> copies = expandConnecting(
 							r, hubs, fleetSide, isInsideMetropole, network, router,
-							transferBuffer);
+							transferBuffer, dropStats);
 					// expandConnecting drops hubs for routing failure OR temporal
 					// infeasibility (both manifest as fewer copies than hubs).
 					int droppedExpansion = hubs.size() - copies.size();
@@ -396,10 +397,12 @@ public class DrtRequestFactory {
 			}
 			requests = renumber(expanded);
 			log.info("Virtual-trip expansion: {} connecting -> {} virtual legs "
-					+ "(|H|={}, fleetSide={}, dropped {} unroutable-or-temporal-infeasible, "
-					+ "{} non-positive leg budget)",
+					+ "(|H|={}, fleetSide={}, dropped {} at expansion [{} unroutable rural-leg, "
+					+ "{} unroutable urban-leg, {} temporal-infeasible], {} non-positive leg budget)",
 					connectingExpanded, virtualEmitted, hubs.size(), fleetSide,
-					virtualDroppedExpansion, virtualDroppedBudget);
+					virtualDroppedExpansion, dropStats.unroutableRuralLeg,
+					dropStats.unroutableUrbanLeg, dropStats.temporalInfeasible,
+					virtualDroppedBudget);
 		}
 
 		long elapsed = System.currentTimeMillis() - startTime;
@@ -778,6 +781,23 @@ public class DrtRequestFactory {
 	 * <p>Package-private + static so unit tests can drive it without a
 	 * Controler-built injector.
 	 */
+	/**
+	 * Mutable accumulator for per-hub virtual-leg drop reasons (Paper-2 Ext-2
+	 * diagnostics). Distinguishes routing failures (a leg endpoint is
+	 * unreachable on the routing network, or the routed leg is degenerate) from
+	 * temporal infeasibility (both legs route, but the via-hub journey cannot fit
+	 * the traveller's {@code directTravelTime + arrival-flexibility} window once
+	 * the transfer buffer is charged). The split tells us whether low connecting
+	 * feasibility is a network/coverage problem or a detour-budget problem.
+	 */
+	static final class ExpansionDropStats {
+		int kept;
+		int unroutableRuralLeg;
+		int unroutableUrbanLeg;
+		int temporalInfeasible;
+	}
+
+	/** Convenience overload without diagnostics (used by unit tests). */
 	static List<DrtRequest> expandConnecting(
 			DrtRequest original,
 			List<HubSetLoader.Hub> hubs,
@@ -786,6 +806,19 @@ public class DrtRequestFactory {
 			Network network,
 			LegRouter legRouter,
 			double transferBufferSeconds) {
+		return expandConnecting(original, hubs, fleetSide, isInsideMetropole,
+				network, legRouter, transferBufferSeconds, null);
+	}
+
+	static List<DrtRequest> expandConnecting(
+			DrtRequest original,
+			List<HubSetLoader.Hub> hubs,
+			FleetSide fleetSide,
+			Predicate<Coord> isInsideMetropole,
+			Network network,
+			LegRouter legRouter,
+			double transferBufferSeconds,
+			ExpansionDropStats stats) {
 		if (!"connecting".equals(original.requestTag)) {
 			return List.of(original);
 		}
@@ -823,8 +856,23 @@ public class DrtRequestFactory {
 		}
 
 		// Endpoint links in journey orientation: rural end -> hub -> urban end.
-		Id<Link> ruralEndLink = replaceOrigin ? original.destinationLinkId : original.originLinkId;
-		Id<Link> urbanEndLink = replaceOrigin ? original.originLinkId : original.destinationLinkId;
+		// The hub replaces ONE endpoint; the OTHER (kept) endpoint is THIS fleet's
+		// served terminus, and the replaced one is the off-fleet terminus.
+		// `replaceOrigin` carries OPPOSITE coordinate-semantics per fleet — RURAL
+		// replaces the urban endpoint, URBAN the rural one (see the branch above) —
+		// so the rural/urban terminus assignment MUST branch on fleetSide. Deriving
+		// it from `replaceOrigin` alone (the old code) routed the URBAN continuation
+		// leg to the rural origin, corrupting its directDistance/directTravelTime.
+		Id<Link> replacedEndLink = replaceOrigin ? original.originLinkId : original.destinationLinkId;
+		Id<Link> keptEndLink     = replaceOrigin ? original.destinationLinkId : original.originLinkId;
+		Id<Link> ruralEndLink, urbanEndLink;
+		if (fleetSide == FleetSide.RURAL) {
+			ruralEndLink = keptEndLink;       // rural fleet keeps the rural end,
+			urbanEndLink = replacedEndLink;   // replaces the urban end with the hub
+		} else {
+			urbanEndLink = keptEndLink;       // urban fleet keeps the urban end,
+			ruralEndLink = replacedEndLink;   // replaces the rural end with the hub
+		}
 
 		List<DrtRequest> copies = new ArrayList<>(hubs.size());
 		for (HubSetLoader.Hub hub : hubs) {
@@ -835,10 +883,16 @@ public class DrtRequestFactory {
 			// Route BOTH legs regardless of fleetSide: the off-fleet leg's direct
 			// time drives the temporal split (urban shift / rural deadline).
 			double[] ruralLeg = legRouter.route(ruralEndLink, hubLinkId, original.requestTime);
-			if (ruralLeg == null || ruralLeg[0] <= 0.0 || ruralLeg[1] <= 0.0) continue;
+			if (ruralLeg == null || ruralLeg[0] <= 0.0 || ruralLeg[1] <= 0.0) {
+				if (stats != null) stats.unroutableRuralLeg++;
+				continue;
+			}
 			double[] urbanLeg = legRouter.route(hubLinkId, urbanEndLink,
 					original.requestTime + ruralLeg[0] + transferBufferSeconds);
-			if (urbanLeg == null || urbanLeg[0] <= 0.0 || urbanLeg[1] <= 0.0) continue;
+			if (urbanLeg == null || urbanLeg[0] <= 0.0 || urbanLeg[1] <= 0.0) {
+				if (stats != null) stats.unroutableUrbanLeg++;
+				continue;
+			}
 
 			DrtRequest.Builder b = original.toBuilder().hubId(hub.id());
 			Coord hubLinkFrom = hubLink.getFromNode().getCoord();
@@ -860,7 +914,10 @@ public class DrtRequestFactory {
 				// early enough for the urban leg + transfer to still make the
 				// traveller's full-trip deadline.
 				double legLatestArrival = original.latestArrival - urbanLeg[0] - transferBufferSeconds;
-				if (original.requestTime + ruralLeg[0] > legLatestArrival) continue; // hub doesn't fit
+				if (original.requestTime + ruralLeg[0] > legLatestArrival) { // hub doesn't fit
+					if (stats != null) stats.temporalInfeasible++;
+					continue;
+				}
 				b.directTravelTime(ruralLeg[0]).directDistance(ruralLeg[1])
 				 .latestArrival(legLatestArrival)
 				 .hubLegRole(DrtRequest.HubLegRole.ACCESS_LEG)
@@ -869,7 +926,10 @@ public class DrtRequestFactory {
 				// CONTINUATION leg hub->D: scheduled after the rural leg's direct
 				// arrival plus the transfer buffer; keeps the full-trip deadline.
 				double shift = ruralLeg[0] + transferBufferSeconds;
-				if (original.requestTime + shift + urbanLeg[0] > original.latestArrival) continue;
+				if (original.requestTime + shift + urbanLeg[0] > original.latestArrival) {
+					if (stats != null) stats.temporalInfeasible++;
+					continue;
+				}
 				b.directTravelTime(urbanLeg[0]).directDistance(urbanLeg[1])
 				 .requestTime(original.requestTime + shift)
 				 .earliestDeparture(original.earliestDeparture + shift)
@@ -880,6 +940,7 @@ public class DrtRequestFactory {
 			DrtRequest copy = b.build();
 			copy.setScoringContext(original.getScoringContext()); // rebuilt in Task 10
 			copies.add(copy);
+			if (stats != null) stats.kept++;
 		}
 		return copies;
 	}

@@ -265,6 +265,55 @@ public class DrtRequestFactoryVirtualTripTest {
         }
     }
 
+    /**
+     * Router whose returned distance encodes the NON-hub terminus link id, so a
+     * leg routed to the WRONG terminus is detectable: {@code l_d} (urban
+     * destination) → 9000 m, {@code l_o} (rural origin) → 6000 m. Travel time is
+     * a fixed 1 s so the temporal split window is always satisfied (the distance,
+     * not the time, is under test here).
+     */
+    private static LegRouter terminusDistanceRouter(List<HubSetLoader.Hub> hubs,
+            Network network) {
+        java.util.Set<Id<Link>> hubLinks = new java.util.HashSet<>();
+        for (HubSetLoader.Hub h : hubs) {
+            hubLinks.add(NetworkUtils.getNearestLink(network, h.coord()).getId());
+        }
+        return (from, to, dep) -> {
+            Id<Link> terminus = hubLinks.contains(from) ? to : from;
+            double dist = "l_d".equals(terminus.toString()) ? 9000.0   // urban destination
+                        : "l_o".equals(terminus.toString()) ? 6000.0   // rural origin
+                        : 1.0;
+            return new double[] {1.0, dist};
+        };
+    }
+
+    /**
+     * Regression for the Paper-2 Ext-2 directDistance corruption: the URBAN
+     * continuation leg must be routed {@code hub -> urban destination}, not
+     * {@code hub -> rural origin}. The rural/urban terminus assignment in
+     * {@code expandConnecting} must branch on {@code fleetSide} because
+     * {@code replaceOrigin} carries opposite coordinate-semantics per fleet.
+     * With the bug the leg routes to {@code l_o} (6000 m, the rural origin).
+     */
+    @Test
+    void urbanContinuationLeg_isRoutedToUrbanTerminus_notRuralOrigin() {
+        Network network = buildGridNetwork();
+        List<HubSetLoader.Hub> hubs = threeHubs();
+        // connectingFixture: origin (0,0)=rural=l_o, destination (1000,0)=urban=l_d.
+        DrtRequest c = TestRequestBuilder.connectingFixture(null);
+
+        List<DrtRequest> out = DrtRequestFactory.expandConnecting(
+                c, hubs, FleetSide.URBAN, coord -> coord.getX() >= 500.0,
+                network, terminusDistanceRouter(hubs, network), 300.0);
+
+        assertFalse(out.isEmpty(), "urban copies must be feasible for the wide fixture window");
+        for (DrtRequest v : out) {
+            assertEquals(9000.0, v.directDistance, 1e-9,
+                    "URBAN continuation leg must be routed hub->urban destination "
+                            + "(l_d=9000 m), not hub->rural origin (l_o=6000 m)");
+        }
+    }
+
     @Test
     void temporallyInfeasibleHub_isDropped() {
         Network network = buildGridNetwork();
@@ -276,6 +325,53 @@ public class DrtRequestFactoryVirtualTripTest {
                 c, hubs, FleetSide.RURAL, coord -> coord.getX() >= 500.0,
                 network, slow, 300.0);
         assertTrue(out.isEmpty(), "hubs that don't fit the time envelope are dropped");
+    }
+
+    @Test
+    void dropStats_countUnroutableSeparatelyFromTemporal() {
+        Network network = buildGridNetwork();
+        List<HubSetLoader.Hub> hubs = threeHubs();
+        DrtRequest c = TestRequestBuilder.connectingFixture(null);
+        Predicate<Coord> metro = coord -> coord.getX() >= 500.0;
+
+        // (a) dead router: the rural leg never routes -> all hubs charged to the
+        // rural-leg unroutable bucket, none temporal, none kept.
+        DrtRequestFactory.ExpansionDropStats dead = new DrtRequestFactory.ExpansionDropStats();
+        DrtRequestFactory.expandConnecting(c, hubs, FleetSide.RURAL, metro, network,
+                (f, t, dep) -> null, 300.0, dead);
+        assertEquals(hubs.size(), dead.unroutableRuralLeg);
+        assertEquals(0, dead.unroutableUrbanLeg);
+        assertEquals(0, dead.temporalInfeasible);
+        assertEquals(0, dead.kept);
+
+        // (b) rural leg routes but the urban leg is unreachable -> urban-leg bucket.
+        java.util.Set<Id<Link>> hubLinks = new java.util.HashSet<>();
+        for (HubSetLoader.Hub h : hubs) {
+            hubLinks.add(NetworkUtils.getNearestLink(network, h.coord()).getId());
+        }
+        DrtRequestFactory.ExpansionDropStats urbanDead = new DrtRequestFactory.ExpansionDropStats();
+        DrtRequestFactory.expandConnecting(c, hubs, FleetSide.RURAL, metro, network,
+                (f, t, dep) -> hubLinks.contains(t) ? new double[] {1.0, 1.0} : null,
+                300.0, urbanDead);
+        assertEquals(0, urbanDead.unroutableRuralLeg);
+        assertEquals(hubs.size(), urbanDead.unroutableUrbanLeg);
+        assertEquals(0, urbanDead.temporalInfeasible);
+
+        // (c) both legs route but are so long the window collapses -> temporal bucket.
+        DrtRequestFactory.ExpansionDropStats slow = new DrtRequestFactory.ExpansionDropStats();
+        DrtRequestFactory.expandConnecting(c, hubs, FleetSide.RURAL, metro, network,
+                (f, t, dep) -> new double[] {1e7, 1e7}, 300.0, slow);
+        assertEquals(0, slow.unroutableRuralLeg);
+        assertEquals(0, slow.unroutableUrbanLeg);
+        assertEquals(hubs.size(), slow.temporalInfeasible);
+        assertEquals(0, slow.kept);
+
+        // (d) feasible router: all kept, no drops.
+        DrtRequestFactory.ExpansionDropStats ok = new DrtRequestFactory.ExpansionDropStats();
+        DrtRequestFactory.expandConnecting(c, hubs, FleetSide.RURAL, metro, network,
+                fakeRouter(hubs, network), 300.0, ok);
+        assertEquals(hubs.size(), ok.kept);
+        assertEquals(0, ok.unroutableRuralLeg + ok.unroutableUrbanLeg + ok.temporalInfeasible);
     }
 
     @Test
