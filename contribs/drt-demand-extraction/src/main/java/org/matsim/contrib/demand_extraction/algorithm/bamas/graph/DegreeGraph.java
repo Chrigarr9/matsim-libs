@@ -1,7 +1,9 @@
 package org.matsim.contrib.demand_extraction.algorithm.bamas.graph;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 
@@ -108,24 +110,39 @@ public final class DegreeGraph {
     /**
      * Build a DegreeGraph from valid Ride objects.
      *
-     * <p>For each ride, hashes each (k-1)-subset of the ride's request indices and
-     * adds the skipped element to that subset's extension list. The resulting index
-     * supports O(k) extension lookup via {@link #findExtensions}.
+     * <p>Delegates to {@link #buildFromRequestSets(Iterable, int)} after extracting
+     * request-index arrays from the rides in iteration order.
      *
      * @param rides valid rides at the current degree
      * @param degree the degree of rides in this graph
      * @return built graph
      */
     public static DegreeGraph buildFromRides(Collection<Ride> rides, int degree) {
-        Long2ObjectOpenHashMap<int[]> extIndex = new Long2ObjectOpenHashMap<>();
-        LongOpenHashSet feasibleSetHashes = new LongOpenHashSet(rides.size());
-
-        int estimatedBuckets = rides.size() * degree;
-        Long2ObjectOpenHashMap<IntArrayList> tempIndex =
-            new Long2ObjectOpenHashMap<>(estimatedBuckets);
-
+        List<int[]> sets = new ArrayList<>(rides.size());
         for (Ride ride : rides) {
-            int[] reqIndices = ride.getRequestIndices();
+            sets.add(ride.getRequestIndices());
+        }
+        return buildFromRequestSets(sets, degree);
+    }
+
+    /**
+     * Build a DegreeGraph from an iterable of request-index arrays.
+     *
+     * <p>For each array, hashes each (k-1)-subset of the request indices and
+     * adds the skipped element to that subset's extension list. The resulting index
+     * supports O(k) extension lookup via {@link #findExtensions}.
+     *
+     * @param sets iterable of request-index arrays (need not be sorted)
+     * @param degree the degree of sets in this graph
+     * @return built graph
+     */
+    public static DegreeGraph buildFromRequestSets(Iterable<int[]> sets, int degree) {
+        Long2ObjectOpenHashMap<int[]> extIndex = new Long2ObjectOpenHashMap<>();
+        LongOpenHashSet feasibleSetHashes = new LongOpenHashSet();
+
+        Long2ObjectOpenHashMap<IntArrayList> tempIndex = new Long2ObjectOpenHashMap<>();
+
+        for (int[] reqIndices : sets) {
             int k = reqIndices.length;
             if (k != degree) continue;
 
