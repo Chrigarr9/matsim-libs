@@ -181,6 +181,12 @@ public final class RunDemandExtractionPhase1 {
 		if (p.maxOrderingNodes >= 0) {
 			exMas.setMaxOrderingNodesAfterFirstValid(p.maxOrderingNodes);
 		}
+		exMas.setExtensionParentsTopK(p.extensionParentsTopK);
+		exMas.setExtensionParentsTopKMinDegree(p.extensionParentsTopKMinDegree);
+		exMas.setExtensionParentsTopKMetric(p.extensionParentsTopKMetric);
+		exMas.setExtensionParentsSelectionRule(p.extensionParentsSelectionRule);
+		exMas.setExtensionParentsMmrLambda(p.extensionParentsMmrLambda);
+		exMas.setExtensionParentsTier2NodeCap(p.extensionParentsTier2NodeCap);
 	}
 
 	/** Override module that swaps {@link DemandExtractionListener} for

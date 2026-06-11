@@ -306,8 +306,19 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	//   ABS_SAVINGS   — meters saved = sum(request.directDistance) - ride.rideDistance.
 	//   RATIO_SAVINGS — 1 - ride.rideDistance / sum(request.directDistance). Degree-invariant.
 	// Coverage pruner benefits from ABS_SAVINGS (no seed-pool collapse under coverage cap).
-	public enum PruningQualityMetric { ABS_SAVINGS, RATIO_SAVINGS }
+	public enum PruningQualityMetric { ABS_SAVINGS, RATIO_SAVINGS, OP_COST_PER_PAX }
 	private PruningQualityMetric pruningQualityMetric = PruningQualityMetric.ABS_SAVINGS;
+
+	// ── extension_parents_top_k knob (Plan B) — demand-shaped top-K parent pruning.
+	// Default OFF/exact (K=0). Marks a degree's stub EXTEND if it is among the top-K
+	// stubs for at least one member request; only marked stubs enter the producer loop.
+	private int extensionParentsTopK = 0;                     // 0 = off = exact
+	private int extensionParentsTopKMinDegree = 4;            // marks apply only at degree >= this
+	private PruningQualityMetric extensionParentsTopKMetric = PruningQualityMetric.ABS_SAVINGS;
+	public enum ExtensionParentsSelectionRule { TOP_K, MMR }
+	private ExtensionParentsSelectionRule extensionParentsSelectionRule = ExtensionParentsSelectionRule.TOP_K;
+	private double extensionParentsMmrLambda = 0.0;           // diversity penalty; 0 == plain TOP_K
+	private long extensionParentsTier2NodeCap = 0L;          // 0 = hard filter; >0 = total DFS node cap for unmarked parents
 
 	// Calculate Shapley values for rides (distance contribution per passenger)
 	private boolean calcShapleyValues = true;
@@ -1129,6 +1140,66 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter("pruningQualityMetric")
 	public void setPruningQualityMetric(PruningQualityMetric pruningQualityMetric) {
 		this.pruningQualityMetric = pruningQualityMetric;
+	}
+
+	@StringGetter("extensionParentsTopK")
+	public int getExtensionParentsTopK() {
+		return extensionParentsTopK;
+	}
+
+	@StringSetter("extensionParentsTopK")
+	public void setExtensionParentsTopK(int extensionParentsTopK) {
+		this.extensionParentsTopK = Math.max(0, extensionParentsTopK);
+	}
+
+	@StringGetter("extensionParentsTopKMinDegree")
+	public int getExtensionParentsTopKMinDegree() {
+		return extensionParentsTopKMinDegree;
+	}
+
+	@StringSetter("extensionParentsTopKMinDegree")
+	public void setExtensionParentsTopKMinDegree(int extensionParentsTopKMinDegree) {
+		this.extensionParentsTopKMinDegree = Math.max(0, extensionParentsTopKMinDegree);
+	}
+
+	@StringGetter("extensionParentsTopKMetric")
+	public PruningQualityMetric getExtensionParentsTopKMetric() {
+		return extensionParentsTopKMetric;
+	}
+
+	@StringSetter("extensionParentsTopKMetric")
+	public void setExtensionParentsTopKMetric(PruningQualityMetric extensionParentsTopKMetric) {
+		this.extensionParentsTopKMetric = extensionParentsTopKMetric;
+	}
+
+	@StringGetter("extensionParentsSelectionRule")
+	public ExtensionParentsSelectionRule getExtensionParentsSelectionRule() {
+		return extensionParentsSelectionRule;
+	}
+
+	@StringSetter("extensionParentsSelectionRule")
+	public void setExtensionParentsSelectionRule(ExtensionParentsSelectionRule extensionParentsSelectionRule) {
+		this.extensionParentsSelectionRule = extensionParentsSelectionRule;
+	}
+
+	@StringGetter("extensionParentsMmrLambda")
+	public double getExtensionParentsMmrLambda() {
+		return extensionParentsMmrLambda;
+	}
+
+	@StringSetter("extensionParentsMmrLambda")
+	public void setExtensionParentsMmrLambda(double extensionParentsMmrLambda) {
+		this.extensionParentsMmrLambda = extensionParentsMmrLambda;
+	}
+
+	@StringGetter("extensionParentsTier2NodeCap")
+	public long getExtensionParentsTier2NodeCap() {
+		return extensionParentsTier2NodeCap;
+	}
+
+	@StringSetter("extensionParentsTier2NodeCap")
+	public void setExtensionParentsTier2NodeCap(long extensionParentsTier2NodeCap) {
+		this.extensionParentsTier2NodeCap = Math.max(0L, extensionParentsTier2NodeCap);
 	}
 
 	@StringGetter("calcShapleyValues")

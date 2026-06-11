@@ -103,6 +103,18 @@ public class RunLyonEqasimDemandExtraction {
 		 *  >=0 caps the post-first-valid DFS tail per set without dropping feasible rides.
 		 *  See {@link ExMasConfigGroup#getMaxOrderingNodesAfterFirstValid()}. */
 		public final long maxOrderingNodes;
+		/** Plan B: per-request top-K parent pruning threshold. 0 = off (exact). */
+		public final int extensionParentsTopK;
+		/** Plan B: minimum degree at which the top-K parent marks apply. */
+		public final int extensionParentsTopKMinDegree;
+		/** Plan B: quality metric used to rank parent stubs for top-K selection. */
+		public final ExMasConfigGroup.PruningQualityMetric extensionParentsTopKMetric;
+		/** Plan B: selection rule (TOP_K or MMR). */
+		public final ExMasConfigGroup.ExtensionParentsSelectionRule extensionParentsSelectionRule;
+		/** Plan B: MMR diversity penalty lambda; 0 == plain TOP_K. */
+		public final double extensionParentsMmrLambda;
+		/** Plan B: total DFS node cap for unmarked parents. 0 = hard filter. */
+		public final long extensionParentsTier2NodeCap;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
@@ -116,7 +128,11 @@ public class RunLyonEqasimDemandExtraction {
 				String hubSetGeoJsonPath, double hubTransferBufferSeconds,
 				String requestClassificationsPath,
 				ExMasConfigGroup.FleetSide fleetSide, String metropolePolygonPath,
-				long maxOrderingNodes) {
+				long maxOrderingNodes,
+				int extensionParentsTopK, int extensionParentsTopKMinDegree,
+				ExMasConfigGroup.PruningQualityMetric extensionParentsTopKMetric,
+				ExMasConfigGroup.ExtensionParentsSelectionRule extensionParentsSelectionRule,
+				double extensionParentsMmrLambda, long extensionParentsTier2NodeCap) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -144,6 +160,12 @@ public class RunLyonEqasimDemandExtraction {
 			this.fleetSide = fleetSide;
 			this.metropolePolygonPath = metropolePolygonPath;
 			this.maxOrderingNodes = maxOrderingNodes;
+			this.extensionParentsTopK = extensionParentsTopK;
+			this.extensionParentsTopKMinDegree = extensionParentsTopKMinDegree;
+			this.extensionParentsTopKMetric = extensionParentsTopKMetric;
+			this.extensionParentsSelectionRule = extensionParentsSelectionRule;
+			this.extensionParentsMmrLambda = extensionParentsMmrLambda;
+			this.extensionParentsTier2NodeCap = extensionParentsTier2NodeCap;
 		}
 	}
 
@@ -175,6 +197,12 @@ public class RunLyonEqasimDemandExtraction {
 		ExMasConfigGroup.FleetSide fleetSide = null;
 		String metropolePolygonPath = null;
 		long maxOrderingNodes = -1;
+		int extensionParentsTopK = 0;
+		int extensionParentsTopKMinDegree = 4;
+		ExMasConfigGroup.PruningQualityMetric extensionParentsTopKMetric = ExMasConfigGroup.PruningQualityMetric.ABS_SAVINGS;
+		ExMasConfigGroup.ExtensionParentsSelectionRule extensionParentsSelectionRule = ExMasConfigGroup.ExtensionParentsSelectionRule.TOP_K;
+		double extensionParentsMmrLambda = 0.0;
+		long extensionParentsTier2NodeCap = 0L;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -206,6 +234,12 @@ public class RunLyonEqasimDemandExtraction {
 						args[++i].trim().toUpperCase(java.util.Locale.ROOT));
 				case "--metropole-polygon" -> metropolePolygonPath = args[++i];
 				case "--max-ordering-nodes" -> maxOrderingNodes = Long.parseLong(args[++i]);
+				case "--extension-parents-top-k" -> extensionParentsTopK = Integer.parseInt(args[++i]);
+				case "--extension-parents-top-k-min-degree" -> extensionParentsTopKMinDegree = Integer.parseInt(args[++i]);
+				case "--extension-parents-top-k-metric" -> extensionParentsTopKMetric = ExMasConfigGroup.PruningQualityMetric.valueOf(args[++i].toUpperCase());
+				case "--extension-parents-selection-rule" -> extensionParentsSelectionRule = ExMasConfigGroup.ExtensionParentsSelectionRule.valueOf(args[++i].toUpperCase());
+				case "--extension-parents-mmr-lambda" -> extensionParentsMmrLambda = Double.parseDouble(args[++i]);
+				case "--extension-parents-tier2-node-cap" -> extensionParentsTier2NodeCap = Long.parseLong(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -215,7 +249,9 @@ public class RunLyonEqasimDemandExtraction {
 				maxPoolingDegree, predecessorsFilterTime,
 				enableStopBased, enableHyperPooling, enableBudgetAwareConstraints, maxWalkDistanceMeters,
 				hubSetGeoJsonPath, hubTransferBufferSeconds, requestClassificationsPath, fleetSide, metropolePolygonPath,
-				maxOrderingNodes);
+				maxOrderingNodes,
+				extensionParentsTopK, extensionParentsTopKMinDegree, extensionParentsTopKMetric,
+				extensionParentsSelectionRule, extensionParentsMmrLambda, extensionParentsTier2NodeCap);
 	}
 
 	/**
@@ -292,7 +328,10 @@ public class RunLyonEqasimDemandExtraction {
 						"--gate-slope", "--max-walk-distance-meters", "--hub-set",
 						"--hub-transfer-buffer",
 						"--request-classifications", "--fleet-side", "--metropole-polygon",
-						"--max-ordering-nodes" -> true;
+						"--max-ordering-nodes",
+						"--extension-parents-top-k", "--extension-parents-top-k-min-degree",
+						"--extension-parents-top-k-metric", "--extension-parents-selection-rule",
+						"--extension-parents-mmr-lambda", "--extension-parents-tier2-node-cap" -> true;
 				default -> false;
 			};
 		}
@@ -544,5 +583,11 @@ public class RunLyonEqasimDemandExtraction {
 			log.info("  Override: maxOrderingNodesAfterFirstValid = {}", p.maxOrderingNodes);
 			exMas.setMaxOrderingNodesAfterFirstValid(p.maxOrderingNodes);
 		}
+		exMas.setExtensionParentsTopK(p.extensionParentsTopK);
+		exMas.setExtensionParentsTopKMinDegree(p.extensionParentsTopKMinDegree);
+		exMas.setExtensionParentsTopKMetric(p.extensionParentsTopKMetric);
+		exMas.setExtensionParentsSelectionRule(p.extensionParentsSelectionRule);
+		exMas.setExtensionParentsMmrLambda(p.extensionParentsMmrLambda);
+		exMas.setExtensionParentsTier2NodeCap(p.extensionParentsTier2NodeCap);
 	}
 }

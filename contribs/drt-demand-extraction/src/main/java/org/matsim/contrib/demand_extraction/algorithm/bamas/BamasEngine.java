@@ -1004,6 +1004,9 @@ public final class BamasEngine {
 				PostExtensionPruner.QualityMetric metric = switch (cfg.getPruningQualityMetric()) {
 					case ABS_SAVINGS -> PostExtensionPruner.ABS_SAVINGS;
 					case RATIO_SAVINGS -> PostExtensionPruner.RATIO_SAVINGS;
+					// OP_COST_PER_PAX is consumed by the extension-parents ranker (Plan B);
+					// the post-extension COVERAGE_TOPK pruner falls back to ABS_SAVINGS.
+					case OP_COST_PER_PAX -> PostExtensionPruner.ABS_SAVINGS;
 				};
 				java.util.Map<Integer, Integer> kByDegree = cfg.getPruningCoverageKByDegree();
 				if (kByDegree.isEmpty()) {
