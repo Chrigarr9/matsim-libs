@@ -508,6 +508,15 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	 */
 	private double hubTransferBufferSeconds = 300.0;
 
+	/**
+	 * Kill-switch for the slim-ride stub lifecycle (compact per-degree ride
+	 * storage). Default {@code false} until the stub path is fully wired; a later
+	 * task flips the default to {@code true} once the end-to-end path is complete.
+	 * This is a bring-up safety switch, NOT a quality knob — the stub lifecycle
+	 * is an exact replacement of the current path, not an approximation.
+	 */
+	private boolean stubModeEnabled = false;
+
     public ExMasConfigGroup() {
         super(GROUP_NAME);
     }
@@ -1482,6 +1491,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.requestClassificationsPath = requestClassificationsPath;
 	}
 
+	@StringGetter("stubModeEnabled")
+	public boolean isStubModeEnabled() {
+		return stubModeEnabled;
+	}
+
+	@StringSetter("stubModeEnabled")
+	public void setStubModeEnabled(boolean stubModeEnabled) {
+		this.stubModeEnabled = stubModeEnabled;
+	}
+
     @Override
     public Map<String, String> getComments() {
         Map<String, String> map = super.getComments();
@@ -1688,6 +1707,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Paper-2 Ext-2: scheduled hub transfer slack in seconds; urban virtual legs are "
 				+ "shifted by ruralLegTime + buffer and charged the buffer as waiting disutility. "
 				+ "Default: 300.");
+
+		map.put("stubModeEnabled",
+				"Enable the slim-ride stub lifecycle (compact per-degree ride storage). "
+				+ "Default: false until the stub path is fully wired; flipped to true in a later task "
+				+ "once the end-to-end path is complete. Bring-up kill-switch, NOT a quality knob — "
+				+ "the stub lifecycle is an exact replacement of the current path.");
 
         return map;
     }
