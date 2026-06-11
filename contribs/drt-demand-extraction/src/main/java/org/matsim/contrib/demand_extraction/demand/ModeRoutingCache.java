@@ -13,6 +13,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.TransportMode;
+import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
@@ -36,6 +37,7 @@ import org.matsim.core.scoring.functions.ScoringParametersForPerson;
 import org.matsim.facilities.ActivityFacilities;
 import org.matsim.facilities.FacilitiesUtils;
 import org.matsim.facilities.Facility;
+import org.matsim.utils.objectattributes.attributable.AttributesImpl;
 
 import com.google.inject.Inject;
 import com.google.inject.Provider;
@@ -76,6 +78,43 @@ public class ModeRoutingCache {
         this.network = network;
         this.facilities = facilities;
     }
+
+	/**
+	 * Paper-2 Ext-2: route ONE od pair with the same routing the cache uses for
+	 * the DRT mode (direct-drt router if bound, else the configured fallback,
+	 * e.g. car). Used by virtual-trip expansion to give each hub leg its own
+	 * direct travel time / distance, consistent with how every other request's
+	 * drt attributes were produced.
+	 *
+	 * @return {travelTime_s, distance_m} summed over non-walk legs, or null if
+	 *         routing failed.
+	 */
+	public double[] routeDrtOd(Person person, Id<Link> fromLinkId, Id<Link> toLinkId,
+			double departureTime) {
+		TripRouter tripRouter = tripRouterProvider.get();
+		String mode = exMasConfig.getDrtMode();
+		String drtRouterName = "direct" + StringUtils.capitalize(mode) + "Router";
+		String routingMode = tripRouter.getRoutingModule(drtRouterName) != null
+				? drtRouterName : exMasConfig.getDrtRoutingMode();
+
+		Link fromLink = network.getLinks().get(fromLinkId);
+		Link toLink = network.getLinks().get(toLinkId);
+		if (fromLink == null || toLink == null) return null;
+		Facility from = FacilitiesUtils.wrapLink(fromLink);
+		Facility to = FacilitiesUtils.wrapLink(toLink);
+		List<? extends PlanElement> elements = tripRouter.calcRoute(
+				routingMode, from, to, departureTime, person, new AttributesImpl());
+		if (elements == null || elements.isEmpty()) return null;
+
+		double travelTime = 0.0, distance = 0.0;
+		for (PlanElement pe : elements) {
+			if (pe instanceof Leg leg && !leg.getMode().contains(TransportMode.walk)) {
+				travelTime += leg.getTravelTime().orElse(0.0);
+				if (leg.getRoute() != null) distance += leg.getRoute().getDistance();
+			}
+		}
+		return new double[] {travelTime, distance};
+	}
 
     public void cacheModes(Population population) {
         cacheModes(population.getPersons().values());

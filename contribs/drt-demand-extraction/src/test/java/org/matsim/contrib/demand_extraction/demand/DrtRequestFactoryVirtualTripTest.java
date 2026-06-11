@@ -11,6 +11,7 @@ import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.network.NetworkFactory;
 import org.matsim.api.core.v01.network.Node;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.FleetSide;
+import org.matsim.contrib.demand_extraction.demand.DrtRequestFactory.LegRouter;
 import org.matsim.core.network.NetworkUtils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -50,7 +51,8 @@ public class DrtRequestFactoryVirtualTripTest {
         DrtRequest connecting = TestRequestBuilder.connectingFixture(null);
 
         List<DrtRequest> expanded = DrtRequestFactory.expandConnecting(
-                connecting, hubs, FleetSide.RURAL, isInsideMetropole, network);
+                connecting, hubs, FleetSide.RURAL, isInsideMetropole, network,
+                fakeRouter(hubs, network), 300.0);
 
         assertEquals(3, expanded.size(),
                 "|H|=3 hubs → 3 virtual rural copies of one connecting request");
@@ -90,7 +92,8 @@ public class DrtRequestFactoryVirtualTripTest {
         DrtRequest connecting = TestRequestBuilder.connectingFixture(null);
 
         List<DrtRequest> expanded = DrtRequestFactory.expandConnecting(
-                connecting, hubs, FleetSide.URBAN, isInsideMetropole, network);
+                connecting, hubs, FleetSide.URBAN, isInsideMetropole, network,
+                fakeRouter(hubs, network), 300.0);
 
         assertEquals(3, expanded.size());
 
@@ -125,7 +128,8 @@ public class DrtRequestFactoryVirtualTripTest {
         DrtRequest ruralIntra = TestRequestBuilder.ruralIntraFixture();
 
         List<DrtRequest> expanded = DrtRequestFactory.expandConnecting(
-                ruralIntra, hubs, FleetSide.RURAL, isInsideMetropole, network);
+                ruralIntra, hubs, FleetSide.RURAL, isInsideMetropole, network,
+                fakeRouter(hubs, network), 300.0);
 
         assertEquals(1, expanded.size(),
                 "non-connecting requests are not fanned out");
@@ -147,7 +151,8 @@ public class DrtRequestFactoryVirtualTripTest {
         DrtRequest connecting = TestRequestBuilder.connectingFixture(null);
 
         List<DrtRequest> expanded = DrtRequestFactory.expandConnecting(
-                connecting, hubs, FleetSide.RURAL, isInsideMetropole, network);
+                connecting, hubs, FleetSide.RURAL, isInsideMetropole, network,
+                fakeRouter(hubs, network), 300.0);
 
         for (int i = 0; i < expanded.size(); i++) {
             DrtRequest v = expanded.get(i);
@@ -177,25 +182,113 @@ public class DrtRequestFactoryVirtualTripTest {
         DrtRequest connecting = TestRequestBuilder.connectingFixture(null);
 
         List<DrtRequest> expanded = DrtRequestFactory.expandConnecting(
-                connecting, hubs, FleetSide.RURAL, isInsideMetropole, network);
+                connecting, hubs, FleetSide.RURAL, isInsideMetropole, network,
+                fakeRouter(hubs, network), 300.0);
 
+        // NOTE: Task 8 deliberately REWRITES the temporal/direct fields on each
+        // virtual copy (per-leg routed directTravelTime/directDistance, split
+        // requestTime/earliestDeparture/latestArrival). Those are exercised by
+        // the routed-leg / shift / deadline tests below. Here we only assert the
+        // identity/budget fields that still round-trip unchanged.
         assertFalse(expanded.isEmpty(), "expansion produced 0 requests");
         for (DrtRequest v : expanded) {
             assertEquals(connecting.personId, v.personId, "personId");
             assertEquals(connecting.groupId, v.groupId, "groupId");
             assertEquals(connecting.tripIndex, v.tripIndex, "tripIndex");
             assertEquals(connecting.budget, v.budget, 1e-12, "budget");
-            assertEquals(connecting.directTravelTime, v.directTravelTime, 1e-12,
-                    "directTravelTime (Phase 4 keeps stale; Phase 5 reroutes)");
-            assertEquals(connecting.directDistance, v.directDistance, 1e-12,
-                    "directDistance");
             assertEquals(connecting.maxDetourFactor, v.maxDetourFactor, 1e-12);
-            assertEquals(connecting.requestTime, v.requestTime, 1e-12);
-            assertEquals(connecting.earliestDeparture, v.earliestDeparture, 1e-12);
-            assertEquals(connecting.latestArrival, v.latestArrival, 1e-12);
             assertEquals(connecting.bestMode, v.bestMode);
             assertEquals(connecting.bestModeScore, v.bestModeScore, 1e-12);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 8: per-leg routed direct attrs, temporal split, leg roles.
+    // -------------------------------------------------------------------------
+
+    /** tR = 600 s / 6000 m for ANY od ending at a hub link; tU = 900 s / 9000 m
+     *  for ANY od starting at a hub link. Recognisable values let assertions
+     *  distinguish the two legs. */
+    private static LegRouter fakeRouter(List<HubSetLoader.Hub> hubs, Network network) {
+        java.util.Set<Id<Link>> hubLinks = new java.util.HashSet<>();
+        for (HubSetLoader.Hub h : hubs) {
+            hubLinks.add(NetworkUtils.getNearestLink(network, h.coord()).getId());
+        }
+        return (from, to, dep) -> hubLinks.contains(to)
+                ? new double[] {600.0, 6000.0}     // rural leg O->hub
+                : new double[] {900.0, 9000.0};    // urban leg hub->D
+    }
+
+    @Test
+    void ruralCopy_getsOwnLegDirectAttrs_andSplitWindow() {
+        Network network = buildGridNetwork();
+        List<HubSetLoader.Hub> hubs = threeHubs();
+        DrtRequest c = TestRequestBuilder.connectingFixture(null);
+        double buffer = 300.0;
+
+        List<DrtRequest> out = DrtRequestFactory.expandConnecting(
+                c, hubs, FleetSide.RURAL, coord -> coord.getX() >= 500.0,
+                network, fakeRouter(hubs, network), buffer);
+
+        assertFalse(out.isEmpty(), "rural copies must be feasible for the wide fixture window");
+        for (DrtRequest v : out) {
+            assertEquals(600.0, v.directTravelTime, 1e-9, "rural leg's OWN direct tt");
+            assertEquals(6000.0, v.directDistance, 1e-9, "rural leg's OWN direct dist");
+            assertEquals(c.requestTime, v.requestTime, 1e-9, "rural departure unshifted");
+            assertEquals(c.latestArrival - 900.0 - buffer, v.latestArrival, 1e-9,
+                    "rural latestArrival backs out urban leg + buffer");
+            assertEquals(DrtRequest.HubLegRole.ACCESS_LEG, v.hubLegRole);
+            assertEquals(0.0, v.transferWaitSeconds, 1e-9);
+        }
+    }
+
+    @Test
+    void urbanCopy_isShiftedByRuralLegPlusBuffer_andIsContinuation() {
+        Network network = buildGridNetwork();
+        List<HubSetLoader.Hub> hubs = threeHubs();
+        DrtRequest c = TestRequestBuilder.connectingFixture(null);
+        double buffer = 300.0;
+
+        List<DrtRequest> out = DrtRequestFactory.expandConnecting(
+                c, hubs, FleetSide.URBAN, coord -> coord.getX() >= 500.0,
+                network, fakeRouter(hubs, network), buffer);
+
+        assertFalse(out.isEmpty(), "urban copies must be feasible for the wide fixture window");
+        for (DrtRequest v : out) {
+            assertEquals(900.0, v.directTravelTime, 1e-9, "urban leg's OWN direct tt");
+            assertEquals(c.requestTime + 600.0 + buffer, v.requestTime, 1e-9,
+                    "urban departure = original + rural leg + buffer");
+            assertEquals(c.earliestDeparture + 600.0 + buffer, v.earliestDeparture, 1e-9);
+            assertEquals(c.latestArrival, v.latestArrival, 1e-9, "full-trip deadline kept");
+            assertEquals(DrtRequest.HubLegRole.CONTINUATION_LEG, v.hubLegRole);
+            assertEquals(buffer, v.transferWaitSeconds, 1e-9);
+        }
+    }
+
+    @Test
+    void temporallyInfeasibleHub_isDropped() {
+        Network network = buildGridNetwork();
+        List<HubSetLoader.Hub> hubs = threeHubs();
+        DrtRequest c = TestRequestBuilder.connectingFixture(null);
+        LegRouter slow = (f, t, dep) -> new double[] {1e7, 1e7};
+
+        List<DrtRequest> out = DrtRequestFactory.expandConnecting(
+                c, hubs, FleetSide.RURAL, coord -> coord.getX() >= 500.0,
+                network, slow, 300.0);
+        assertTrue(out.isEmpty(), "hubs that don't fit the time envelope are dropped");
+    }
+
+    @Test
+    void unroutableHub_isDropped() {
+        Network network = buildGridNetwork();
+        List<HubSetLoader.Hub> hubs = threeHubs();
+        DrtRequest c = TestRequestBuilder.connectingFixture(null);
+        LegRouter dead = (f, t, dep) -> null;
+
+        List<DrtRequest> out = DrtRequestFactory.expandConnecting(
+                c, hubs, FleetSide.RURAL, coord -> coord.getX() >= 500.0,
+                network, dead, 300.0);
+        assertTrue(out.isEmpty());
     }
 
     // -------------------------------------------------------------------------

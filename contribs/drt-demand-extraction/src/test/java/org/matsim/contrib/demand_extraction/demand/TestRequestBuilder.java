@@ -39,9 +39,11 @@ final class TestRequestBuilder {
     }
 
     private static DrtRequest.Builder baseBuilder(int index, String personIdStr) {
-        // Window: earliestDeparture(0) + directTravelTime(600) == latestArrival(600),
+        // Window: earliestDeparture(0) + directTravelTime(600) <= latestArrival(3600),
         // which satisfies the build()'s `earliestDeparture > latestArrival - directTravelTime`
-        // check (it requires <=, not <).
+        // check (it requires <=, not <). The 3600 s envelope is wide enough that the
+        // Paper-2 temporal-split copies (rural leg + buffer + urban leg) still fit, so
+        // the routed-leg / shift / deadline-backout tests have a feasible hub.
         return DrtRequest.builder()
             .index(index)
             .personId(Id.createPersonId(personIdStr))
@@ -62,7 +64,7 @@ final class TestRequestBuilder {
             .destinationLinkCoordToX(1000.0).destinationLinkCoordToY(0.0)
             .requestTime(0.0)
             .earliestDeparture(0.0)
-            .latestArrival(600.0)
+            .latestArrival(3600.0)
             .directTravelTime(600.0)
             .directDistance(1000.0)
             .maxDetourFactor(1.5)

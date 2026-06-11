@@ -364,11 +364,17 @@ public class DrtRequestFactory {
 					? expansionMetropoleSource::containsPoint
 					: c -> false;
 
+			double transferBuffer = exmasConfig.getHubTransferBufferSeconds();
+
 			List<DrtRequest> expanded = new ArrayList<>(requests.size());
 			for (DrtRequest r : requests) {
 				if ("connecting".equals(r.requestTag)) {
+					Person person = r.getScoringContext().person();
+					LegRouter router = (from, to, dep) ->
+							modeRoutingCache.routeDrtOd(person, from, to, dep);
 					List<DrtRequest> copies = expandConnecting(
-							r, hubs, fleetSide, isInsideMetropole, network);
+							r, hubs, fleetSide, isInsideMetropole, network, router,
+							transferBuffer);
 					expanded.addAll(copies);
 					connectingExpanded++;
 					virtualEmitted += copies.size();
@@ -633,6 +639,14 @@ public class DrtRequestFactory {
 		throw new IllegalStateException("Activity has neither coordinate nor link ID: " + activity);
 	}
 
+	/** Routes one virtual-leg OD pair. @return {travelTime_s, distance_m}, or
+	 *  null if unreachable. Production impl: {@link ModeRoutingCache#routeDrtOd};
+	 *  unit tests inject a fake. */
+	@FunctionalInterface
+	interface LegRouter {
+		double[] route(Id<Link> fromLink, Id<Link> toLink, double departureTime);
+	}
+
 	/**
 	 * Paper-2 Extension 2 — virtual-trip expansion for one {@code connecting}
 	 * request. Returns {@code |hubs|} copies of {@code original}, each with
@@ -652,15 +666,32 @@ public class DrtRequestFactory {
 	 *
 	 * <p>The replaced endpoint's {@code linkId} is snapped to the nearest
 	 * network link to the hub via {@link NetworkUtils#getNearestLink}; the
-	 * link-corner coordinates are recomputed off that new link. Every other
-	 * field is preserved verbatim, including {@code directTravelTime} and
-	 * {@code directDistance} — Phase 4 produces row-count and tagging
-	 * correctness; Phase 5 re-routes the virtual leg for correct metrics.
+	 * link-corner coordinates are recomputed off that new link.
 	 *
-	 * <p>The {@link ScoringContext} from {@code original} is reused on every
-	 * copy. Since {@code directTravelTime} / {@code directDistance} are
-	 * unchanged, the context's pre-built {@code DrtRoute} template and
-	 * walk-leg routes remain valid.
+	 * <p>Paper-2 Ext-2 (Task 8): each virtual copy carries its OWN leg's routed
+	 * {@code directTravelTime} / {@code directDistance} (from {@code legRouter}),
+	 * not the inherited full-trip values. The journey orientation is
+	 * {@code ruralEnd -> hub -> urbanEnd}; both legs are routed so the off-fleet
+	 * leg's direct time drives a temporal split:
+	 * <ul>
+	 *   <li>{@link FleetSide#RURAL} ACCESS leg ({@code O->hub}): departs at
+	 *       {@code requestTime}; {@code latestArrival} is backed out as
+	 *       {@code original.latestArrival - urbanLeg_tt - buffer} so the
+	 *       continuation + transfer still make the full-trip deadline. Role
+	 *       {@code ACCESS_LEG}, {@code transferWaitSeconds = 0}.</li>
+	 *   <li>{@link FleetSide#URBAN} CONTINUATION leg ({@code hub->D}): shifted to
+	 *       {@code requestTime + ruralLeg_tt + buffer} (and
+	 *       {@code earliestDeparture} likewise), keeping the full-trip
+	 *       {@code latestArrival}. Role {@code CONTINUATION_LEG},
+	 *       {@code transferWaitSeconds = buffer}.</li>
+	 * </ul>
+	 * Hubs whose routing fails (null / non-positive leg) or that do not fit the
+	 * traveller's time envelope are dropped; the caller logs the drop via
+	 * {@code copies.size()}.
+	 *
+	 * <p>The {@link ScoringContext} from {@code original} is reused on every copy
+	 * as a placeholder; Task 10 rebuilds it per copy off the new per-leg
+	 * direct metrics and split window.
 	 *
 	 * <p>If neither endpoint is identified as inside the metropole by
 	 * {@code isInsideMetropole}, the fallback is to treat the DESTINATION as
@@ -675,7 +706,9 @@ public class DrtRequestFactory {
 			List<HubSetLoader.Hub> hubs,
 			FleetSide fleetSide,
 			Predicate<Coord> isInsideMetropole,
-			Network network) {
+			Network network,
+			LegRouter legRouter,
+			double transferBufferSeconds) {
 		if (!"connecting".equals(original.requestTag)) {
 			return List.of(original);
 		}
@@ -712,37 +745,63 @@ public class DrtRequestFactory {
 			}
 		}
 
+		// Endpoint links in journey orientation: rural end -> hub -> urban end.
+		Id<Link> ruralEndLink = replaceOrigin ? original.destinationLinkId : original.originLinkId;
+		Id<Link> urbanEndLink = replaceOrigin ? original.originLinkId : original.destinationLinkId;
+
 		List<DrtRequest> copies = new ArrayList<>(hubs.size());
 		for (HubSetLoader.Hub hub : hubs) {
 			Coord hubCoord = hub.coord();
 			Link hubLink = NetworkUtils.getNearestLink(network, hubCoord);
 			Id<Link> hubLinkId = hubLink.getId();
+
+			// Route BOTH legs regardless of fleetSide: the off-fleet leg's direct
+			// time drives the temporal split (urban shift / rural deadline).
+			double[] ruralLeg = legRouter.route(ruralEndLink, hubLinkId, original.requestTime);
+			if (ruralLeg == null || ruralLeg[0] <= 0.0 || ruralLeg[1] <= 0.0) continue;
+			double[] urbanLeg = legRouter.route(hubLinkId, urbanEndLink,
+					original.requestTime + ruralLeg[0] + transferBufferSeconds);
+			if (urbanLeg == null || urbanLeg[0] <= 0.0 || urbanLeg[1] <= 0.0) continue;
+
+			DrtRequest.Builder b = original.toBuilder().hubId(hub.id());
 			Coord hubLinkFrom = hubLink.getFromNode().getCoord();
 			Coord hubLinkTo = hubLink.getToNode().getCoord();
-
-			DrtRequest.Builder b = original.toBuilder()
-					.hubId(hub.id());
-
 			if (replaceOrigin) {
 				b.originLinkId(hubLinkId)
-				 .originX(hubCoord.getX())
-				 .originY(hubCoord.getY())
-				 .originLinkCoordFromX(hubLinkFrom.getX())
-				 .originLinkCoordFromY(hubLinkFrom.getY())
-				 .originLinkCoordToX(hubLinkTo.getX())
-				 .originLinkCoordToY(hubLinkTo.getY());
+				 .originX(hubCoord.getX()).originY(hubCoord.getY())
+				 .originLinkCoordFromX(hubLinkFrom.getX()).originLinkCoordFromY(hubLinkFrom.getY())
+				 .originLinkCoordToX(hubLinkTo.getX()).originLinkCoordToY(hubLinkTo.getY());
 			} else {
 				b.destinationLinkId(hubLinkId)
-				 .destinationX(hubCoord.getX())
-				 .destinationY(hubCoord.getY())
-				 .destinationLinkCoordFromX(hubLinkFrom.getX())
-				 .destinationLinkCoordFromY(hubLinkFrom.getY())
-				 .destinationLinkCoordToX(hubLinkTo.getX())
-				 .destinationLinkCoordToY(hubLinkTo.getY());
+				 .destinationX(hubCoord.getX()).destinationY(hubCoord.getY())
+				 .destinationLinkCoordFromX(hubLinkFrom.getX()).destinationLinkCoordFromY(hubLinkFrom.getY())
+				 .destinationLinkCoordToX(hubLinkTo.getX()).destinationLinkCoordToY(hubLinkTo.getY());
+			}
+
+			if (fleetSide == FleetSide.RURAL) {
+				// ACCESS leg O->hub: departs as originally requested; must deliver
+				// early enough for the urban leg + transfer to still make the
+				// traveller's full-trip deadline.
+				double legLatestArrival = original.latestArrival - urbanLeg[0] - transferBufferSeconds;
+				if (original.requestTime + ruralLeg[0] > legLatestArrival) continue; // hub doesn't fit
+				b.directTravelTime(ruralLeg[0]).directDistance(ruralLeg[1])
+				 .latestArrival(legLatestArrival)
+				 .hubLegRole(DrtRequest.HubLegRole.ACCESS_LEG)
+				 .transferWaitSeconds(0.0);
+			} else {
+				// CONTINUATION leg hub->D: scheduled after the rural leg's direct
+				// arrival plus the transfer buffer; keeps the full-trip deadline.
+				double shift = ruralLeg[0] + transferBufferSeconds;
+				if (original.requestTime + shift + urbanLeg[0] > original.latestArrival) continue;
+				b.directTravelTime(urbanLeg[0]).directDistance(urbanLeg[1])
+				 .requestTime(original.requestTime + shift)
+				 .earliestDeparture(original.earliestDeparture + shift)
+				 .hubLegRole(DrtRequest.HubLegRole.CONTINUATION_LEG)
+				 .transferWaitSeconds(transferBufferSeconds);
 			}
 
 			DrtRequest copy = b.build();
-			copy.setScoringContext(original.getScoringContext());
+			copy.setScoringContext(original.getScoringContext()); // rebuilt in Task 10
 			copies.add(copy);
 		}
 		return copies;
