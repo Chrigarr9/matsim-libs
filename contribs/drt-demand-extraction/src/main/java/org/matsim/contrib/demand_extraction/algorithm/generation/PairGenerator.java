@@ -2,6 +2,7 @@ package org.matsim.contrib.demand_extraction.algorithm.generation;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -16,6 +17,8 @@ import org.apache.logging.log4j.Logger;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStub;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
@@ -84,9 +87,114 @@ public final class PairGenerator {
 	 * Parallel processing with deterministic output order.
 	 */
 	public List<Ride> generatePairs(DrtRequest[] requests) {
+		long startTime = System.currentTimeMillis();
+		List<PairCandidate> candidates = collectSortedCandidates(requests, startTime);
+
+		// Phase 3: Validate and assign indices sequentially
+		List<Ride> pairs = new ArrayList<>();
+		int nextRideIndex = requests.length; // Start after single rides
+		int fifoCreated = 0;
+		int lifoCreated = 0;
+
+		for (PairCandidate c : candidates) {
+			Ride ride = buildRide(c, nextRideIndex);
+			Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
+			if (validated != null) {
+				pairs.add(validated);
+				nextRideIndex++;
+				if (c.kind == RideKind.FIFO) fifoCreated++;
+				else lifoCreated++;
+			}
+		}
+
+		logCompletion(requests.length, pairs.size(), fifoCreated, lifoCreated, candidates.size(), startTime);
+		return pairs;
+	}
+
+	/**
+	 * Stub-mode (Task 13) pair generation: identical to {@link #generatePairs(DrtRequest[])}
+	 * but emits a compact degree-2 {@link StubColumns} instead of a fat {@code List<Ride>}.
+	 *
+	 * <p>Phases 1 (candidate collection) and 2 (deterministic sort) are shared verbatim via
+	 * {@link #collectSortedCandidates}. Phase 3 replays the SAME build + validate sequence
+	 * in the SAME order; each surviving fat ride is converted to a stub row via
+	 * {@link RideStub#fromRide(Ride)} and appended with {@link StubColumns#addRow}, then
+	 * discarded. So:
+	 * <ul>
+	 *   <li>The 6.8M-ride transient fat list (~27 GB at 100%) never exists — only one
+	 *       transient {@link Ride} per validated candidate, plus the ~30 B/row stub columns.</li>
+	 *   <li>The row order is byte-identical to the fat {@code pairs} list order, which is the
+	 *       insertion order the downstream dedup (contract #1) and export (contract #3) depend on.</li>
+	 *   <li>The FIFO/LIFO kind is preserved in {@code flags} (RideStub.kindToFlags), so the
+	 *       shareability-graph edge kind and the CSV {@code kind} column both reproduce master.</li>
+	 * </ul>
+	 *
+	 * @param requests global request array
+	 * @return all valid pairs as a degree-2 {@link StubColumns} (the complete pre-dedup universe)
+	 */
+	public StubColumns generatePairStubs(DrtRequest[] requests) {
+		long startTime = System.currentTimeMillis();
+		List<PairCandidate> candidates = collectSortedCandidates(requests, startTime);
+
+		// Identity position lookup: each reqArray element object → its position. The pair
+		// candidates' reqI/reqJ are the SAME objects as elements of `requests` (TimeFilter
+		// shallow-clones the array), so an identity lookup recovers the exact reqArray
+		// position. This is the copy handle the stub must carry: under Paper-2 Extension-2
+		// hub expansion several DrtRequest copies share one `index`, so the index alone
+		// cannot recover the generation copy — the reqArray POSITION can. (See Task 13.)
+		IdentityHashMap<DrtRequest, Integer> idPos = new IdentityHashMap<>(requests.length * 2);
+		for (int p = 0; p < requests.length; p++) idPos.put(requests[p], p);
+
+		// Phase 3: Validate sequentially, emit stubs in the same order as the fat path.
+		StubColumns pairStubs = new StubColumns(2);
+		int nextRideIndex = requests.length; // Start after single rides (mirrors the fat path)
+		int fifoCreated = 0;
+		int lifoCreated = 0;
+
+		for (PairCandidate c : candidates) {
+			Ride ride = buildRide(c, nextRideIndex);
+			Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
+			if (validated != null) {
+				RideStub s = RideStub.fromRide(validated);
+				// Positions aligned to s.sortedSet: for each sorted global index, pick whichever
+				// of the pair's two request objects has that index, then look up its reqArray
+				// position. A pair always has two DISTINCT indices (different parents), so the
+				// mapping is unambiguous; guards below fail loud if either assumption breaks.
+				if (c.reqI.index == c.reqJ.index) {
+					throw new IllegalStateException(
+							"Pair candidate has two requests sharing index " + c.reqI.index
+							+ " — degree-2 sorted-set/position alignment is ambiguous");
+				}
+				int[] positions = new int[s.sortedSet.length];
+				for (int k = 0; k < s.sortedSet.length; k++) {
+					DrtRequest member = (s.sortedSet[k] == c.reqI.index) ? c.reqI : c.reqJ;
+					Integer pos = idPos.get(member);
+					if (pos == null) {
+						throw new IllegalStateException(
+								"Pair request object (index " + member.index + ") is not a reqArray "
+								+ "element — identity position lookup failed; reqArray identity assumption broken");
+					}
+					positions[k] = pos;
+				}
+				pairStubs.addRow(s.sortedSet, s.originPacked, s.destPacked, s.distDm, s.ttDs, s.flags, positions);
+				nextRideIndex++;
+				if (c.kind == RideKind.FIFO) fifoCreated++;
+				else lifoCreated++;
+			}
+		}
+
+		logCompletion(requests.length, pairStubs.size(), fifoCreated, lifoCreated, candidates.size(), startTime);
+		return pairStubs;
+	}
+
+	/**
+	 * Phases 1+2 shared by the fat and stub generation paths: parallel candidate collection
+	 * followed by the deterministic {@code (reqI.index, reqJ.index, kind)} sort. Pure with
+	 * respect to output ordering — identical inputs yield an identically ordered candidate list.
+	 */
+	private List<PairCandidate> collectSortedCandidates(DrtRequest[] requests, long startTime) {
 		log.info("Generating pair rides from {} requests (horizon={}s) [{}]...",
 				requests.length, horizon, useParallel ? "parallel" : "sequential");
-		long startTime = System.currentTimeMillis();
 
 		TimeFilter filter = new TimeFilter(requests);
 		AtomicInteger processedRequests = new AtomicInteger(0);
@@ -125,34 +233,19 @@ public final class PairGenerator {
 
 		// Phase 2: Sort deterministically by (reqI.index, reqJ.index, kind)
 		candidates.sort(PairCandidate.COMPARATOR);
+		return candidates;
+	}
 
-		// Phase 3: Validate and assign indices sequentially
-		List<Ride> pairs = new ArrayList<>();
-		int nextRideIndex = requests.length; // Start after single rides
-		int fifoCreated = 0;
-		int lifoCreated = 0;
-
-		for (PairCandidate c : candidates) {
-			Ride ride = buildRide(c, nextRideIndex);
-			Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
-			if (validated != null) {
-				pairs.add(validated);
-				nextRideIndex++;
-				if (c.kind == RideKind.FIFO) fifoCreated++;
-				else lifoCreated++;
-			}
-		}
-
+	private void logCompletion(int requestCount, int pairCount, int fifoCreated, int lifoCreated,
+			int candidateCount, long startTime) {
 		long elapsed = System.currentTimeMillis() - startTime;
 		double seconds = elapsed / 1000.0;
-		double pairsPerSecond = pairs.size() / Math.max(seconds, 0.001);
+		double pairsPerSecond = pairCount / Math.max(seconds, 0.001);
 		log.info("Pair generation complete: {} pairs from {} requests in {}s ({} pairs/s)",
-				pairs.size(), requests.length, String.format("%.1f", seconds), String.format("%.1f", pairsPerSecond));
+				pairCount, requestCount, String.format("%.1f", seconds), String.format("%.1f", pairsPerSecond));
 		log.info("  Created: {} FIFO, {} LIFO (from {} candidates)",
-				fifoCreated, lifoCreated, candidates.size());
+				fifoCreated, lifoCreated, candidateCount);
 		log.info("  Beeline pre-filter rejected {} candidate pairs before routing", beelineRejected.get());
-
-		return pairs;
 	}
 
 
@@ -260,6 +353,49 @@ public final class PairGenerator {
 		}
 
 		return results;
+	}
+
+	/**
+	 * Stub-mode (Task 13) pair MATERIALIZATION: rebuild one degree-2 ride from a stub by
+	 * reproducing the exact routing the generator used, NOT {@code buildRideFromOrdering}.
+	 *
+	 * <p>Why a dedicated path is required: {@code BamasRideExtender.buildRideFromOrdering}
+	 * routes each connection segment at a CUMULATIVE clock ({@code currentTime += connTT[i]}),
+	 * landing in time bins the pair generator never warmed — the generator routes ALL pair
+	 * segments at the single fixed bin {@code reqI.requestTime}. For degree-3+ that is fine
+	 * (those orderings were enumerated through {@code buildRideFromOrdering} at cumulative time,
+	 * warming exactly those keys), but a degree-2 pair re-routed at cumulative time can hit an
+	 * unwarmed bin and an on-demand SSSP that returns unreachable. Routing here at the same
+	 * fixed {@code reqI.requestTime} as generation reproduces the generator's segments
+	 * bit-for-bit, so the rebuilt ride's distance/time match the stored stub columns.
+	 *
+	 * <p>The beeline/temporal pre-gates are intentionally skipped: this row was already a
+	 * winning candidate, so it passed those gates at generation. Only the gated creation
+	 * ({@code tryFifoCandidate}/{@code tryLifoCandidate} + {@code buildRide} + budget
+	 * population) is replayed.
+	 *
+	 * <p>Budget population is intentionally NOT done here: the caller
+	 * ({@code RideMaterializer.materialize}) runs the same {@code validateAndPopulateBudgets}
+	 * uniformly for every degree after its distance/time self-check, exactly as it does for the
+	 * degree-3+ path. Returning the routed-but-unvalidated ride keeps that single validation site
+	 * and avoids a redundant budget recompute.
+	 *
+	 * @param reqI first-pickup request (pickup local position 0)
+	 * @param reqJ second-pickup request (pickup local position 1)
+	 * @param kind FIFO or LIFO, decoded from the stub's flags
+	 * @return the routed ride (index 0; engine re-indexes after sort, caller populates budgets),
+	 *         or {@code null} if the route did not reproduce (caller treats as a hard error)
+	 */
+	public Ride rebuildPair(DrtRequest reqI, DrtRequest reqJ, RideKind kind) {
+		TravelSegment oo = network.getSegment(reqI.originLinkId, reqJ.originLinkId, reqI.requestTime);
+		if (!oo.isReachable()) return null;
+
+		PairCandidate c = (kind == RideKind.FIFO)
+				? tryFifoCandidate(reqI, reqJ, oo)
+				: tryLifoCandidate(reqI, reqJ, oo);
+		if (c == null) return null;
+
+		return buildRide(c, 0);
 	}
 
 	/**

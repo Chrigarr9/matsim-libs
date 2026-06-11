@@ -9,6 +9,9 @@ import java.util.function.IntUnaryOperator;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.OrderingCodec;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubScaling;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
@@ -216,6 +219,183 @@ public final class PostExtensionPruner {
 				String.format("%.1f%%", (1.0 - (double) kept.size() / rides.size()) * 100));
 
 		return kept;
+	}
+
+	// --- stub-mode pruning (seam b) -------------------------------------------
+
+	/**
+	 * Prune one per-degree {@link StubColumns} layer in stub mode, returning a new
+	 * layer containing only the survivors in their original (lex) row order.
+	 *
+	 * <p>This is the byte-exact stub analogue of {@link #prune(List)} restricted to a
+	 * single degree. It computes the same quality metrics off stub-derived values:
+	 * ride distance via {@link StubScaling#fromDeci} (bit-identical to
+	 * {@code Ride.getRideDistance()}; Task 4) and {@code sumDirectDistance} summed in
+	 * PICKUP order (FP addition is non-commutative; the fat path sums {@code requests[]}
+	 * which IS pickup order). Survivors are appended in row order, which equals the fat
+	 * path's per-degree group order, so the COVERAGE_TOPK stable-sort tie-break resolves
+	 * identically.
+	 *
+	 * <p>Degree-1 layers are returned unchanged (singles are never pruned). In stub mode
+	 * singles stay fat, so this is only ever called with degree-3+ layers, but the guard
+	 * is kept for symmetry with {@link #prune(List)}.
+	 *
+	 * @param layer        one degree's winning rides as a SoA container
+	 * @param requestById  global request lookup keyed by {@link DrtRequest#index},
+	 *                     built identically to the extender's {@code requestMap}.
+	 *                     Positional indexing is NOT safe: Paper-2 Extension-2 hub
+	 *                     expansion emits virtual copies sharing the parent's
+	 *                     {@code index}, so the fat path resolves direct distances
+	 *                     through this same last-write-wins map.
+	 * @return a filtered {@link StubColumns} (survivors only), same degree, lex order
+	 */
+	public StubColumns pruneStubLayer(StubColumns layer, Map<Integer, DrtRequest> requestById) {
+		if (layer == null || layer.size() == 0 || layer.degree() <= 1) {
+			return layer;
+		}
+		return switch (mode) {
+			case RATIO_THRESHOLD -> pruneStubRatioThreshold(layer, requestById);
+			case COVERAGE_TOPK -> pruneStubCoverageTopK(layer, requestById);
+		};
+	}
+
+	private StubColumns pruneStubRatioThreshold(StubColumns layer, Map<Integer, DrtRequest> requestById) {
+		if (keepTopFraction >= 1.0) {
+			return layer;
+		}
+		int n = layer.size();
+		int degree = layer.degree();
+
+		// RATIO_THRESHOLD always ranks by fractional savings (mirrors the fat path,
+		// which hardcodes savingsRatio here regardless of the configured metric).
+		double[] savings = new double[n];
+		for (int i = 0; i < n; i++) {
+			double sumDirect = sumDirectDistanceStub(layer, i, requestById);
+			double rideDist = StubScaling.fromDeci(layer.rideDistanceDm(i));
+			savings[i] = sumDirect > 0 ? 1.0 - rideDist / sumDirect : 0;
+		}
+
+		double[] sorted = savings.clone();
+		Arrays.sort(sorted);
+		int thresholdIndex = (int) Math.floor(sorted.length * (1.0 - keepTopFraction));
+		thresholdIndex = Math.min(thresholdIndex, sorted.length - 1);
+		double threshold = sorted[thresholdIndex];
+
+		StubColumns kept = new StubColumns(degree);
+		int keptAtDegree = 0;
+		for (int i = 0; i < n; i++) {
+			if (savings[i] >= threshold) {
+				copyRow(layer, i, kept);
+				keptAtDegree++;
+			}
+		}
+		log.info("Post-extension pruning (RATIO_THRESHOLD, stub): degree {} threshold={}, kept {}/{}",
+				degree, String.format("%+.3f", threshold), keptAtDegree, n);
+		return kept;
+	}
+
+	private StubColumns pruneStubCoverageTopK(StubColumns layer, Map<Integer, DrtRequest> requestById) {
+		int n = layer.size();
+		int degree = layer.degree();
+		int effectiveK = kFunction.applyAsInt(degree);
+
+		// Quality per row, computed in stored (lex) row order so the stable descending
+		// sort below resolves equal-quality ties by lex order — identical to the fat
+		// path, where the per-degree group is iterated in the extender's sorted order.
+		double[] quality = new double[n];
+		for (int i = 0; i < n; i++) {
+			double sumDirect = sumDirectDistanceStub(layer, i, requestById);
+			double rideDist = StubScaling.fromDeci(layer.rideDistanceDm(i));
+			quality[i] = metricValue(rideDist, sumDirect);
+		}
+
+		// Stable sort of row indices by quality descending. Integer[] + Arrays.sort is a
+		// stable mergesort, so ties keep ascending row (= lex) order — matches the fat
+		// path's Arrays.sort(order, byQualityDesc).
+		Integer[] order = new Integer[n];
+		for (int i = 0; i < n; i++) order[i] = i;
+		Arrays.sort(order, (a, b) -> Double.compare(quality[b], quality[a]));
+
+		// Per-request coverage counter, indexed by request.index (same as fat path).
+		int maxIdx = -1;
+		for (int i = 0; i < n; i++) {
+			for (int g : layer.requestIndices(i)) {
+				if (g > maxIdx) maxIdx = g;
+			}
+		}
+		int[] cov = new int[maxIdx + 1];
+
+		// Mark survivors, then emit in `order` (quality-descending, lex tie-break) — NOT
+		// row order. This must mirror the fat path's pruneCoverageTopK, which builds `kept`
+		// via `for (idx : order) kept.add(...)`, i.e. survivors in quality-descending order.
+		// The engine's final sort (variant, degree, first-PICKUP index) is STABLE and only
+		// ties-breaks on the first-pickup index, so within a tie group it preserves the
+		// pruner's emission order. With Paper-2 Ext-2 hub copies, many degree-3/4 rides share
+		// a first-pickup index, so emitting row (lex) order here instead of quality order
+		// flips ~21 tied rides at the tail vs the fat golden (byte drift, identical multiset).
+		boolean[] keepRow = new boolean[n];
+		int keptAtDegree = 0;
+		int requestsCovered = 0;
+		for (int idx : order) {
+			int[] reqs = layer.requestIndices(idx);
+			boolean hit = false;
+			for (int r : reqs) {
+				if (cov[r] < effectiveK) { hit = true; break; }
+			}
+			if (hit) {
+				keepRow[idx] = true;
+				keptAtDegree++;
+				for (int r : reqs) {
+					if (cov[r] == 0) requestsCovered++;
+					cov[r]++;
+				}
+			}
+		}
+
+		StubColumns kept = new StubColumns(degree);
+		for (int idx : order) {
+			if (keepRow[idx]) copyRow(layer, idx, kept);
+		}
+		log.info("Post-extension pruning (COVERAGE_TOPK, stub): degree {} kept {}/{} K={}, {} requests covered",
+				degree, keptAtDegree, n, effectiveK, requestsCovered);
+		return kept;
+	}
+
+	/** Sum of per-passenger direct distances in PICKUP order (FP non-commutative). */
+	private static double sumDirectDistanceStub(StubColumns layer, int row, Map<Integer, DrtRequest> requestById) {
+		int degree = layer.degree();
+		int[] sortedSet = layer.requestIndices(row);
+		int[] originsLocal = OrderingCodec.unpack(layer.originOrder(row), degree);
+		double sum = 0;
+		for (int i = 0; i < degree; i++) {
+			sum += requestById.get(sortedSet[originsLocal[i]]).getDistance();
+		}
+		return sum;
+	}
+
+	/**
+	 * Quality value from stub-derived primitives, mirroring {@link #ABS_SAVINGS} /
+	 * {@link #RATIO_SAVINGS}. The metric instances only read {@code ride.getRideDistance()}
+	 * and {@code sumDirect}, both available here directly.
+	 */
+	private double metricValue(double rideDistance, double sumDirect) {
+		if (metric == ABS_SAVINGS) {
+			return sumDirect - rideDistance;
+		}
+		if (metric == RATIO_SAVINGS) {
+			return sumDirect > 0 ? 1.0 - rideDistance / sumDirect : 0.0;
+		}
+		throw new IllegalStateException("metricValue: unsupported QualityMetric " + metric);
+	}
+
+	private static void copyRow(StubColumns src, int row, StubColumns dst) {
+		dst.addRow(
+				src.requestIndices(row),
+				src.originOrder(row),
+				src.destOrder(row),
+				src.rideDistanceDm(row),
+				src.travelTimeDs(row),
+				src.flags(row));
 	}
 
 	// --- helpers --------------------------------------------------------------

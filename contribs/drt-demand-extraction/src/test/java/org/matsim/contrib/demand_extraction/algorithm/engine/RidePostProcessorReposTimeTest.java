@@ -9,6 +9,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.MaterializedRideStore;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
@@ -19,7 +20,7 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 /**
  * Failing (red) test for Task 2 of the chained_timebin feature.
  *
- * <p>Asserts that {@link RidePostProcessor#process(List)} populates
+ * <p>Asserts that {@link RidePostProcessor#process(org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStore)} populates
  * {@link Ride#getReposTimeMeanOutgoing()} with the mean travel time over
  * all feasible outgoing successors, per the design spec:
  *
@@ -209,7 +210,7 @@ class RidePostProcessorReposTimeTest {
 				(budget, request, travelTime, distance) -> 0.0  // maxCostResolver stub
 		);
 
-		List<Ride> enriched = processor.process(List.of(rideA, rideB, rideC));
+		List<Ride> enriched = processor.process(new MaterializedRideStore(List.of(rideA, rideB, rideC)));
 
 		// Map by ride index for readable assertions
 		Map<Integer, Ride> byIndex = new HashMap<>();

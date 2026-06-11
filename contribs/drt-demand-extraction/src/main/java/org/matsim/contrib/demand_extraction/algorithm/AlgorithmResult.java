@@ -4,13 +4,16 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStore;
 import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
-import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 
 /**
  * Result of a Stage-1 algorithm run.
  *
- * <p>{@code rides} holds the door-to-door and stop-to-stop variants.
+ * <p>{@code rides} is a {@link RideStore} over the door-to-door and stop-to-stop
+ * variants. BAMAS may return a streaming {@code StubRideStore} on the memory-critical
+ * D2D path; the reference ExMAS path wraps its fat list in a {@code MaterializedRideStore}.
+ * Consumers materialize lazily via {@link RideStore#forEachMaterialized}.
  * {@code hyperPooledRides} carries the multi-stop Stage-2 (HyperPool)
  * outputs separately because their domain object ({@link HyperPooledRide})
  * carries a different schema than {@link Ride}; they are serialised to
@@ -24,12 +27,12 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
  * look them up by string key.
  */
 public record AlgorithmResult(
-        List<Ride> rides,
+        RideStore rides,
         List<HyperPooledRide> hyperPooledRides,
         Map<String, Object> diagnostics) {
 
     /** Back-compat shim: ExMAS reference path doesn't emit HyperPool. */
-    public AlgorithmResult(List<Ride> rides, Map<String, Object> diagnostics) {
+    public AlgorithmResult(RideStore rides, Map<String, Object> diagnostics) {
         this(rides, Collections.emptyList(), diagnostics);
     }
 }

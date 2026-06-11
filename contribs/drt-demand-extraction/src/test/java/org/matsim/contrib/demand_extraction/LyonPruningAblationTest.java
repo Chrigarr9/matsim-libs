@@ -24,6 +24,7 @@ import org.matsim.api.core.v01.Scenario;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasEngine;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStores;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCacheTestFixture;
@@ -191,9 +192,9 @@ class LyonPruningAblationTest {
 			if (maxDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxDegreeOverride);
 			logConfig("R3", exMasConfig);
 			long start = System.currentTimeMillis();
-			List<Ride> rides = new BamasEngine(cache, validator,
+			List<Ride> rides = RideStores.toList(new BamasEngine(cache, validator,
 					exMasConfig.getSearchHorizon(), exMasConfig.getMaxPoolingDegree(), exMasConfig)
-					.run(new ArrayList<>(requests));
+					.run(new ArrayList<>(requests)));
 			long elapsedMs = System.currentTimeMillis() - start;
 			log.info("R3: {} rides in {}s", rides.size(), String.format(Locale.US, "%.1f", elapsedMs / 1000.0));
 			ExMasCsvWriter.writeRides(outputDir.resolve("r3_rides.csv").toString(), rides);
@@ -208,9 +209,9 @@ class LyonPruningAblationTest {
 			if (maxDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxDegreeOverride);
 			logConfig("R4", exMasConfig);
 			long start = System.currentTimeMillis();
-			List<Ride> rides = new BamasEngine(cache, validator,
+			List<Ride> rides = RideStores.toList(new BamasEngine(cache, validator,
 					exMasConfig.getSearchHorizon(), exMasConfig.getMaxPoolingDegree(), exMasConfig)
-					.run(new ArrayList<>(requests));
+					.run(new ArrayList<>(requests)));
 			long elapsedMs = System.currentTimeMillis() - start;
 			log.info("R4: {} rides in {}s", rides.size(), String.format(Locale.US, "%.1f", elapsedMs / 1000.0));
 			ExMasCsvWriter.writeRides(outputDir.resolve("r4_rides.csv").toString(), rides);
@@ -225,9 +226,9 @@ class LyonPruningAblationTest {
 			if (maxDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxDegreeOverride);
 			logConfig("R5", exMasConfig);
 			long start = System.currentTimeMillis();
-			List<Ride> rides = new BamasEngine(cache, validator,
+			List<Ride> rides = RideStores.toList(new BamasEngine(cache, validator,
 					exMasConfig.getSearchHorizon(), exMasConfig.getMaxPoolingDegree(), exMasConfig)
-					.run(new ArrayList<>(requests));
+					.run(new ArrayList<>(requests)));
 			long elapsedMs = System.currentTimeMillis() - start;
 			log.info("R5: {} rides in {}s", rides.size(), String.format(Locale.US, "%.1f", elapsedMs / 1000.0));
 			ExMasCsvWriter.writeRides(outputDir.resolve("r5_rides.csv").toString(), rides);
@@ -242,9 +243,9 @@ class LyonPruningAblationTest {
 			if (maxDegreeOverride > 0) exMasConfig.setMaxPoolingDegree(maxDegreeOverride);
 			logConfig("R6", exMasConfig);
 			long start = System.currentTimeMillis();
-			List<Ride> rides = new BamasEngine(cache, validator,
+			List<Ride> rides = RideStores.toList(new BamasEngine(cache, validator,
 					exMasConfig.getSearchHorizon(), exMasConfig.getMaxPoolingDegree(), exMasConfig)
-					.run(new ArrayList<>(requests));
+					.run(new ArrayList<>(requests)));
 			long elapsedMs = System.currentTimeMillis() - start;
 			log.info("R6: {} rides in {}s", rides.size(), String.format(Locale.US, "%.1f", elapsedMs / 1000.0));
 			ExMasCsvWriter.writeRides(outputDir.resolve("r6_rides.csv").toString(), rides);

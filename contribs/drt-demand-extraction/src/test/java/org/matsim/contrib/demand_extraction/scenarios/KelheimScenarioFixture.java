@@ -193,9 +193,9 @@ public class KelheimScenarioFixture implements ExMasScenarioFixture {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// 35 baseline columns + 2 Extension-2 per-pax columns (requestTags, hubIds)
-				// + 1 per-ride column (peak_pax, Task 7.2)
-				// + 1 chained-timebin column (reposTimeMeanOutgoing, Task 4) = 40 total
+				// 36 baseline columns + 4 Extension-2 columns appended at the end of
+				// exmas_rides.csv: per-pax requestTags + hubIds, per-ride peak_pax
+				// (Task 7.2) + reposTimeMeanOutgoing (Task 4) = 40 total.
 				check(parts.length == 40,
 						"Each ride should have 40 fields, got " + parts.length);
 

@@ -19,6 +19,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStore;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
@@ -69,10 +70,15 @@ public final class RidePostProcessor {
         this.maxCostResolver = maxCostResolver;
     }
 
-    public List<Ride> process(List<Ride> rides) {
-        if (rides == null || rides.isEmpty()) {
-            return rides;
+    public List<Ride> process(RideStore store) {
+        if (store == null || store.size() == 0) {
+            return new ArrayList<>();
         }
+        // Materialize the full ordered list once — leaves the entire body unchanged
+        // and guarantees byte-identical output. The memory optimization (stream over
+        // stubs without a full list) is deferred to the stub-backing phase.
+        List<Ride> rides = new ArrayList<>(store.size());
+        store.forEachMaterialized(rides::add);
 
 		log.info("Post-processing {} rides...", rides.size());
 		long startTime = System.currentTimeMillis();

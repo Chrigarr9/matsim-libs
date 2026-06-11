@@ -10,6 +10,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.contrib.demand_extraction.algorithm.AlgorithmResult;
 import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithm;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.MaterializedRideStore;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.engine.RidePostProcessor;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
@@ -147,19 +148,19 @@ public final class RunDemandExtractionPhase2 {
 		log.info("PHASE 2 HEAP at algorithm start: {} MB (used)",
 				heapAtAlgStartBytes / (1024L * 1024L));
 		AlgorithmResult result = algorithm.run(requests);
-		List<Ride> rides = result.rides();
-		log.info("PHASE 2 STEP 3: algorithm produced {} rides", rides.size());
+		log.info("PHASE 2 STEP 3: algorithm produced {} rides", result.rides().size());
 
 		log.info("PHASE 2 STEP 4: post-processing (maxCost + Shapley + predecessors)");
 		RidePostProcessor postProcessor = injector.getInstance(RidePostProcessor.class);
-		rides = postProcessor.process(rides);
+		// result.rides() is a RideStore (streaming or materialized); process through it.
+		List<Ride> rides = postProcessor.process(result.rides());
 
 		log.info("PHASE 2 STEP 5: writing outputs");
 		Path demandDir = a.outputDir.resolve("drt_demand");
 		Files.createDirectories(demandDir);
 		String runId = dump.meta().runId();
 		Path ridesCsv = demandDir.resolve(runId + ".exmas_rides.csv");
-		ExMasCsvWriter.writeRides(ridesCsv.toString(), rides);
+		ExMasCsvWriter.writeRides(ridesCsv.toString(), new MaterializedRideStore(rides));
 		log.info("PHASE 2 STEP 5: wrote {} rides to {}", rides.size(), ridesCsv);
 
 		java.nio.file.Path publishedRequests = publishCanonicalRequestsCsv(
