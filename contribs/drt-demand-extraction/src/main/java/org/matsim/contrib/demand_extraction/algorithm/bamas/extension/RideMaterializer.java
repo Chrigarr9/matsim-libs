@@ -8,6 +8,8 @@ import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
+import java.util.Map;
+
 /**
  * Replays a winning ride ordering held as a compact {@link StubColumns} row back
  * into a full {@link Ride}, bit-exactly reproducing what the extension phase
@@ -59,11 +61,20 @@ public final class RideMaterializer {
 	 *
 	 * @param cols         the per-degree layer
 	 * @param row          row index within {@code cols}
-	 * @param requestTable global request array indexed by {@link DrtRequest#index}
+	 * @param requestById  global request lookup keyed by {@link DrtRequest#index},
+	 *                     built identically to the extender's {@code requestMap}
+	 *                     (last-write-wins on a shared index). Positional indexing
+	 *                     is NOT safe: Paper-2 Extension-2 hub expansion emits
+	 *                     virtual copies that share the parent's {@code index}, so
+	 *                     {@code index != array position} and several requests can
+	 *                     collide on one index. The fat extender always resolves a
+	 *                     set member through this same map, so the winning ride is
+	 *                     built from the map's canonical copy; resolving here the
+	 *                     same way reproduces the exact origin/dest links.
 	 * @return the materialized, budget-populated ride (index 0; the engine re-indexes
 	 *         after the final sort)
 	 */
-	public Ride materialize(StubColumns cols, int row, DrtRequest[] requestTable) {
+	public Ride materialize(StubColumns cols, int row, Map<Integer, DrtRequest> requestById) {
 		int degree = cols.degree();
 		int[] originsLocal = OrderingCodec.unpack(cols.originOrder(row), degree);
 		int[] destsLocal = OrderingCodec.unpack(cols.destOrder(row), degree);
@@ -72,8 +83,8 @@ public final class RideMaterializer {
 		DrtRequest[] originsOrdered = new DrtRequest[degree];
 		DrtRequest[] destsOrdered = new DrtRequest[degree];
 		for (int i = 0; i < degree; i++) {
-			originsOrdered[i] = requestTable[sortedSet[originsLocal[i]]];
-			destsOrdered[i] = requestTable[sortedSet[destsLocal[i]]];
+			originsOrdered[i] = requestById.get(sortedSet[originsLocal[i]]);
+			destsOrdered[i] = requestById.get(sortedSet[destsLocal[i]]);
 		}
 
 		// Faithful replay: same buildRideFromOrdering call with null preConn (cache-hit

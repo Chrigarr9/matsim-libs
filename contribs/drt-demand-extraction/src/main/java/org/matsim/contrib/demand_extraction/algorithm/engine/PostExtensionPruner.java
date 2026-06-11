@@ -241,20 +241,25 @@ public final class PostExtensionPruner {
 	 * is kept for symmetry with {@link #prune(List)}.
 	 *
 	 * @param layer        one degree's winning rides as a SoA container
-	 * @param requestTable global request array indexed by {@link DrtRequest#index}
+	 * @param requestById  global request lookup keyed by {@link DrtRequest#index},
+	 *                     built identically to the extender's {@code requestMap}.
+	 *                     Positional indexing is NOT safe: Paper-2 Extension-2 hub
+	 *                     expansion emits virtual copies sharing the parent's
+	 *                     {@code index}, so the fat path resolves direct distances
+	 *                     through this same last-write-wins map.
 	 * @return a filtered {@link StubColumns} (survivors only), same degree, lex order
 	 */
-	public StubColumns pruneStubLayer(StubColumns layer, DrtRequest[] requestTable) {
+	public StubColumns pruneStubLayer(StubColumns layer, Map<Integer, DrtRequest> requestById) {
 		if (layer == null || layer.size() == 0 || layer.degree() <= 1) {
 			return layer;
 		}
 		return switch (mode) {
-			case RATIO_THRESHOLD -> pruneStubRatioThreshold(layer, requestTable);
-			case COVERAGE_TOPK -> pruneStubCoverageTopK(layer, requestTable);
+			case RATIO_THRESHOLD -> pruneStubRatioThreshold(layer, requestById);
+			case COVERAGE_TOPK -> pruneStubCoverageTopK(layer, requestById);
 		};
 	}
 
-	private StubColumns pruneStubRatioThreshold(StubColumns layer, DrtRequest[] requestTable) {
+	private StubColumns pruneStubRatioThreshold(StubColumns layer, Map<Integer, DrtRequest> requestById) {
 		if (keepTopFraction >= 1.0) {
 			return layer;
 		}
@@ -265,7 +270,7 @@ public final class PostExtensionPruner {
 		// which hardcodes savingsRatio here regardless of the configured metric).
 		double[] savings = new double[n];
 		for (int i = 0; i < n; i++) {
-			double sumDirect = sumDirectDistanceStub(layer, i, requestTable);
+			double sumDirect = sumDirectDistanceStub(layer, i, requestById);
 			double rideDist = StubScaling.fromDeci(layer.rideDistanceDm(i));
 			savings[i] = sumDirect > 0 ? 1.0 - rideDist / sumDirect : 0;
 		}
@@ -289,7 +294,7 @@ public final class PostExtensionPruner {
 		return kept;
 	}
 
-	private StubColumns pruneStubCoverageTopK(StubColumns layer, DrtRequest[] requestTable) {
+	private StubColumns pruneStubCoverageTopK(StubColumns layer, Map<Integer, DrtRequest> requestById) {
 		int n = layer.size();
 		int degree = layer.degree();
 		int effectiveK = kFunction.applyAsInt(degree);
@@ -299,7 +304,7 @@ public final class PostExtensionPruner {
 		// path, where the per-degree group is iterated in the extender's sorted order.
 		double[] quality = new double[n];
 		for (int i = 0; i < n; i++) {
-			double sumDirect = sumDirectDistanceStub(layer, i, requestTable);
+			double sumDirect = sumDirectDistanceStub(layer, i, requestById);
 			double rideDist = StubScaling.fromDeci(layer.rideDistanceDm(i));
 			quality[i] = metricValue(rideDist, sumDirect);
 		}
@@ -352,13 +357,13 @@ public final class PostExtensionPruner {
 	}
 
 	/** Sum of per-passenger direct distances in PICKUP order (FP non-commutative). */
-	private static double sumDirectDistanceStub(StubColumns layer, int row, DrtRequest[] requestTable) {
+	private static double sumDirectDistanceStub(StubColumns layer, int row, Map<Integer, DrtRequest> requestById) {
 		int degree = layer.degree();
 		int[] sortedSet = layer.requestIndices(row);
 		int[] originsLocal = OrderingCodec.unpack(layer.originOrder(row), degree);
 		double sum = 0;
 		for (int i = 0; i < degree; i++) {
-			sum += requestTable[sortedSet[originsLocal[i]]].getDistance();
+			sum += requestById.get(sortedSet[originsLocal[i]]).getDistance();
 		}
 		return sum;
 	}

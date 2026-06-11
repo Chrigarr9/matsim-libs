@@ -103,6 +103,17 @@ public final class BamasEngine {
         
         DrtRequest[] reqArray = drtRequests.toArray(new DrtRequest[0]);
 
+        // Global-index → request lookup, built identically to BamasRideExtender.requestMap
+        // (same iteration order ⇒ same last-write-wins winner on a shared index). Required
+        // for stub materialization + stub pruning: Paper-2 Extension-2 hub expansion emits
+        // virtual copies that share the parent's DrtRequest.index, so index != array position
+        // and several requests collide on one index. The fat extender resolves every set
+        // member through this map, so winning rides are built from the map's canonical copy;
+        // resolving stubs the same way reproduces the exact origin/dest links (positional
+        // reqArray indexing would pick a different colliding copy → wrong/unreachable OD).
+        java.util.Map<Integer, DrtRequest> requestById = new java.util.HashMap<>();
+        for (DrtRequest r : drtRequests) requestById.put(r.index, r);
+
 		int algorithmProcessCount = exMasConfig.getAlgorithmProcessCount();
 
 		// Phase 1: Generate single rides with budget validation
@@ -205,7 +216,7 @@ public final class BamasEngine {
 				if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.RATIO_THRESHOLD) {
 					PostExtensionPruner pruner = buildPruner(exMasConfig);
 					if (pruner != null) {
-						layer = pruner.pruneStubLayer(layer, reqArray);
+						layer = pruner.pruneStubLayer(layer, requestById);
 					}
 				}
 				stubLayers.add(layer);
@@ -235,7 +246,7 @@ public final class BamasEngine {
 					// Prune each per-degree stub layer in place (each layer is one degree,
 					// so per-degree COVERAGE_TOPK == per-layer pruning).
 					for (int i = 0; i < stubLayers.size(); i++) {
-						stubLayers.set(i, pruner.pruneStubLayer(stubLayers.get(i), reqArray));
+						stubLayers.set(i, pruner.pruneStubLayer(stubLayers.get(i), requestById));
 					}
 				} else {
 					List<Ride> extensionRides = new java.util.ArrayList<>(allRides.subList(extensionStartIdx, allRides.size()));
@@ -258,7 +269,7 @@ public final class BamasEngine {
 			int materialized = 0;
 			for (org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer : stubLayers) {
 				for (int row = 0; row < layer.size(); row++) {
-					allRides.add(materializer.materialize(layer, row, reqArray));
+					allRides.add(materializer.materialize(layer, row, requestById));
 					materialized++;
 				}
 			}
