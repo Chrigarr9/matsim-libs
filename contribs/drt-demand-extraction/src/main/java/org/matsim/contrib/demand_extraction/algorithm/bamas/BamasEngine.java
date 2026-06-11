@@ -23,6 +23,9 @@ import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.hyperpool.HyperPoolGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.hyperpool.StopCompatibilityChecker;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.MaterializedRideStore;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStore;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubRideStore;
 import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinder;
 import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinderFactory;
 import org.matsim.contrib.demand_extraction.algorithm.stops.WalkingDistanceCalculator;
@@ -86,9 +89,13 @@ public final class BamasEngine {
      * Run ExMAS algorithm on DRT requests with budget validation.
      * 
      * @param drtRequests MATSim requests with budget constraints
-     * @return list of all feasible rides (single, pairs, and extensions up to maxDegree)
+     * @return a {@link RideStore} over all feasible rides (single, pairs, and extensions
+     *         up to maxDegree). On the memory-critical D2D path
+     *         ({@code stubModeEnabled && !enableStopBased}) this is a streaming
+     *         {@link StubRideStore} that materializes rows lazily; otherwise a
+     *         {@link MaterializedRideStore} wrapping the fat, sorted, reindexed list.
      */
-    public List<Ride> run(List<DrtRequest> drtRequests) {
+    public RideStore run(List<DrtRequest> drtRequests) {
 		log.info("======================================================================");
 		log.info("Starting ExMAS algorithm");
 		log.info("  Requests: {}", drtRequests.size());
@@ -170,6 +177,12 @@ public final class BamasEngine {
 		int nextRideIndex = allRides.size();
 		int extensionStartIdx = nextRideIndex; // first index of extension rides in allRides
 		final boolean stubMode = exMasConfig.isStubModeEnabled();
+		// Task 12 — streaming export path. Only the memory-critical D2D run streams: when
+		// stop-based pooling is enabled, Phase 5 needs the materialized degree-3+ D2D rides
+		// as generation INPUT, so we stay on the existing fat path (batch-materialize →
+		// Phase 5/6 → sort/reindex → MaterializedRideStore). The gate and the 100% target run
+		// both have stop_based=false, so they take the streaming branch.
+		final boolean streamingD2D = stubMode && !exMasConfig.isEnableStopBased();
 		// Stub mode (Task 11): degree-3+ extension rides are held as per-degree StubColumns,
 		// NOT appended to allRides as fat Ride objects. We accumulate the per-degree layers
 		// here and batch-materialize them once at the end, concatenating with the still-fat
@@ -257,12 +270,15 @@ public final class BamasEngine {
 			}
 		}
 
-		// Stub mode: batch-materialize the degree-3+ layers into fat Ride objects and
-		// concatenate with the still-fat singles + pairs already in allRides. The existing
-		// final sort + reindex (below) then runs UNCHANGED, exactly as in the fat path.
+		// Fat-stub path only (stub mode WITH stop-based): batch-materialize the degree-3+
+		// layers into fat Ride objects and concatenate with the still-fat singles + pairs in
+		// allRides, so Phase 5 stop-based generation can consume the full D2D set. The final
+		// sort + reindex (below) then runs UNCHANGED, exactly as in the fat path. The
+		// streaming D2D path (stubMode && !enableStopBased) skips this entirely — it folds
+		// materialize + sort + reindex into StubRideStore and returns below, before Phase 5.
 		// NON-DEFERRED: materialize replays buildRideFromOrdering + validateAndPopulateBudgets,
 		// so remainingBudgets is populated inline (see RideMaterializer).
-		if (stubMode) {
+		if (stubMode && !streamingD2D) {
 			org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer materializer =
 					new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
 							network, budgetValidator);
@@ -273,19 +289,19 @@ public final class BamasEngine {
 					materialized++;
 				}
 			}
-			log.info("Stub mode: materialized {} degree-3+ extension rides from {} per-degree layers",
+			log.info("Stub mode (fat path, stop-based enabled): materialized {} degree-3+ extension rides from {} per-degree layers",
 					materialized, stubLayers.size());
 		}
 
-		// Seam (c): the deferred-budget batch is being moved to the export pass (Task 12).
-		// In stub mode there are no fat extension rides to batch here — RideMaterializer
-		// already populates remainingBudgets inline via validateAndPopulateBudgets during
-		// materialization above, exactly as the non-deferred per-ordering path does. The
-		// gate scenario is NON-DEFERRED, so this block never runs there regardless.
-		// Do NOT run populateBudgetsBatch in stub mode: the materialized rides already carry
-		// budgets, and the stub layers themselves carry none.
-		//
-		// If extension skipped per-ordering budget validation, populate remainingBudgets now.
+		// Seam (c) — deferred budgets relocated to the export pass.
+		// stub mode (either branch): remainingBudgets is populated inline by
+		// RideMaterializer.validateAndPopulateBudgets — the streaming path does it lazily
+		// during forEachMaterialized, the fat-stub path did it in the batch-materialize loop
+		// above. Either way the stub layers themselves carry NO budgets, so populateBudgetsBatch
+		// must NOT also run in stub mode (it would double-populate / run on stub-less rows).
+		// Only the non-stub deferred path needs the batch. NOTE: the parity gate scenario is
+		// NON-DEFERRED (deferExtensionBudgetValidation=false), so it does NOT exercise this
+		// branch — the correctness of the stub-mode skip is reasoned, not gate-verified.
 		// Safe on scenarios where budget never rejects (e.g. Bavaria); see BudgetValidator docs.
 		if (!stubMode && exMasConfig.isDeferExtensionBudgetValidation()) {
 			log.info("");
@@ -300,23 +316,47 @@ public final class BamasEngine {
 					.snapshotAtEndOfDegree(-1, allRides.size());
 		}
 
+		// True D2D total: fat singles+pairs already in allRides, plus stub-layer rows (which
+		// in the streaming path have NOT been added to allRides). Log-only — for traceability.
+		int stubLayerRows = 0;
+		if (streamingD2D) {
+			for (org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer : stubLayers) {
+				stubLayerRows += layer.size();
+			}
+		}
+		int totalD2D = allRides.size() + stubLayerRows;
 		long totalElapsed = System.currentTimeMillis() - algorithmStartTime;
 		double totalSeconds = totalElapsed / 1000.0;
 		int[] rideCounts = summarizeRideCounts(allRides);
 		log.info("");
 		log.info("======================================================================");
 		log.info("ExMAS Algorithm Complete (Door-to-Door)");
-		log.info("  Total D2D rides generated: {}", allRides.size());
+		log.info("  Total D2D rides generated: {}", totalD2D);
 		log.info("  Single: {}, Pairs: {}, Higher: {}",
-				rideCounts[0], rideCounts[1], rideCounts[2]);
+				rideCounts[0], rideCounts[1], streamingD2D ? stubLayerRows : rideCounts[2]);
 		log.info("  Total execution time: {}s", String.format("%.1f", totalSeconds));
 		log.info("======================================================================");
 		org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler
-				.snapshotAtEndOfDegree(-1, allRides.size());
+				.snapshotAtEndOfDegree(-1, totalD2D);
 
 		// Log network routing statistics
 		log.info("");
 		network.logRoutingStatistics();
+
+		// Task 12 — streaming export: fold materialize + global stable sort + sequential
+		// reindex into a lazy StubRideStore. Stub rows are materialized one at a time during
+		// forEachMaterialized; only lightweight per-row sort keys are held. This path never
+		// reaches Phase 5/6 (stop-based disabled) nor the fat sort/reindex below, so the 2×
+		// peak-memory hazard of "full fat list + rebuilt clone" is gone.
+		if (streamingD2D) {
+			org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer materializer =
+					new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
+							network, budgetValidator);
+			log.info("Stub mode (streaming): exporting {} D2D rides ({} fat singles+pairs + {} stub rows) "
+					+ "via StubRideStore — no batch-materialize, no fat sort/reindex",
+					totalD2D, allRides.size(), stubLayerRows);
+			return new StubRideStore(allRides, stubLayers, materializer, requestById);
+		}
 
 		// Phase 5: Stop-Based Ride Generation (HyperPool Stage 1)
 		// Only runs if enableStopBased = true
@@ -389,13 +429,19 @@ public final class BamasEngine {
 			log.info("======================================================================");
 		}
 
-		return allRides;
+		// Fat path (non-stub, OR stub mode with stop-based enabled): allRides is the
+		// sorted + reindexed full list. Wrap as-is, preserving byte-identical output.
+		return new MaterializedRideStore(allRides);
 	}
 
 	/**
 	 * Log completion summary and return rides for early exit.
+	 *
+	 * <p>The early-exit paths ({@code maxDegree < 2} and {@code maxDegree <= 2}) never
+	 * produce stubs (degree &ge; 3) and never sort/reindex on master, so the fat
+	 * {@code allRides} list is wrapped as-is in a {@link MaterializedRideStore}.
 	 */
-	private List<Ride> completeEarly(long algorithmStartTime, String reason) {
+	private RideStore completeEarly(long algorithmStartTime, String reason) {
 		long totalElapsed = System.currentTimeMillis() - algorithmStartTime;
 		double totalSeconds = totalElapsed / 1000.0;
 		log.info("");
@@ -406,7 +452,7 @@ public final class BamasEngine {
 		log.info("======================================================================");
 		log.info("");
 		network.logRoutingStatistics();
-		return allRides;
+		return new MaterializedRideStore(allRides);
 	}
 
 	private ShareabilityGraph buildGraph(List<Ride> pairRides) {

@@ -21,6 +21,7 @@ import org.matsim.api.core.v01.Scenario;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasEngine;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStores;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.exmas.ExMasReferenceEngine;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
@@ -139,13 +140,13 @@ class LyonResidualD4RegressionTest {
 				targetRequests.add(request);
 			}
 
-			List<Ride> rides = new BamasEngine(
+			List<Ride> rides = RideStores.toList(new BamasEngine(
 					cache,
 					validator,
 					exMasConfig.getSearchHorizon(),
 					exMasConfig.getMaxPoolingDegree(),
 					exMasConfig)
-					.run(targetRequests);
+					.run(targetRequests));
 
 			if (!containsRequestSet(rides, residualSet)) {
 				missing.add(Arrays.toString(residualSet) + " missing d3 parents="
@@ -217,13 +218,13 @@ class LyonResidualD4RegressionTest {
 		exMasConfig.setCalcShapleyValues(false);
 		exMasConfig.setMaxPoolingDegree(4);
 		exMasConfig.setAlgorithmProcessCount(1);
-		List<Ride> bamasRides = new BamasEngine(
+		List<Ride> bamasRides = RideStores.toList(new BamasEngine(
 				cache,
 				validator,
 				exMasConfig.getSearchHorizon(),
 				exMasConfig.getMaxPoolingDegree(),
 				exMasConfig)
-				.run(targetRequests);
+				.run(targetRequests));
 
 		assertTrue(containsRequestSet(referenceRides, BROAD_R2_ONLY_D4_SET),
 				"Reference ExMAS should admit former broad R2-only d=4 set after routing fixes: "
@@ -292,13 +293,13 @@ class LyonResidualD4RegressionTest {
 		exMasConfig.setCalcShapleyValues(false);
 		exMasConfig.setMaxPoolingDegree(3);
 		exMasConfig.setAlgorithmProcessCount(1);
-		List<Ride> bamasRides = new BamasEngine(
+		List<Ride> bamasRides = RideStores.toList(new BamasEngine(
 				cache,
 				validator,
 				exMasConfig.getSearchHorizon(),
 				exMasConfig.getMaxPoolingDegree(),
 				exMasConfig)
-				.run(targetRequests);
+				.run(targetRequests));
 
 		assertTrue(containsRequestSet(bamasRides, R2_ONLY_D3_DELAY_BOUNDARY_SET),
 				"BAMAS should admit representative R2-only delay-boundary d=3 set: "

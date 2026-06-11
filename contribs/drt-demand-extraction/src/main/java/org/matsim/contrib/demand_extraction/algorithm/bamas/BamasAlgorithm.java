@@ -5,7 +5,7 @@ import java.util.Map;
 
 import org.matsim.contrib.demand_extraction.algorithm.AlgorithmResult;
 import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithm;
-import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStore;
 // BamasEngine is in this same package (algorithm.bamas) — no explicit import needed.
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
@@ -46,7 +46,7 @@ public class BamasAlgorithm implements ExMasAlgorithm {
 				exMasConfig,
 				null,
 				budgetToConstraints);
-		List<Ride> rides = engine.run(requests);
+		RideStore rides = engine.run(requests);
 		// Diagnostics are wired in Phase 3.4 once BamasEngine exposes EnumerationStats.
 		return new AlgorithmResult(rides, engine.getHyperPooledRides(), Map.of());
 	}

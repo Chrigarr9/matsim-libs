@@ -163,16 +163,17 @@ public class DemandExtractionListener implements ShutdownListener {
 		log.info("STEP 4: Running {} ride generation algorithm", exMasConfig.getAlgorithm());
 		log.info("----------------------------------------------------------------------");
 		AlgorithmResult algorithmResult = algorithm.run(requests);
-		List<Ride> rides = algorithmResult.rides();
 
-		// Post-process rides with advanced metrics (maxCost, Shapley, predecessors)
+		// Post-process rides with advanced metrics (maxCost, Shapley, predecessors).
+		// The algorithm hands back a RideStore (streaming StubRideStore on the memory-critical
+		// D2D path, MaterializedRideStore otherwise); the post-processor materializes through it.
 		RidePostProcessor.MaxCostResolver maxCostResolver = (budget, request, tt, dist) -> {
 			Person person = population.getPersons().get(request.personId);
 			if (person == null) return 0.0;
 			return budgetToConstraintsCalculator.budgetToMaxCost(budget, person, tt, dist, request);
 		};
 		RidePostProcessor postProcessor = new RidePostProcessor(exMasConfig, networkCache, maxCostResolver);
-		rides = postProcessor.process(new MaterializedRideStore(rides));
+		List<Ride> rides = postProcessor.process(algorithmResult.rides());
 
 		// 5. Write DRT Requests Output + rides + connection cache
 		log.info("");

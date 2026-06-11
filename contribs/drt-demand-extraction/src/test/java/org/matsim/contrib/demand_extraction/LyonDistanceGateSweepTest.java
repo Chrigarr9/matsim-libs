@@ -26,6 +26,7 @@ import org.matsim.api.core.v01.Scenario;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasEngine;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStores;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.engine.PostExtensionPruner;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
@@ -201,12 +202,12 @@ class LyonDistanceGateSweepTest {
 					exMasConfig.getPruningDistanceSavingsMinDegree());
 
 			long startMs = System.currentTimeMillis();
-			List<Ride> rawRides = new BamasEngine(
+			List<Ride> rawRides = RideStores.toList(new BamasEngine(
 					cache, validator,
 					exMasConfig.getSearchHorizon(),
 					exMasConfig.getMaxPoolingDegree(),
 					exMasConfig)
-					.run(new ArrayList<>(requests));
+					.run(new ArrayList<>(requests)));
 			long elapsedMs = System.currentTimeMillis() - startMs;
 
 			log.info("SWEEP {}: {} raw rides in {}s", label, rawRides.size(),

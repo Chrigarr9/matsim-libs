@@ -148,12 +148,12 @@ public final class RunDemandExtractionPhase2 {
 		log.info("PHASE 2 HEAP at algorithm start: {} MB (used)",
 				heapAtAlgStartBytes / (1024L * 1024L));
 		AlgorithmResult result = algorithm.run(requests);
-		List<Ride> rides = result.rides();
-		log.info("PHASE 2 STEP 3: algorithm produced {} rides", rides.size());
+		log.info("PHASE 2 STEP 3: algorithm produced {} rides", result.rides().size());
 
 		log.info("PHASE 2 STEP 4: post-processing (maxCost + Shapley + predecessors)");
 		RidePostProcessor postProcessor = injector.getInstance(RidePostProcessor.class);
-		rides = postProcessor.process(new MaterializedRideStore(rides));
+		// result.rides() is a RideStore (streaming or materialized); process through it.
+		List<Ride> rides = postProcessor.process(result.rides());
 
 		log.info("PHASE 2 STEP 5: writing outputs");
 		Path demandDir = a.outputDir.resolve("drt_demand");
