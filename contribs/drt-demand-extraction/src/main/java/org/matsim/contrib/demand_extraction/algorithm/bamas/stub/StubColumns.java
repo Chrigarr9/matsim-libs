@@ -1,6 +1,7 @@
 package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
 
 import java.util.Arrays;
+import java.util.Collection;
 
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
@@ -172,6 +173,120 @@ public final class StubColumns {
 		int firstLocal = OrderingCodec.unpack(originOrder[row], degree)[0];
 		int globalIdx  = setsFlat[row * degree + firstLocal];
 		return requestTable[globalIdx].requestTime;
+	}
+
+	// -----------------------------------------------------------------------
+	// Sorted merge factory
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Merge a non-empty collection of same-degree {@link StubColumns} buffers into a
+	 * single new {@link StubColumns} whose rows are in ascending lexicographic order
+	 * of their {@code setsFlat} slices.
+	 *
+	 * <h3>Determinism guarantee</h3>
+	 * In {@code BamasRideExtender.extendRides}, each candidate request-set hash is
+	 * claimed <em>exactly once</em> by the producer (via {@code claimedHashes.add}),
+	 * so each set is processed by exactly one worker and appended to exactly one
+	 * per-thread buffer exactly once.  Consequently the slice keys are globally
+	 * unique across all input buffers, and the lexicographic order is a <em>total
+	 * order</em>.  A total order on unique keys is independent of (a) which buffer
+	 * a row originated from, (b) the order in which buffers appear in
+	 * {@code parts}.  Task 11 wires the engine to use this merged container; the
+	 * iteration-order-independence is the guarantee that parallel enumeration
+	 * continues to produce byte-identical output.
+	 *
+	 * <h3>Algorithm</h3>
+	 * Builds an index-permutation array of (buffer index, row index) references,
+	 * sorts it by the per-element lex comparator over the degree-length slice, then
+	 * calls {@link #addRow} in sorted order into a fresh container.  The backing
+	 * arrays are never copied twice.
+	 *
+	 * <h3>Empty collection</h3>
+	 * Requires non-empty input: without any part there is no degree information
+	 * available.  Use {@code new StubColumns(degree)} directly for the empty case.
+	 *
+	 * @param parts non-empty collection of same-degree buffers; buffers may be empty
+	 * @return a new {@link StubColumns} containing all rows in ascending lex order
+	 * @throws IllegalArgumentException if {@code parts} is empty or buffers have
+	 *         differing degrees
+	 */
+	public static StubColumns mergeSorted(Collection<StubColumns> parts) {
+		if (parts.isEmpty()) {
+			throw new IllegalArgumentException(
+					"mergeSorted requires non-empty collection; use new StubColumns(degree) for the empty case");
+		}
+
+		// Validate all parts share one degree
+		int degree = -1;
+		for (StubColumns part : parts) {
+			if (degree == -1) {
+				degree = part.degree;
+			} else if (part.degree != degree) {
+				throw new IllegalArgumentException(
+						"All parts must share one degree; found " + degree + " and " + part.degree);
+			}
+		}
+
+		// Count total rows and build flat index array: each entry encodes (partIndex, rowIndex).
+		// We keep parallel object + int arrays to avoid boxing.
+		int totalRows = 0;
+		for (StubColumns part : parts) {
+			totalRows += part.size;
+		}
+
+		// Store parts as an array for indexed access during sort.
+		StubColumns[] partArray = parts.toArray(new StubColumns[0]);
+
+		// partIdx[i] and rowIdx[i] together identify the i-th candidate row.
+		int[] partIdx = new int[totalRows];
+		int[] rowIdx  = new int[totalRows];
+		int pos = 0;
+		for (int p = 0; p < partArray.length; p++) {
+			int sz = partArray[p].size;
+			for (int r = 0; r < sz; r++) {
+				partIdx[pos] = p;
+				rowIdx[pos]  = r;
+				pos++;
+			}
+		}
+
+		// Sort by lex order of setsFlat slice. Within a single degree all slices are
+		// equal-length (degree elements), so the length-tie-break is never needed.
+		// Using an Integer[] sort-by-index rather than sorting primitives directly.
+		final int d = degree; // effectively final for lambda
+		Integer[] order = new Integer[totalRows];
+		for (int i = 0; i < totalRows; i++) order[i] = i;
+		Arrays.sort(order, (ia, ib) -> {
+			StubColumns pa = partArray[partIdx[ia]];
+			int ra = rowIdx[ia];
+			StubColumns pb = partArray[partIdx[ib]];
+			int rb = rowIdx[ib];
+			int baseA = ra * d;
+			int baseB = rb * d;
+			for (int k = 0; k < d; k++) {
+				int cmp = Integer.compare(pa.setsFlat[baseA + k], pb.setsFlat[baseB + k]);
+				if (cmp != 0) return cmp;
+			}
+			return 0;
+		});
+
+		// Construct merged container in sorted order.
+		StubColumns merged = new StubColumns(d);
+		for (int i = 0; i < totalRows; i++) {
+			int idx = order[i];
+			StubColumns src = partArray[partIdx[idx]];
+			int r = rowIdx[idx];
+			merged.addRow(
+					Arrays.copyOfRange(src.setsFlat, r * d, r * d + d),
+					src.originOrder[r],
+					src.destOrder[r],
+					src.rideDistanceDm[r],
+					src.travelTimeDs[r],
+					src.flags[r]
+			);
+		}
+		return merged;
 	}
 
 	// -----------------------------------------------------------------------

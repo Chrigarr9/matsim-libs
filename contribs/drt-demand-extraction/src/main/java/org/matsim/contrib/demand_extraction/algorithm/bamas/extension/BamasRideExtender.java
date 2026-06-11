@@ -24,6 +24,8 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.graph.DegreeGraph;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStub;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns;
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
@@ -57,6 +59,11 @@ public final class BamasRideExtender {
 	private final DegreeGraph prevDegreeGraph;
 	// Stored after extendRides completes: valid rides by set hash, used for graph building
 	private ConcurrentHashMap<Long, Ride> lastResultBySetHash;
+	// Stub-mode shadow: compact SoA container for the last degree's winning rides,
+	// sorted in the same lex order as the fat results list. Null when stub mode is off.
+	// Task 11 wires the engine + buildDegreeGraph to consume lastDegreeStubs and drops
+	// the fat resultBySetHash path.
+	private StubColumns lastDegreeStubs;
 
 	public BamasRideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						List<DrtRequest> requests, ExMasConfigGroup exMasConfig) {
@@ -169,6 +176,10 @@ public final class BamasRideExtender {
 		final int parentsTotal = parents.size();
 		AtomicLong lastProgressLogTime = new AtomicLong(System.currentTimeMillis());
 		ConcurrentHashMap<Long, EnumerationStats> threadStatsMap = new ConcurrentHashMap<>();
+		// Per-thread stub buffers: keyed by Thread.currentThread().getId(). Only populated
+		// when stubModeEnabled; otherwise stays empty. Each thread only writes to its own
+		// key, so no locking is needed beyond computeIfAbsent's atomicity on the map.
+		ConcurrentHashMap<Long, StubColumns> stubBuffers = new ConcurrentHashMap<>();
 
 		BlockingQueue<ExtensionTask> queue = new ArrayBlockingQueue<>(Math.max(16, parallelism * 4));
 		ExecutorService workers = Executors.newFixedThreadPool(parallelism);
@@ -196,6 +207,13 @@ public final class BamasRideExtender {
 					if (bestRide != null) {
 						resultBySetHash.put(task.newSetHash, bestRide);
 						resultsFound.incrementAndGet();
+						if (exMasConfig.isStubModeEnabled()) {
+							RideStub s = RideStub.fromRide(bestRide);
+							stubBuffers.computeIfAbsent(Thread.currentThread().getId(),
+									id -> new StubColumns(targetDegree))
+									.addRow(s.sortedSet, s.originPacked, s.destPacked,
+											s.distDm, s.ttDs, s.flags);
+						}
 					}
 
 					// Progress log every 30 seconds
@@ -302,6 +320,16 @@ public final class BamasRideExtender {
 
 		// Store results for graph building (accessed by buildDegreeGraph)
 		this.lastResultBySetHash = resultBySetHash;
+
+		// Stub-mode shadow: merge per-worker buffers into one sorted StubColumns.
+		// Guarded so the fat path (flag off) is byte-identical to before this task.
+		if (exMasConfig.isStubModeEnabled()) {
+			this.lastDegreeStubs = stubBuffers.isEmpty()
+					? new StubColumns(targetDegree > 0 ? targetDegree : 1)
+					: StubColumns.mergeSorted(stubBuffers.values());
+		}
+		// Task 11 wires the engine + buildDegreeGraph to consume lastDegreeStubs and drops
+		// the fat resultBySetHash path.
 
 		// Deterministic output order: sort by sorted-request-indices lex.
 		// Required because resultBySetHash.values() iteration is not deterministic
