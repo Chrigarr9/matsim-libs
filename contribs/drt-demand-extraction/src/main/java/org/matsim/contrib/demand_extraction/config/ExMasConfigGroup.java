@@ -320,6 +320,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private double extensionParentsMmrLambda = 0.0;           // diversity penalty; 0 == plain TOP_K
 	private long extensionParentsTier2NodeCap = 0L;          // 0 = hard filter; >0 = total DFS node cap for unmarked parents
 
+	// ── checkpoint/resume (Plan A3). Directory for per-degree stub checkpoints + the
+	// connection-cache journal. Empty string ("") = checkpointing OFF (no code path active).
+	// When set, every degree barrier persists its StubColumns + (at loop entry) the pre-prune
+	// pair universe + cache journal, so a week-long exact 100% run resumes byte-identically
+	// after a crash. The journal is correctness-required (not an optimization): SSSP-populated
+	// cache entries from the skipped pair-gen phase are not bit-reproducible by re-routing, so
+	// a checkpoint dir without a journal can only support inspection, never bit-parity resume.
+	// One knob, one contract: checkpointDir set ⇒ stubs + pair universe + journal all written.
+	private String checkpointDir = "";
+
 	// Calculate Shapley values for rides (distance contribution per passenger)
 	private boolean calcShapleyValues = true;
 
@@ -1197,6 +1207,21 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		return extensionParentsTier2NodeCap;
 	}
 
+	@StringGetter("checkpointDir")
+	public String getCheckpointDir() {
+		return checkpointDir;
+	}
+
+	@StringSetter("checkpointDir")
+	public void setCheckpointDir(String checkpointDir) {
+		this.checkpointDir = checkpointDir == null ? "" : checkpointDir;
+	}
+
+	/** True when per-degree checkpointing/resume is enabled (i.e. {@link #getCheckpointDir()} is non-empty). */
+	public boolean isCheckpointingEnabled() {
+		return checkpointDir != null && !checkpointDir.isEmpty();
+	}
+
 	@StringSetter("extensionParentsTier2NodeCap")
 	public void setExtensionParentsTier2NodeCap(long extensionParentsTier2NodeCap) {
 		this.extensionParentsTier2NodeCap = Math.max(0L, extensionParentsTier2NodeCap);
@@ -1621,6 +1646,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"populates remainingBudgets once after the extension loop. Safe ONLY when budget " +
 				"validation never rejects (e.g. Bavaria). May drop feasible sets on scenarios " +
 				"where budget actively rejects orderings. Default: false");
+		map.put("checkpointDir",
+			"Directory for per-degree stub checkpoints + connection-cache journal (Plan A3). " +
+			"Empty (\"\") = checkpointing OFF. When set, a crashed week-long exact 100% extraction " +
+			"resumes byte-identically from the last completed degree. The journal is part of the " +
+			"resume contract (SSSP cache entries are not re-routable bit-exactly), so one knob writes " +
+			"stubs + pre-prune pair universe + journal together. Default: \"\"");
 		map.put("searchHorizon",
 				"Time horizon for pairing requests in ExMAS algorithm (seconds). Requests within this window can be paired. Default: 600 (10 min)");
 		map.put("maxPoolingDegree",
