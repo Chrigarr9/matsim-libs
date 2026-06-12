@@ -855,7 +855,8 @@ public class HyperPoolGenerator {
      *         or {@code null} if budget-aware mode is off or provider is absent
      */
     private Map<StopToStopRideWrapper, double[]> computePerWrapperMaxReloc(
-            Set<StopToStopRideWrapper> cluster) {
+            Set<StopToStopRideWrapper> cluster,
+            Map<StopToStopRideWrapper, Ride> clusterRideCache) {
 
         if (walkBudgetProvider == null || !config.isEnableBudgetAwareConstraints()) {
             return null;
@@ -863,7 +864,7 @@ public class HyperPoolGenerator {
 
         Map<StopToStopRideWrapper, double[]> result = new HashMap<>();
         for (StopToStopRideWrapper wrapper : cluster) {
-            Ride sourceRide = wrapper.materialize(); // stub mode: pinned-stop replay
+            Ride sourceRide = clusterRideCache.get(wrapper); // pre-materialized once per cluster
             int deg = sourceRide.getDegree();
             double[] remainingBudgets = sourceRide.getRemainingBudgets();
             double[] passengerTravelTimes = sourceRide.getPassengerTravelTimes();
@@ -893,14 +894,45 @@ public class HyperPoolGenerator {
     }
 
     /**
+     * Plan A2 Task 6 — builds the per-cluster materialization cache.
+     *
+     * <p>Each wrapper's {@link StopToStopRideWrapper#materialize()} is called exactly ONCE
+     * per cluster (not once per downstream read site).  In fat mode this is a no-op lambda
+     * ({@code () -> ride}); in stub mode it triggers a pinned-stop replay, which is
+     * non-trivial.  Caching ensures:
+     * <ul>
+     *   <li>Stub mode pays the replay cost only once per cluster.</li>
+     *   <li>All downstream reads ({@code computePerWrapperMaxReloc}, source-ride collection,
+     *       per-passenger array build) see the same {@link Ride} instance — no risk of
+     *       a replay returning a differently-stamped copy.</li>
+     * </ul>
+     *
+     * @param cluster the set of wrappers whose rides must be materialized
+     * @return an identity-keyed map from wrapper to its materialized {@link Ride}
+     */
+    private Map<StopToStopRideWrapper, Ride> buildClusterRideCache(Set<StopToStopRideWrapper> cluster) {
+        Map<StopToStopRideWrapper, Ride> cache = new java.util.IdentityHashMap<>(cluster.size() * 2);
+        for (StopToStopRideWrapper wrapper : cluster) {
+            cache.put(wrapper, wrapper.materialize());
+        }
+        return cache;
+    }
+
+    /**
      * Generates a hyper-pooled ride from a cluster.
      */
     private HyperPooledRide generateHyperPooledRide(
             Set<StopToStopRideWrapper> cluster,
             int index) {
 
+        // Plan A2 Task 6: materialize each wrapper ONCE for the entire cluster processing.
+        // In fat mode materialize() is a no-op lambda; in stub mode it runs pinned-stop replay.
+        // Building the cache here ensures all downstream reads share the same Ride instances.
+        Map<StopToStopRideWrapper, Ride> clusterRideCache = buildClusterRideCache(cluster);
+
         // Compute per-pax relocation caps (null when flag is off)
-        Map<StopToStopRideWrapper, double[]> perWrapperMaxReloc = computePerWrapperMaxReloc(cluster);
+        Map<StopToStopRideWrapper, double[]> perWrapperMaxReloc =
+                computePerWrapperMaxReloc(cluster, clusterRideCache);
 
         // Generate stop sequence
         StopSequence sequence = generateStopSequence(cluster, stopRelocator, perWrapperMaxReloc);
@@ -928,7 +960,7 @@ public class HyperPoolGenerator {
         List<Ride> sourceRides = new ArrayList<>();
 
         for (StopToStopRideWrapper wrapper : cluster) {
-            Ride clusterRide = wrapper.materialize(); // stub mode: pinned-stop replay (once per wrapper)
+            Ride clusterRide = clusterRideCache.get(wrapper); // pre-materialized once per cluster
             sourceRides.add(clusterRide);
             DrtRequest[] rideRequests = clusterRide.getRequests();
             for (DrtRequest req : rideRequests) {
@@ -951,7 +983,7 @@ public class HyperPoolGenerator {
         // Calculate per-passenger metrics
         int passengerIdx = 0;
         for (StopToStopRideWrapper wrapper : cluster) {
-            Ride sourceRide = wrapper.materialize(); // stub mode: pinned-stop replay
+            Ride sourceRide = clusterRideCache.get(wrapper); // pre-materialized once per cluster
             double[] sourceAccessWalks = sourceRide.getAccessWalkDistances();
             double[] sourceEgressWalks = sourceRide.getEgressWalkDistances();
 
