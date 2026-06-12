@@ -117,7 +117,7 @@ class LyonResidualD4RegressionTest {
 		TravelTime tt = new FreeSpeedTravelTime();
 		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
 		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+				.createWithRouting(network, tt, td, 900);
 
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		applyR2(exMasConfig);
@@ -185,7 +185,7 @@ class LyonResidualD4RegressionTest {
 		TravelTime tt = new FreeSpeedTravelTime();
 		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
 		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+				.createWithRouting(network, tt, td, 900);
 
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		exMasConfig.setMaxPoolingDegree(4);
@@ -260,7 +260,7 @@ class LyonResidualD4RegressionTest {
 		TravelTime tt = new FreeSpeedTravelTime();
 		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
 		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+				.createWithRouting(network, tt, td, 900);
 
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		exMasConfig.setMaxPoolingDegree(3);

@@ -42,7 +42,7 @@ import org.matsim.core.trafficmonitoring.FreeSpeedTravelTime;
 import org.matsim.core.utils.misc.OptionalTime;
 
 /**
- * Routing determinism on the Lyon network with {@link TimeDistanceTravelDisutility}:
+ * Routing determinism on the Lyon network with {@link DeterministicTravelDisutility}:
  * Dijkstra ({@link LeastCostPathTree}) and A* ({@link SpeedyALTFactory}) must agree
  * byte-for-byte on cost, travel time, and distance for the same OD pairs.
  *
@@ -59,8 +59,6 @@ class RoutingDeterminismTest {
 
 	private static final Logger log = LogManager.getLogger(RoutingDeterminismTest.class);
 
-	private static final double TIME_COEF = 1.0;
-	private static final double DIST_COEF = 1e-4;
 	private static final int N_OD_PAIRS = 2000;
 	private static final long SEED = 42L;
 	private static final int REQUEST_1010 = 1010;
@@ -68,11 +66,96 @@ class RoutingDeterminismTest {
 	private static final int REQUEST_3265 = 3265;
 
 	@Test
-	void dijkstraAndSpeedyAltProduceIdenticalPathsUnderTimeDistanceDisutility() throws Exception {
+	void dijkstraAndSpeedyAltProduceIdenticalPathsUnderDeterministicDisutility() throws Exception {
 		Network network = loadLyonNetwork();
 		TravelTime tt = new FreeSpeedTravelTime();
-		TravelDisutility td = new TimeDistanceTravelDisutility(tt, TIME_COEF, DIST_COEF);
+		TravelDisutility td = DeterministicTravelDisutility.wrap(
+				new OnlyTimeDependentTravelDisutility(tt), tt, network);
+		assertEnginesAgree(network, tt, td);
+	}
 
+	@Test
+	void parallelSpeedyAltMatchesSequentialUnderDeterministicDisutility() throws Exception {
+		Network network = loadLyonNetwork();
+		TravelTime tt = new FreeSpeedTravelTime();
+		assertParallelMatchesSequential(network, tt,
+				DeterministicTravelDisutility.wrap(
+						new OnlyTimeDependentTravelDisutility(tt), tt, network),
+				"Deterministic");
+	}
+
+	@Test
+	void parallelSpeedyAltMatchesSequentialUnderOnlyTimeDependentDisutility() throws Exception {
+		// Belt-and-braces check for option 1 of the routing-determinism plan: keep the
+		// existing OnlyTimeDependent disutility but enable parallel SpeedyALT in the
+		// fast comparison test. This proves parallel ↔ sequential is byte-identical
+		// even without the TimeDistance fix.
+		Network network = loadLyonNetwork();
+		TravelTime tt = new FreeSpeedTravelTime();
+		assertParallelMatchesSequential(network, tt,
+				new org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutility(tt),
+				"OnlyTimeDependent");
+	}
+
+	@Test
+	void dijkstraAndSpeedyAltAgreeUnderOfflineTravelTimes() throws Exception {
+		String ttTsv = System.getenv("LYON_TRAVEL_TIMES_TSV");
+		assumeTrue(ttTsv != null && !ttTsv.isBlank(), "LYON_TRAVEL_TIMES_TSV required");
+
+		Network network = loadLyonNetwork();
+		// Production loader: freespeed clamp keeps SpeedyALT's landmark heuristic
+		// (built from freespeed-time minimums) admissible — without it a single TSV
+		// value below free-flow lets A* return genuinely suboptimal paths that
+		// LeastCostPathTree does not, regardless of tie-breaking.
+		TravelTime tt = OfflineTravelTimes.load(ttTsv);
+		TravelDisutility td = DeterministicTravelDisutility.wrap(
+				new OnlyTimeDependentTravelDisutility(tt), tt, network);
+		assertEnginesAgree(network, tt, td);
+	}
+
+	@Test
+	void deterministicCacheMissDoesNotRouteDirectShortcutSlowerThanKnownViaOrigins() throws Exception {
+		String requestsCsv = System.getenv("LYON_REQUESTS_CSV");
+		assumeTrue(requestsCsv != null && !requestsCsv.isBlank(), "LYON_REQUESTS_CSV required");
+
+		Network network = loadLyonNetwork();
+		TravelTime tt = new FreeSpeedTravelTime();
+		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
+		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture
+				.createWithRouting(network, tt, td, 900);
+
+		Map<Integer, RoutePoint> routePoints = loadRoutePoints(requestsCsv,
+				REQUEST_1010, REQUEST_3259, REQUEST_3265);
+		RoutePoint r1010 = routePoints.get(REQUEST_1010);
+		RoutePoint r3259 = routePoints.get(REQUEST_3259);
+		RoutePoint r3265 = routePoints.get(REQUEST_3265);
+		assertTrue(r1010 != null && r3259 != null && r3265 != null,
+				"Lyon regression requests must exist in the demand CSV");
+
+		double departureTime = r1010.requestTime;
+		@SuppressWarnings("unchecked")
+		Id<Link>[] firstTargets = new Id[] { r3259.originLinkId };
+		cache.batchPrecompute(r1010.originLinkId, departureTime, firstTargets, 5000.0);
+		TravelSegment first = cache.getSegment(r1010.originLinkId, r3259.originLinkId, departureTime);
+		assertTrue(first.isReachable(), "1010 origin -> 3259 origin must be reachable");
+
+		double secondDepartureTime = departureTime + first.getTravelTime();
+		@SuppressWarnings("unchecked")
+		Id<Link>[] secondTargets = new Id[] { r3265.originLinkId };
+		cache.batchPrecompute(r3259.originLinkId, secondDepartureTime, secondTargets, 5000.0);
+		TravelSegment second = cache.getSegment(r3259.originLinkId, r3265.originLinkId, secondDepartureTime);
+		assertTrue(second.isReachable(), "3259 origin -> 3265 origin must be reachable");
+
+		TravelSegment direct = cache.getSegment(r1010.originLinkId, r3265.originLinkId, departureTime);
+		assertTrue(direct.isReachable(), "1010 origin -> 3265 origin must be reachable");
+
+		double via = first.getTravelTime() + second.getTravelTime();
+		assertTrue(direct.getTravelTime() <= via + 1e-9,
+				"direct deterministic cache miss must not be slower than known via-origin path: direct="
+						+ direct.getTravelTime() + ", via=" + via);
+	}
+
+	private void assertEnginesAgree(Network network, TravelTime tt, TravelDisutility td) {
 		SpeedyGraph speedyGraph = SpeedyGraphBuilder.build(network);
 		LeastCostPathTree tree = new LeastCostPathTree(speedyGraph, tt, td);
 		LeastCostPathCalculator alt = new SpeedyALTFactory().createPathCalculator(network, td, tt);
@@ -125,69 +208,6 @@ class RoutingDeterminismTest {
 				compared, unreachable, N_OD_PAIRS - compared - unreachable);
 		assertTrue(compared > N_OD_PAIRS / 2,
 				"compared only " + compared + " OD pairs; sample size suspiciously low");
-	}
-
-	@Test
-	void parallelSpeedyAltMatchesSequentialUnderTimeDistanceDisutility() throws Exception {
-		Network network = loadLyonNetwork();
-		TravelTime tt = new FreeSpeedTravelTime();
-		assertParallelMatchesSequential(network, tt,
-				new TimeDistanceTravelDisutility(tt, TIME_COEF, DIST_COEF), "TimeDistance");
-	}
-
-	@Test
-	void parallelSpeedyAltMatchesSequentialUnderOnlyTimeDependentDisutility() throws Exception {
-		// Belt-and-braces check for option 1 of the routing-determinism plan: keep the
-		// existing OnlyTimeDependent disutility but enable parallel SpeedyALT in the
-		// fast comparison test. This proves parallel ↔ sequential is byte-identical
-		// even without the TimeDistance fix.
-		Network network = loadLyonNetwork();
-		TravelTime tt = new FreeSpeedTravelTime();
-		assertParallelMatchesSequential(network, tt,
-				new org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutility(tt),
-				"OnlyTimeDependent");
-	}
-
-	@Test
-	void deterministicCacheMissDoesNotRouteDirectShortcutSlowerThanKnownViaOrigins() throws Exception {
-		String requestsCsv = System.getenv("LYON_REQUESTS_CSV");
-		assumeTrue(requestsCsv != null && !requestsCsv.isBlank(), "LYON_REQUESTS_CSV required");
-
-		Network network = loadLyonNetwork();
-		TravelTime tt = new FreeSpeedTravelTime();
-		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
-		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
-
-		Map<Integer, RoutePoint> routePoints = loadRoutePoints(requestsCsv,
-				REQUEST_1010, REQUEST_3259, REQUEST_3265);
-		RoutePoint r1010 = routePoints.get(REQUEST_1010);
-		RoutePoint r3259 = routePoints.get(REQUEST_3259);
-		RoutePoint r3265 = routePoints.get(REQUEST_3265);
-		assertTrue(r1010 != null && r3259 != null && r3265 != null,
-				"Lyon regression requests must exist in the demand CSV");
-
-		double departureTime = r1010.requestTime;
-		@SuppressWarnings("unchecked")
-		Id<Link>[] firstTargets = new Id[] { r3259.originLinkId };
-		cache.batchPrecompute(r1010.originLinkId, departureTime, firstTargets, 5000.0);
-		TravelSegment first = cache.getSegment(r1010.originLinkId, r3259.originLinkId, departureTime);
-		assertTrue(first.isReachable(), "1010 origin -> 3259 origin must be reachable");
-
-		double secondDepartureTime = departureTime + first.getTravelTime();
-		@SuppressWarnings("unchecked")
-		Id<Link>[] secondTargets = new Id[] { r3265.originLinkId };
-		cache.batchPrecompute(r3259.originLinkId, secondDepartureTime, secondTargets, 5000.0);
-		TravelSegment second = cache.getSegment(r3259.originLinkId, r3265.originLinkId, secondDepartureTime);
-		assertTrue(second.isReachable(), "3259 origin -> 3265 origin must be reachable");
-
-		TravelSegment direct = cache.getSegment(r1010.originLinkId, r3265.originLinkId, departureTime);
-		assertTrue(direct.isReachable(), "1010 origin -> 3265 origin must be reachable");
-
-		double via = first.getTravelTime() + second.getTravelTime();
-		assertTrue(direct.getTravelTime() <= via + 1e-9,
-				"direct deterministic cache miss must not be slower than known via-origin path: direct="
-						+ direct.getTravelTime() + ", via=" + via);
 	}
 
 	private void assertParallelMatchesSequential(Network network, TravelTime tt,

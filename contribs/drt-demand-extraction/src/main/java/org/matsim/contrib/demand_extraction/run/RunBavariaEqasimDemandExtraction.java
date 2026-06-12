@@ -19,6 +19,7 @@ import org.eqasim.core.components.config.EqasimConfigGroup;
 import org.eqasim.core.simulation.mode_choice.EqasimModeChoiceModule;
 import org.matsim.api.core.v01.Scenario;
 import org.matsim.api.core.v01.TransportMode;
+import org.matsim.contrib.demand_extraction.algorithm.network.OfflineTravelTimes;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.CommuteFilter;
 import org.matsim.contrib.demand_extraction.demand.DemandExtractionConfigValidator;
@@ -76,10 +77,6 @@ public class RunBavariaEqasimDemandExtraction {
 	private static final double FILTER_CENTER_X = 709000.0;
 	private static final double FILTER_CENTER_Y = 5423000.0;
 	private static final double TRIP_FILTER_RADIUS_KM = 30.0;
-
-	// 15-minute bins matching RunBavariaBaseSimulation / RunExportTravelTimes
-	private static final int TRAVEL_TIME_BIN_SIZE = 900;
-	private static final int TRAVEL_TIME_END = 36 * 3600;
 
 	public static final class ParsedArgs {
 		public final int sample;
@@ -226,7 +223,7 @@ public class RunBavariaEqasimDemandExtraction {
 		// bound TravelTime directly, restoring a proper routing cost gradient.
 		// Scoring is unaffected: eqasim goes through EqasimScoringAdapter, which reads
 		// BavariaModeParameters, not MATSim ModeParams.
-		TravelTime offlineTravelTime = loadOfflineTravelTimes(p.travelTimesPath);
+		TravelTime offlineTravelTime = OfflineTravelTimes.load(p.travelTimesPath);
 		controler.addOverridingModule(new org.matsim.core.controler.AbstractModule() {
 			@Override
 			public void install() {
@@ -296,25 +293,6 @@ public class RunBavariaEqasimDemandExtraction {
 				throw new RuntimeException("Failed to apply " + e.getKey(), ex);
 			}
 		}
-	}
-
-	// -------------------------------------------------------------------------
-	// Offline travel times loading (matches RunBavaria30kmDemandExtraction pattern)
-	// -------------------------------------------------------------------------
-
-	private static TravelTime loadOfflineTravelTimes(String ttFile) throws IOException {
-		log.info("Loading pre-computed travel times from: {}", ttFile);
-		var timeDiscretizer = new org.matsim.contrib.common.timeprofile.TimeDiscretizer(
-				TRAVEL_TIME_END, TRAVEL_TIME_BIN_SIZE);
-		java.net.URL ttUrl = Path.of(ttFile).toUri().toURL();
-		double[][] matrix = org.matsim.contrib.dvrp.trafficmonitoring.DvrpOfflineTravelTimes
-				.loadLinkTravelTimes(timeDiscretizer, ttUrl, "\t");
-		var baseTt = org.matsim.contrib.dvrp.trafficmonitoring.DvrpOfflineTravelTimes
-				.asTravelTime(timeDiscretizer, matrix);
-		log.info("Bound pre-computed travel times ({} time bins, clamped to {}h)",
-				timeDiscretizer.getIntervalCount(), TRAVEL_TIME_END / 3600);
-		return (link, time, person, vehicle) ->
-				baseTt.getLinkTravelTime(link, Math.min(time, TRAVEL_TIME_END), person, vehicle);
 	}
 
 	// -------------------------------------------------------------------------

@@ -168,7 +168,7 @@ class LyonPruningAblationTest {
 		TravelTime tt = new FreeSpeedTravelTime();
 		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
 		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+				.createWithRouting(network, tt, td, 900);
 		log.info("Routing cache ready (SpeedyALT deterministic).");
 
 		// ── 3. Requests ──────────────────────────────────────────────────────────

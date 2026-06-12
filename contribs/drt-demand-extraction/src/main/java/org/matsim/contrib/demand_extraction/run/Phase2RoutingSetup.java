@@ -1,20 +1,17 @@
 package org.matsim.contrib.demand_extraction.run;
 
 import java.io.IOException;
-import java.nio.file.Path;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.population.Person;
-import org.matsim.contrib.common.timeprofile.TimeDiscretizer;
-import org.matsim.contrib.demand_extraction.algorithm.network.TimeDistanceTravelDisutility;
-import org.matsim.contrib.dvrp.trafficmonitoring.DvrpOfflineTravelTimes;
+import org.matsim.contrib.demand_extraction.algorithm.network.DeterministicTravelDisutility;
+import org.matsim.contrib.demand_extraction.algorithm.network.OfflineTravelTimes;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.network.io.MatsimNetworkReader;
 import org.matsim.core.population.PopulationUtils;
+import org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutility;
 import org.matsim.core.router.speedy.SpeedyALTFactory;
 import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.TravelDisutility;
@@ -27,17 +24,14 @@ import org.matsim.vehicles.VehicleUtils;
 
 /**
  * Shared phase-2 routing setup: loads the network + offline travel times and
- * builds a SpeedyALT router with the deterministic time-distance disutility,
+ * builds a SpeedyALT router with the {@link DeterministicTravelDisutility} wrap,
  * exactly as the demand extraction does. Used by route/detour export runners so
  * their routing is bit-for-bit the phase-2 routing.
  */
 public final class Phase2RoutingSetup {
-    private static final Logger log = LogManager.getLogger(Phase2RoutingSetup.class);
 
-    public static final int TRAVEL_TIME_BIN_SIZE = 900;   // 15 min
-    public static final int TRAVEL_TIME_END = 36 * 3600;  // 36 h
-    private static final double DET_TIME_COEF = 1.0;
-    private static final double DET_DIST_COEF = 1e-9;
+    public static final int TRAVEL_TIME_BIN_SIZE = OfflineTravelTimes.TRAVEL_TIME_BIN_SIZE;
+    public static final int TRAVEL_TIME_END = OfflineTravelTimes.TRAVEL_TIME_END;
 
     public final Network network;
     public final LeastCostPathCalculator router;
@@ -56,8 +50,12 @@ public final class Phase2RoutingSetup {
         new MatsimNetworkReader(scenario.getNetwork()).readFile(networkPath);
         Network network = scenario.getNetwork();
 
-        TravelTime travelTime = loadOfflineTravelTimes(travelTimesPath);
-        TravelDisutility disutility = new TimeDistanceTravelDisutility(travelTime, DET_TIME_COEF, DET_DIST_COEF);
+        TravelTime travelTime = OfflineTravelTimes.load(travelTimesPath);
+        // Identical wrap to MatsimNetworkCache's injected path (Lyon fixture binds
+        // OnlyTimeDependentTravelDisutilityFactory for car), so route/detour exports
+        // are bit-for-bit the phase-2 routing.
+        TravelDisutility disutility = DeterministicTravelDisutility.wrap(
+                new OnlyTimeDependentTravelDisutility(travelTime), travelTime, network);
         LeastCostPathCalculator router = new SpeedyALTFactory().createPathCalculator(network, disutility, travelTime);
 
         Person dummyPerson = PopulationUtils.getFactory().createPerson(Id.createPersonId("phase2_dummy"));
@@ -66,15 +64,4 @@ public final class Phase2RoutingSetup {
         return new Phase2RoutingSetup(network, router, dummyPerson, dummyVehicle);
     }
 
-    private static TravelTime loadOfflineTravelTimes(String ttFile) throws IOException {
-        log.info("Loading pre-computed travel times from: {}", ttFile);
-        TimeDiscretizer td = new TimeDiscretizer(TRAVEL_TIME_END, TRAVEL_TIME_BIN_SIZE);
-        java.net.URL ttUrl = Path.of(ttFile).toUri().toURL();
-        double[][] matrix = DvrpOfflineTravelTimes.loadLinkTravelTimes(td, ttUrl, "\t");
-        TravelTime baseTt = DvrpOfflineTravelTimes.asTravelTime(td, matrix);
-        log.info("Bound pre-computed travel times ({} bins, clamped to {}h)",
-                td.getIntervalCount(), TRAVEL_TIME_END / 3600);
-        return (link, time, person, vehicle) ->
-                baseTt.getLinkTravelTime(link, Math.min(time, TRAVEL_TIME_END), person, vehicle);
-    }
 }

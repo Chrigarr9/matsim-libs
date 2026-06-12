@@ -114,11 +114,11 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// exists
 	private String drtRoutingMode = "car";
 
-	// Network modes allowed for DRT routing (filters links by allowedModes)
-	// If empty/null, all links are used (for ease of use)
-	// Example: Set.of("car") = only links where car is allowed
-	// Set.of("car", "truck") = links where car OR truck allowed
-	// Set.of() or null = all links (no filtering)
+	// Network link mode filter for HyperPool stop-finding (StopFinderFactory ->
+	// LinkCandidateFinder). Only links whose allowedModes intersect this set are
+	// considered as stop candidates. Empty/null = all links admitted (no filtering).
+	// Example: Set.of("car") = only car-accessible links;
+	// Set.of("car", "truck") = links where car OR truck is allowed.
 	private Set<String> drtAllowedModes = Set.of("car");
 
 	// Modes that represent private vehicles (create subtour dependencies)
@@ -213,11 +213,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	 * total-node cap (deferred), which would drop those sets' rides.
 	 */
 	private long maxOrderingNodesAfterFirstValid = 0;
-
-	// Network routing settings
-	// If true, uses OnlyTimeDependentTravelDisutility for deterministic routing (ignores tolls)
-	// If false, uses mode-specific TravelDisutility which may include tolls and other costs
-	private boolean useDeterministicNetworkRouting = false;
 
 	// PT routing settings
 	// If true, allows the PT router to optimize departure time to reduce waiting
@@ -989,16 +984,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.maxOrderingNodesAfterFirstValid = Math.max(0L, maxOrderingNodesAfterFirstValid);
 	}
 
-	@StringGetter("useDeterministicNetworkRouting")
-	public boolean isUseDeterministicNetworkRouting() {
-		return useDeterministicNetworkRouting;
-	}
-
-	@StringSetter("useDeterministicNetworkRouting")
-	public void setUseDeterministicNetworkRouting(boolean useDeterministicNetworkRouting) {
-		this.useDeterministicNetworkRouting = useDeterministicNetworkRouting;
-	}
-
 	@StringGetter("ptOptimizeDepartureTime")
 	public boolean isPtOptimizeDepartureTime() {
 		return ptOptimizeDepartureTime;
@@ -1617,7 +1602,9 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("drtRoutingMode",
 				"Routing mode to use for DRT when no DRT routing module exists. Typically 'car' for network-based routing. Default: 'car'");
 		map.put("drtAllowedModes",
-				"Network modes allowed for DRT routing (comma-separated). Filters links by allowedModes. Empty = all links allowed. Example: 'car' or 'car,truck'. Default: empty (all links)");
+				"Network link mode filter for HyperPool stop-finding (StopFinderFactory -> LinkCandidateFinder). "
+				+ "Only links whose allowedModes intersect this set are considered as stop candidates. "
+				+ "Empty = all links admitted (no filtering). Example: 'car' or 'car,truck'. Default: 'car'");
 		map.put("minDrtCostPerKm",
 				"Minimum DRT cost per kilometer for budget calculation (€/km). Represents best possible pricing. Default: 0.0");
 		map.put("minMaxDetourFactor",
@@ -1663,9 +1650,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"dominates deg-8/9 cost; never loses a feasible ride). Absolute node count, NOT per-degree. " +
 				"Recommended: 200000 (~97% exact-best, ~5.4x fewer nodes) or 1000000 (~99% exact, ~3x). " +
 				"Default: 0");
-		map.put("useDeterministicNetworkRouting",
-				"If true, uses time-only travel disutility (deterministic but ignores tolls). " +
-				"If false, uses mode-specific travel disutility (includes tolls but may have slight variation). Default: false");
 		map.put("ptOptimizeDepartureTime",
 				"If true, PT router can optimize departure time to reduce waiting times. " +
 				"Agent can leave earlier/later to catch better connections. Default: true");

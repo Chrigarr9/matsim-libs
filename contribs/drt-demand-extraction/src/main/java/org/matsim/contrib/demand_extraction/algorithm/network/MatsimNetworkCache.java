@@ -20,7 +20,6 @@ import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
-import org.matsim.contrib.demand_extraction.algorithm.util.StringUtils;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.core.population.PopulationUtils;
 import org.matsim.core.router.costcalculators.TravelDisutilityFactory;
@@ -40,7 +39,6 @@ import org.matsim.vehicles.VehicleUtils;
 import com.google.inject.Inject;
 import com.google.inject.Injector;
 import com.google.inject.Key;
-import com.google.inject.Provider;
 import com.google.inject.Singleton;
 import com.google.inject.name.Names;
 
@@ -72,15 +70,9 @@ import com.google.inject.name.Names;
 public class MatsimNetworkCache implements TravelSegmentLookup {
 	
 	private static final Logger log = LogManager.getLogger(MatsimNetworkCache.class);
-	private static final double DETERMINISTIC_TIME_COEF = 1.0;
-	private static final double DETERMINISTIC_DISTANCE_COEF = 1e-9;
-	
+
 	private final Network network;
-	private final Provider<LeastCostPathCalculator> routerProvider;
 	private final ThreadLocal<LeastCostPathCalculator> threadLocalRouter;
-	private final boolean useSharedDeterministicRouter;
-	private final LeastCostPathCalculator sharedRouter;
-	private final Object routerLock = new Object();
 	private final TravelTime travelTime;
 	private final TravelDisutility travelDisutility;
 	private final int timeBinSize;
@@ -135,78 +127,35 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 			Network network,
 			ExMasConfigGroup config,
 			Injector injector) {
-		// Inject DRT-specific components (router, travel time, travel disutility)
-		// These may differ from car mode for:
-		// - Different toll/pricing structures (e.g., DRT exempt from congestion
-		// charges)
-		// - Access to dedicated lanes (e.g., bus lanes, HOV lanes)
-		// - Special routing permissions on restricted roads
-		// Falls back to car mode if DRT-specific components not bound
-
+		// Inject DRT-specific TravelTime / TravelDisutilityFactory; fall back to car.
+		// Mode-specific disutility stays the primary cost function so future toll /
+		// road-pricing scenarios route correctly. Determinism comes from the wrapper,
+		// not from discarding the mode costs.
 		String drtMode = config.getDrtMode();
-		String drtRouterName = "direct" + StringUtils.capitalize(drtMode) + "Router";
 
-		// Get DRT-specific router provider (uses filtered network)
-		this.routerProvider = injector.getProvider(Key.get(LeastCostPathCalculator.class, Names.named(drtRouterName)));
-		this.useSharedDeterministicRouter = config.isUseDeterministicNetworkRouting();
-		// Try to get DRT-specific TravelTime, fall back to car
-		TravelTime drtTravelTime;
-		try {
-			drtTravelTime = injector.getInstance(Key.get(TravelTime.class, Names.named(drtMode)));
-		} catch (Exception e) {
-			// DRT-specific TravelTime not bound, use car
-			drtTravelTime = injector.getInstance(Key.get(TravelTime.class, Names.named(TransportMode.car)));
-		}
+		TravelTime drtTravelTime = injectNamedOrFallback(injector, TravelTime.class, drtMode, TransportMode.car);
+		TravelDisutilityFactory drtDisutilityFactory = injectNamedOrFallback(
+				injector, TravelDisutilityFactory.class, drtMode, TransportMode.car);
+		TravelDisutility baseDisutility = drtDisutilityFactory.createTravelDisutility(drtTravelTime);
 
-		// Use mode-specific TravelDisutility which includes:
-		// - Travel time costs
-		// - Distance costs
-		// - Monetary distance rates (tolls, road pricing)
-		//
-		// NOTE: DemandExtractionModule sets config.routing().routingRandomness = 0
-		// which ensures deterministic routing while preserving toll/cost calculations.
-		// If useDeterministicNetworkRouting is true, use time plus a small distance
-		// tie-breaker. Pure time-only routing admits many equal-time paths, and SpeedyALT
-		// and LeastCostPathTree can choose different representatives for the same OD.
-		TravelDisutility disutility;
-		if (config.isUseDeterministicNetworkRouting()) {
-			log.info("Using deterministic time-distance network routing (ignores tolls, distance coefficient={})",
-					DETERMINISTIC_DISTANCE_COEF);
-			disutility = new TimeDistanceTravelDisutility(drtTravelTime,
-					DETERMINISTIC_TIME_COEF, DETERMINISTIC_DISTANCE_COEF);
-		} else {
-			// Use mode-specific TravelDisutility (captures tolls, deterministic via routingRandomness=0)
-			TravelDisutilityFactory drtDisutilityFactory;
-			try {
-				drtDisutilityFactory = injector.getInstance(Key.get(TravelDisutilityFactory.class, Names.named(drtMode)));
-			} catch (Exception e) {
-				// DRT-specific TravelDisutility not bound, use car
-				drtDisutilityFactory = injector.getInstance(Key.get(TravelDisutilityFactory.class, Names.named(TransportMode.car)));
-			}
-			disutility = drtDisutilityFactory.createTravelDisutility(drtTravelTime);
-			log.info("Using full network routing with tolls (deterministic via routingRandomness=0, type: {})",
-					disutility.getClass().getSimpleName());
-		}
+		// Deterministic by construction: unique optimum (eps*length tie-breaker) +
+		// admissible heuristic => LeastCostPathTree == SpeedyALT == any instance ==
+		// any thread count == any JVM. Both engines below are built from this SAME
+		// wrapped instance.
+		TravelDisutility disutility = DeterministicTravelDisutility.wrap(baseDisutility, drtTravelTime, network);
+		log.info("Network cache routing: SpeedyALT + LeastCostPathTree on {} (wrapping {})",
+				disutility.getClass().getSimpleName(), baseDisutility.getClass().getSimpleName());
 
 		this.network = network;
 		this.travelTime = drtTravelTime;
 		this.travelDisutility = disutility;
 		this.timeBinSize = config.getNetworkTimeBinSize();
 
-		final TravelTime routingTravelTime = drtTravelTime;
-		final TravelDisutility routingDisutility = disutility;
-		if (config.isUseDeterministicNetworkRouting()) {
-			SpeedyALTFactory altFactory = new SpeedyALTFactory();
-			this.threadLocalRouter = ThreadLocal.withInitial(() ->
-					altFactory.createPathCalculator(network, routingDisutility, routingTravelTime));
-			this.sharedRouter = altFactory.createPathCalculator(network, routingDisutility, routingTravelTime);
-		} else {
-			this.threadLocalRouter = ThreadLocal.withInitial(routerProvider::get);
-			this.sharedRouter = null;
-		}
+		SpeedyALTFactory altFactory = new SpeedyALTFactory();
+		this.threadLocalRouter = ThreadLocal.withInitial(() ->
+				altFactory.createPathCalculator(network, this.travelDisutility, this.travelTime));
 
 		// Create dummy person and vehicle for generic routing
-		// These are required by the router/travel time/disutility calculations
 		this.dummyPerson = PopulationUtils.getFactory().createPerson(Id.createPersonId("exmas_dummy"));
 		VehicleType dummyType = VehicleUtils.createVehicleType(Id.create("car", VehicleType.class));
 		this.dummyVehicle = VehicleUtils.createVehicle(Id.createVehicleId("exmas_dummy_vehicle"), dummyType);
@@ -703,6 +652,22 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		public B getSecond() { return second; }
 	}
 	
+	/**
+	 * Attempt to resolve a Guice binding for {@code type} named {@code mode}; on
+	 * {@link com.google.inject.ConfigurationException} (no binding registered for that name),
+	 * fall back to the binding named {@code fallbackMode}. Any other exception — in particular
+	 * {@link com.google.inject.ProvisionException} (binding exists but its provider threw) —
+	 * is intentionally not caught so misconfiguration surfaces immediately.
+	 */
+	private static <T> T injectNamedOrFallback(Injector injector, Class<T> type, String mode, String fallbackMode) {
+		try {
+			return injector.getInstance(Key.get(type, Names.named(mode)));
+		} catch (com.google.inject.ConfigurationException e) {
+			log.debug("No {} bound for mode '{}', falling back to '{}'", type.getSimpleName(), mode, fallbackMode);
+			return injector.getInstance(Key.get(type, Names.named(fallbackMode)));
+		}
+	}
+
 	// Use a thread-local router to allow parallel routing on cache misses.
 	// SpeedyALT is not thread-safe across threads, but separate instances are safe.
 	private TravelSegment computeSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
@@ -735,12 +700,11 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 				// Use dummy person/vehicle for generic routing (required by TravelDisutility)
 				// Always thread-local: per-thread SpeedyALT instances are constructed
 				// identically from the same factory/network/disutility/travelTime, so
-				// they give identical paths for identical OD queries. The legacy
-				// synchronized(routerLock) + sharedRouter branch was a global serialization
-				// point — JFR (2026-05-27) showed 15/16 workers blocked there, dominating
-				// the predecessors phase. ConcurrentHashMap.computeIfAbsent already
-				// serializes same-OD callers via bucket locks, preserving per-OD
-				// cache determinism.
+				// they give identical paths for identical OD queries. The previous single
+				// synchronized shared router was a global serialization point — JFR
+				// (2026-05-27) showed 15/16 workers blocked there, dominating the
+				// predecessors phase. ConcurrentHashMap.computeIfAbsent already serializes
+				// same-OD callers via bucket locks, preserving per-OD cache determinism.
 				Path path = threadLocalRouter.get().calcLeastCostPath(
 						originLink,
 						destLink,
@@ -842,11 +806,8 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 
 	private MatsimNetworkCache() {
 		this.network = null;
-		this.routerProvider = null;
 		this.threadLocalRouter = null;
 		this.threadLocalTree = null;
-		this.useSharedDeterministicRouter = false;
-		this.sharedRouter = null;
 		this.travelTime = null;
 		this.travelDisutility = null;
 		this.timeBinSize = Integer.MAX_VALUE; // any departure time → bin 0
@@ -855,83 +816,33 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	}
 
 	/**
-	 * Test constructor with real routing capability.
-	 * Bypasses Guice injection, uses provided components directly.
-	 * Defaults to Dijkstra for cache-miss point-to-point routing.
-	 */
-	MatsimNetworkCache(Network network, TravelTime travelTime, TravelDisutility travelDisutility, int timeBinSize) {
-		this(network, travelTime, travelDisutility, timeBinSize, /* useSpeedyAlt= */ false, /* deterministic= */ false);
-	}
-
-	/**
-	 * Test constructor with selectable cache-miss router.
-	 * When {@code useSpeedyAlt=true}, mirrors the production routing combination
-	 * (SpeedyALT for point-to-point cache miss + LeastCostPathTree for batch SSSP).
+	 * Test constructor mirroring the production routing path exactly: the given
+	 * disutility is wrapped in {@link DeterministicTravelDisutility}; cache-miss
+	 * point-to-point routing uses thread-local SpeedyALT and batch SSSP uses
+	 * {@link LeastCostPathTree}, both built from the SAME wrapped instance.
+	 *
+	 * <p>Keeps raw additive segment metrics: the cache deliberately avoids per-segment
+	 * quantization because it is not additive and can make a split route appear shorter
+	 * than the equivalent direct route at feasibility boundaries.
 	 */
 	MatsimNetworkCache(Network network, TravelTime travelTime, TravelDisutility travelDisutility,
-			int timeBinSize, boolean useSpeedyAlt) {
-		this(network, travelTime, travelDisutility, timeBinSize, useSpeedyAlt, /* deterministic= */ false);
-	}
-
-	/**
-	 * Test constructor with selectable cache-miss router AND optional deterministic-mode toggle.
-	 *
-	 * <p>When {@code deterministic=true}, mirrors the production
-	 * {@code useDeterministicNetworkRouting=true} path:
-	 * <ul>
-	 *   <li>Keep raw segment travel-time / distance / utility values, matching production.
-	 *       The cache deliberately avoids per-segment quantization because it is not
-	 *       additive and can make a split route appear
-	 *       shorter than the equivalent direct route at feasibility boundaries.</li>
-	 *   <li>Use the production deterministic time-distance disutility.</li>
-	 *   <li>Route every deterministic cache-miss point-to-point lookup through the
-	 *       same shared SpeedyALT router as production.</li>
-	 * </ul>
-	 *
-	 * <p>{@code deterministic=true} is the right setting for any test that compares
-	 * outputs across separate JVM invocations of the same code (e.g. the Lyon R1/R2/R3
-	 * fast comparison chain).
-	 */
-	MatsimNetworkCache(Network network, TravelTime travelTime, TravelDisutility travelDisutility,
-			int timeBinSize, boolean useSpeedyAlt, boolean deterministic) {
+			int timeBinSize) {
 		this.network = network;
 		this.travelTime = travelTime;
-		TravelDisutility effectiveTravelDisutility = deterministic
-				? new TimeDistanceTravelDisutility(travelTime, DETERMINISTIC_TIME_COEF, DETERMINISTIC_DISTANCE_COEF)
-				: travelDisutility;
-		this.travelDisutility = effectiveTravelDisutility;
+		TravelDisutility wrapped = DeterministicTravelDisutility.wrap(travelDisutility, travelTime, network);
+		this.travelDisutility = wrapped;
 		this.timeBinSize = timeBinSize;
-		this.useSharedDeterministicRouter = deterministic;
-		this.routerProvider = null;
-		this.routerLock.getClass(); // suppress unused warning
 
 		this.dummyPerson = PopulationUtils.getFactory().createPerson(Id.createPersonId("test_dummy"));
 		VehicleType dummyType = VehicleUtils.createVehicleType(Id.create("car", VehicleType.class));
 		this.dummyVehicle = VehicleUtils.createVehicle(Id.createVehicleId("test_dummy_vehicle"), dummyType);
 
 		SpeedyGraph speedyGraph = SpeedyGraphBuilder.build(network);
-		if (deterministic) {
-			SpeedyALTFactory altFactory = new SpeedyALTFactory();
-			this.threadLocalRouter = ThreadLocal.withInitial(() ->
-				altFactory.createPathCalculator(network, effectiveTravelDisutility, travelTime));
-			this.sharedRouter = altFactory.createPathCalculator(network, effectiveTravelDisutility, travelTime);
-		} else if (useSpeedyAlt) {
-			SpeedyALTFactory altFactory = new SpeedyALTFactory();
-			this.threadLocalRouter = ThreadLocal.withInitial(() ->
-				altFactory.createPathCalculator(network, effectiveTravelDisutility, travelTime));
-			this.sharedRouter = deterministic
-					? altFactory.createPathCalculator(network, effectiveTravelDisutility, travelTime)
-					: null;
-		} else {
-			org.matsim.core.router.DijkstraFactory dijkstraFactory = new org.matsim.core.router.DijkstraFactory();
-			this.threadLocalRouter = ThreadLocal.withInitial(() ->
-				dijkstraFactory.createPathCalculator(network, effectiveTravelDisutility, travelTime));
-			this.sharedRouter = deterministic
-					? dijkstraFactory.createPathCalculator(network, effectiveTravelDisutility, travelTime)
-					: null;
-		}
+		SpeedyALTFactory altFactory = new SpeedyALTFactory();
+		this.threadLocalRouter = ThreadLocal.withInitial(() ->
+			altFactory.createPathCalculator(network, wrapped, travelTime));
 		this.threadLocalTree = ThreadLocal.withInitial(() ->
-			new LeastCostPathTree(speedyGraph, travelTime, effectiveTravelDisutility));
+			new LeastCostPathTree(speedyGraph, travelTime, wrapped));
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────

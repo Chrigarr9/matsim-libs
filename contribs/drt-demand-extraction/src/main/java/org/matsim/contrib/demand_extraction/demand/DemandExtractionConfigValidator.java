@@ -111,8 +111,8 @@ public class DemandExtractionConfigValidator {
 				getDefaultFromMapString(exMasConfig.getPositiveFlexibilityRelativeMap(), 0.5) * 100);
 		log.info("Routing Settings:");
 		log.info("  PT optimization: {}", exMasConfig.isPtOptimizeDepartureTime() ? "enabled" : "disabled");
-		log.info("  Deterministic network routing: {}",
-				exMasConfig.isUseDeterministicNetworkRouting() ? "yes (ignores tolls)" : "no (includes tolls)");
+		log.info("  Routing: mode-specific disutility wrapped in DeterministicTravelDisutility "
+				+ "(deterministic by construction, tolls included if configured)");
 		log.info("  Routing randomness: {}", config.routing().getRoutingRandomness());
 		log.info("========================================");
 	}
@@ -157,11 +157,6 @@ public class DemandExtractionConfigValidator {
 		// Log network routing mode
 		String networkRoutingMode = exMasConfig.getDrtRoutingMode();
 		log.info("Network routing mode for DRT: {}", networkRoutingMode);
-		if (exMasConfig.isUseDeterministicNetworkRouting()) {
-			log.info("  Using deterministic routing (ignores tolls and road pricing)");
-		} else {
-			log.info("  Using mode-specific routing (includes tolls if configured)");
-		}
 	}
 
 	/**

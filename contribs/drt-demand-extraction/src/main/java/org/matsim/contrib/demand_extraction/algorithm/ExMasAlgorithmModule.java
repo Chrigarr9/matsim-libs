@@ -5,7 +5,6 @@ import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
 import org.matsim.core.controler.AbstractModule;
-import org.matsim.core.router.util.LeastCostPathCalculator;
 
 import com.google.inject.Injector;
 import com.google.inject.Provides;
@@ -34,29 +33,7 @@ public class ExMasAlgorithmModule extends AbstractModule {
                     + "config.addModule(new ExMasConfigGroup())");
         }
 
-        // Bind routing components for network cache
-		// Use MATSim's bound TravelTime and TravelDisutility (respects simulation
-		// state)
-		// This automatically uses the TravelTime bound by MATSim's
-		// TravelTimeCalculatorModule,
-		// which updates based on events/iterations. If user binds custom
-		// TravelTime/TravelDisutility,
-		// we use those automatically - making our routing consistent with simulation
-		// routing.
-		// Note: TravelTime and TravelDisutility are already bound by MATSim's core
-		// modules.
-		// We only bind our DRT-specific router (not a generic one) to ensure
-		// ExMAS components use the filtered network while rest of MATSim uses normal
-		// routing.
-
-		// Bind DRT-specific router with network filtering based on drtAllowedModes
-		// config
-		// Named binding uses "direct{drtMode}Router" pattern (e.g., "directDrtRouter")
-		ExMasConfigGroup exmasConfig = (ExMasConfigGroup) getConfig().getModules().get(ExMasConfigGroup.GROUP_NAME);
-		String drtRouterName = "direct" + capitalize(exmasConfig.getDrtMode()) + "Router";
-		bind(LeastCostPathCalculator.class)
-				.annotatedWith(com.google.inject.name.Names.named(drtRouterName))
-				.toProvider(DrtRouterProvider.class);
+        // MatsimNetworkCache resolves TravelTime/TravelDisutilityFactory itself and wraps them deterministically.
 
         // Bind algorithm components as singletons
         bind(BudgetValidator.class).asEagerSingleton();
@@ -82,10 +59,4 @@ public class ExMasAlgorithmModule extends AbstractModule {
         };
     }
 
-	private static String capitalize(String str) {
-		if (str == null || str.isEmpty()) {
-			return str;
-		}
-		return str.substring(0, 1).toUpperCase() + str.substring(1);
-	}
 }

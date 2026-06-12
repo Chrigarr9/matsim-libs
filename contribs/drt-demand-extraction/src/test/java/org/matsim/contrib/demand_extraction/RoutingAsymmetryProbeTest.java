@@ -90,7 +90,7 @@ class RoutingAsymmetryProbeTest {
 		log.info("");
 		log.info("─── PROBE 1: same-bin queries (timeBinSize=900) ───");
 		MatsimNetworkCache cache900 = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+				.createWithRouting(network, tt, td, 900);
 		printQuery(cache900, link607, link1637, 26677.0, "d=3 query time");
 		printQuery(cache900, link607, link1637, 26825.0, "d=4 segment 2 time");
 		printQuery(cache900, link607, link697, 26677.0, "d=4 segment 1 time");
@@ -110,7 +110,7 @@ class RoutingAsymmetryProbeTest {
 				32400, 36000, 43200, 50400, 57600, 64800, 72000, 79200, 86400 };
 		for (double t : probeTimes) {
 			MatsimNetworkCache c = MatsimNetworkCacheTestFixture
-					.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+					.createWithRouting(network, tt, td, 900);
 			TravelSegment d = c.getSegment(link607, link1637, t);
 			TravelSegment l1 = c.getSegment(link607, link697, t);
 			TravelSegment l2 = c.getSegment(link697, link1637, t);
@@ -126,7 +126,7 @@ class RoutingAsymmetryProbeTest {
 		log.info("");
 		log.info("─── PROBE 3: timeBinSize=1 (no-binning, exact time-dependence) ───");
 		MatsimNetworkCache cache1 = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 1);
+				.createWithRouting(network, tt, td, 1);
 		printQuery(cache1, link607, link1637, 26677.0, "exact t=26677");
 		printQuery(cache1, link607, link1637, 26825.0, "exact t=26825");
 		TravelSegment d1 = cache1.getSegment(link607, link1637, 26677.0);
@@ -152,7 +152,7 @@ class RoutingAsymmetryProbeTest {
 		log.info("─── PROBE 5: leg2(697→1637) at varying times (timeBinSize=900) ───");
 		for (double t : probeTimes) {
 			MatsimNetworkCache c = MatsimNetworkCacheTestFixture
-					.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+					.createWithRouting(network, tt, td, 900);
 			TravelSegment seg = c.getSegment(link697, link1637, t);
 			log.info("  leg2 at t={}s: {}s",
 					String.format("%.0f", t),

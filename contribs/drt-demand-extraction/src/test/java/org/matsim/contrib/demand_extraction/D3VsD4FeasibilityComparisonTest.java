@@ -99,7 +99,7 @@ class D3VsD4FeasibilityComparisonTest {
 		TravelTime tt = new FreeSpeedTravelTime();
 		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
 		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+				.createWithRouting(network, tt, td, 900);
 
 		// Load all requests in either set
 		Set<Integer> wanted = new HashSet<>();
@@ -530,7 +530,7 @@ class D3VsD4FeasibilityComparisonTest {
 		log.info("  warmed cache before any explicit watched probe: {}", fmtCacheSlot(preExisting));
 
 		MatsimNetworkCache freshCache = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+				.createWithRouting(network, tt, td, 900);
 		TravelSegment freshBefore = MatsimNetworkCacheTestFixture.peek(freshCache, from, to, watchedBin);
 		TravelSegment freshLookup = freshCache.getSegment(from, to, watchedTime);
 		TravelSegment freshAfter = MatsimNetworkCacheTestFixture.peek(freshCache, from, to, watchedBin);
@@ -538,7 +538,7 @@ class D3VsD4FeasibilityComparisonTest {
 				fmtCacheSlot(freshBefore), fmtCacheSlot(freshLookup), fmtCacheSlot(freshAfter));
 
 		MatsimNetworkCache replayedCache = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+				.createWithRouting(network, tt, td, 900);
 		new PairGenerator(replayedCache, validator, horizon, 1).generatePairs(reqs);
 		TravelSegment replayedBeforeClear = MatsimNetworkCacheTestFixture.peek(replayedCache, from, to, watchedBin);
 		replayedCache.clearCache();
