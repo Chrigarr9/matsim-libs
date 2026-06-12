@@ -2,12 +2,14 @@ package org.matsim.contrib.demand_extraction.algorithm.bamas.checkpoint;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.List;
 import java.util.TreeMap;
 
 import org.apache.logging.log4j.LogManager;
@@ -105,6 +107,125 @@ public final class CheckpointManager {
 		writeManifest();
 		log.info("[checkpoint] wrote degree-{} layer ({} rows, {} generated) — manifest highest={}",
 				outputDegree, layer.size(), generatedCount, highestDegree);
+	}
+
+	// ------------------------------------------------------------------
+	// Resume (read) side — Plan A3 Task 4.
+	// ------------------------------------------------------------------
+
+	/** Immutable parsed view of {@code manifest.txt} (Plan A3 Task 4 resume). */
+	public static final class Manifest {
+		public final String fingerprint;
+		public final boolean baseWritten;
+		public final int highestDegree;
+		/** outputDegree -> {rows, generated}; keys are 3..highestDegree (base degree 2 has none). */
+		public final TreeMap<Integer, long[]> perDegree;
+
+		Manifest(String fingerprint, boolean baseWritten, int highestDegree,
+				TreeMap<Integer, long[]> perDegree) {
+			this.fingerprint = fingerprint;
+			this.baseWritten = baseWritten;
+			this.highestDegree = highestDegree;
+			this.perDegree = perDegree;
+		}
+
+		/** Rides GENERATED (pre-prune) at output degree {@code d}, or 0 if absent. */
+		public long generatedFor(int d) {
+			long[] v = perDegree.get(d);
+			return v == null ? 0L : v[1];
+		}
+	}
+
+	/** True if a {@code manifest.txt} exists in the checkpoint dir (a resume candidate). */
+	public boolean hasManifest() {
+		return Files.exists(dir.resolve(MANIFEST));
+	}
+
+	/**
+	 * Parse {@code manifest.txt}. A manifest is only ever written by {@link #writeBase} (first) or
+	 * {@link #writeDegree}, so a well-formed manifest always has {@code base=1}; a manifest without
+	 * it is treated as corrupt (refuse, don't silently drift — same posture as the fingerprint and
+	 * journal refusals).
+	 */
+	public Manifest readManifest() {
+		Path target = dir.resolve(MANIFEST);
+		String fp = null;
+		boolean base = false;
+		int highest = 0;
+		TreeMap<Integer, long[]> perDeg = new TreeMap<>();
+		try {
+			List<String> lines = Files.readAllLines(target, StandardCharsets.UTF_8);
+			for (String line : lines) {
+				if (line.isEmpty() || line.charAt(0) == '#') {
+					continue;
+				}
+				int eq = line.indexOf('=');
+				if (eq < 0) {
+					continue;
+				}
+				String key = line.substring(0, eq);
+				String val = line.substring(eq + 1);
+				if (key.equals("fingerprint")) {
+					fp = val;
+				} else if (key.equals("base")) {
+					base = val.equals("1");
+				} else if (key.equals("highestDegree")) {
+					highest = Integer.parseInt(val.trim());
+				} else if (key.startsWith("degree.")) {
+					// degree.<d>.rows / degree.<d>.generated
+					int secondDot = key.indexOf('.', "degree.".length());
+					int d = Integer.parseInt(key.substring("degree.".length(), secondDot));
+					String field = key.substring(secondDot + 1);
+					long[] slot = perDeg.computeIfAbsent(d, k -> new long[2]);
+					if (field.equals("rows")) {
+						slot[0] = Long.parseLong(val.trim());
+					} else if (field.equals("generated")) {
+						slot[1] = Long.parseLong(val.trim());
+					}
+				}
+			}
+		} catch (IOException e) {
+			throw new UncheckedIOException("Cannot read checkpoint manifest " + target, e);
+		}
+		if (fp == null || !base) {
+			throw new IllegalStateException("Corrupt checkpoint manifest " + target
+					+ " (missing fingerprint or base flag) — delete the checkpoint dir and rerun.");
+		}
+		return new Manifest(fp, base, highest, perDeg);
+	}
+
+	/**
+	 * Adopt a previously-written manifest as this manager's in-memory state, so that a resume that
+	 * continues the degree loop appends new {@link #writeDegree} entries on top of the loaded ones
+	 * (rather than starting a fresh manifest that would drop the completed degrees).
+	 */
+	public void adoptManifest(Manifest m) {
+		this.baseWritten = m.baseWritten;
+		this.highestDegree = m.highestDegree;
+		this.perDegree.clear();
+		for (var e : m.perDegree.entrySet()) {
+			this.perDegree.put(e.getKey(), e.getValue().clone());
+		}
+	}
+
+	/** Read back the pre-prune pair universe persisted by {@link #writeBase}. */
+	public StubColumns readBase() {
+		return readStubFile(PAIR_STUBS);
+	}
+
+	/** Read back the survivor layer for one completed extension degree. */
+	public StubColumns readDegree(int outputDegree) {
+		return readStubFile("degree_" + outputDegree + ".stubs.bin");
+	}
+
+	private StubColumns readStubFile(String name) {
+		Path target = dir.resolve(name);
+		try (InputStream in = Files.newInputStream(target)) {
+			return StubColumnsIO.read(in);
+		} catch (IOException e) {
+			throw new UncheckedIOException("Cannot read checkpoint stub file " + target
+					+ " — checkpoint incomplete/corrupt; delete the checkpoint dir and rerun.", e);
+		}
 	}
 
 	// ------------------------------------------------------------------

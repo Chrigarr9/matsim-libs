@@ -60,6 +60,18 @@ public final class BamasEngine {
 	private List<HyperPooledRide> hyperPooledRides;
 	private ShareabilityGraph graph;
 
+	// Plan A3 — optional routing-input file paths for the checkpoint fingerprint. When set,
+	// their content hashes enrich the (otherwise config-only) RunFingerprint so a resume refuses
+	// to continue against changed requests/travel-times/network even when the config is identical.
+	// Left null by the DI adapter (BamasAlgorithm) today — the engine only sees in-memory requests
+	// and an in-memory network, not their source files; the runner that owns those paths calls
+	// setFingerprintInputs() once a checkpoint CLI surface exists. Null ⇒ config-only fingerprint
+	// (exactly what Task 3 wrote), so write/resume stay symmetric and existing checkpoints remain
+	// compatible. See Plan A3 Task 4 review note.
+	private java.nio.file.Path fpRequestsPath;
+	private java.nio.file.Path fpTravelTimesPath;
+	private java.nio.file.Path fpNetworkPath;
+
 	public BamasEngine(MatsimNetworkCache network, BudgetValidator budgetValidator,
 					   double horizon, int maxDegree,
 					   org.matsim.contrib.demand_extraction.config.ExMasConfigGroup exMasConfig) {
@@ -85,6 +97,19 @@ public final class BamasEngine {
 		this.exMasConfig = exMasConfig;
 		this.facilities = facilities;
 		this.budgetToConstraints = budgetToConstraints;
+	}
+
+	/**
+	 * Plan A3 — supply the routing-input file paths hashed into the checkpoint fingerprint. Any
+	 * argument may be {@code null} (then that input is omitted from the hash). Must be called
+	 * before {@link #run} to take effect. Both a fresh write and a later resume must pass the same
+	 * paths for the fingerprints to match.
+	 */
+	public void setFingerprintInputs(java.nio.file.Path requestsPath,
+			java.nio.file.Path travelTimesPath, java.nio.file.Path networkPath) {
+		this.fpRequestsPath = requestsPath;
+		this.fpTravelTimesPath = travelTimesPath;
+		this.fpNetworkPath = networkPath;
 	}
 
     /**
@@ -155,18 +180,39 @@ public final class BamasEngine {
 		// streaming pair-stub D2D path is supported: that IS the week-long exact 100% run the
 		// checkpoints exist for. On any other path the knob is a logged no-op (HyperPool
 		// checkpointing is Plan A2's concern; maxDegree<=2 has no extension to resume).
-		// NOTE (Plan A3 Task 3): the fingerprint here is config-only (file-path hashes are null);
-		// Task 4 threads the requests/travel-times/network paths through and enriches it before
-		// resume — the only place the file-hash component is consumed. The manifest written now is
-		// never read until resume exists, so the config-only form is safe in the interim.
+		//
+		// The fingerprint is computed ONCE here (Task 4) over the config plus, when supplied via
+		// setFingerprintInputs(), the routing-input file hashes — and is used by BOTH the
+		// checkpoint writes below and the resume gate. If a manifest already exists in the dir its
+		// fingerprint must MATCH (else refuse: a different config/requests would silently corrupt);
+		// a matching manifest puts the run in RESUME mode (load completed degrees, skip pair-gen
+		// + the completed extension loop). No manifest ⇒ a fresh, checkpoint-writing run.
 		CheckpointManager checkpointMgr = null;
+		boolean resuming = false;
+		CheckpointManager.Manifest resumeManifest = null;
 		if (exMasConfig.isCheckpointingEnabled()) {
 			if (pairStubPath) {
-				String fingerprint = RunFingerprint.compute(exMasConfig, null, null, null, "bamas");
+				String fingerprint = RunFingerprint.compute(exMasConfig,
+						fpRequestsPath, fpTravelTimesPath, fpNetworkPath, "bamas");
 				checkpointMgr = new CheckpointManager(
 						java.nio.file.Path.of(exMasConfig.getCheckpointDir()), fingerprint);
 				checkpointMgr.init();
-				log.info("Plan A3 checkpointing ENABLED -> {}", exMasConfig.getCheckpointDir());
+				if (checkpointMgr.hasManifest()) {
+					CheckpointManager.Manifest m = checkpointMgr.readManifest();
+					if (!RunFingerprint.matches(m.fingerprint, fingerprint)) {
+						throw new IllegalStateException(
+								"Checkpoint in " + exMasConfig.getCheckpointDir()
+								+ " is for a different config/requests (fingerprint mismatch) — "
+								+ "delete the checkpoint dir or use a fresh one before resuming.");
+					}
+					resumeManifest = m;
+					resuming = true;
+					checkpointMgr.adoptManifest(m);
+					log.info("Plan A3 RESUME from {} — highest completed degree = {}",
+							exMasConfig.getCheckpointDir(), m.highestDegree);
+				} else {
+					log.info("Plan A3 checkpointing ENABLED (fresh) -> {}", exMasConfig.getCheckpointDir());
+				}
 			} else {
 				log.warn("checkpointDir is set but checkpointing is only supported on the streaming "
 						+ "pair-stub D2D path (stub mode + stop-based OFF + maxDegree>2). "
@@ -187,11 +233,23 @@ public final class BamasEngine {
 		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns pairSurvivorStubs = null;
 
 		if (pairStubPath) {
-			// Phase 2 (stub): generate the full pair universe as a degree-2 StubColumns.
-			org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns allPairStubs =
-					pairGen.generatePairStubs(reqArray);
+			// Phase 2 (stub): the full pair universe as a degree-2 StubColumns. On resume it is
+			// LOADED from the base checkpoint (review addendum F6) instead of re-generated —
+			// generatePairStubs is the routing-heavy phase the checkpoint exists to skip. The
+			// loaded universe carries the positionsFlat copy-identity column (F1), so the graph
+			// build + survivor prune below reproduce the original run bit-for-bit.
+			org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns allPairStubs;
+			if (resuming) {
+				allPairStubs = checkpointMgr.readBase();
+				log.info("");
+				log.info("PHASE 2 (resume): loaded pre-prune pair universe ({} rows) from checkpoint",
+						allPairStubs.size());
+			} else {
+				allPairStubs = pairGen.generatePairStubs(reqArray);
+			}
 
 			// Phase 3 (stub): build the shareability graph from ALL pair stubs (pre-dedup).
+			// Deterministic from allPairStubs on both fresh and resume — no routing.
 			log.info("");
 			log.info("PHASE 3: Building Shareability Graph");
 			log.info("======================================================================");
@@ -205,8 +263,9 @@ public final class BamasEngine {
 			// F6) — on resume the shareability graph rebuilds via buildGraph(allPairStubs) and the
 			// degree-2 survivors via maybePrunePairStubsAfterGraph, both deterministic, so no
 			// separate graph/edge-list serializer is needed. Written before the prune so the
-			// persisted universe matches what the graph was built from.
-			if (checkpointMgr != null) {
+			// persisted universe matches what the graph was built from. Skipped on resume (the
+			// base checkpoint is already on disk and was just read back from it).
+			if (checkpointMgr != null && !resuming) {
 				checkpointMgr.writeBase(allPairStubs);
 			}
 
@@ -273,7 +332,43 @@ public final class BamasEngine {
 		// (degree 2→3 extends stubs); on the fat path it is null (degree 2→3 uses fat pairs).
 		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns prevStubLayer = pairStubPath ? pairSurvivorStubs : null;
 		DegreeGraph prevDegreeGraph = null;
-		for (int degree = 2; degree < maxDegree; degree++) {
+
+		// Plan A3 resume: replay the COMPLETED extension degrees from the checkpoint instead of
+		// re-extending them. Load degree layers 3..H into stubLayers, restore prevStubLayer (the
+		// parents for degree H+1), restore nextRideIndex from the manifest GENERATED counts (the
+		// reserved index space, not the surviving row count), and seed prevDegreeGraph — the
+		// degree-H DegreeGraph the next iteration's extender consumes — by rebuilding it from the
+		// degree-H layer's request sets (DegreeGraph.buildFromRequestSets is order-independent of
+		// its input, so this reproduces the original buildDegreeGraph(H) output exactly). The loop
+		// then continues at degree=H. Reductions: H==2 (base only) leaves the fresh degree-2 start
+		// state unchanged (prevDegreeGraph stays null, exactly like a fresh first iteration);
+		// H==maxDegree skips the loop entirely (a fully-complete checkpoint → straight to export).
+		int loopStart = 2;
+		if (resuming) {
+			int highest = resumeManifest.highestDegree;
+			long generatedSum = 0;
+			for (int d = 3; d <= highest; d++) {
+				org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer =
+						checkpointMgr.readDegree(d);
+				stubLayers.add(layer);
+				prevStubLayer = layer;
+				generatedSum += resumeManifest.generatedFor(d);
+			}
+			if (highest >= 3) {
+				List<int[]> sets = new ArrayList<>(prevStubLayer.size());
+				for (int row = 0; row < prevStubLayer.size(); row++) {
+					sets.add(prevStubLayer.requestIndices(row));
+				}
+				prevDegreeGraph = DegreeGraph.buildFromRequestSets(sets, highest);
+			}
+			nextRideIndex = allRides.size() + (int) generatedSum;
+			loopStart = highest;
+			log.info("Plan A3 resume: loaded degrees 3..{} ({} stub layers incl. pair layer), "
+					+ "nextRideIndex restored to {}, extension loop continues at degree {}",
+					highest, stubLayers.size(), nextRideIndex, loopStart);
+		}
+
+		for (int degree = loopStart; degree < maxDegree; degree++) {
 			BamasRideExtender extender = new BamasRideExtender(network, graph, budgetValidator,
 													 requests, exMasConfig, prevDegreeGraph);
 
