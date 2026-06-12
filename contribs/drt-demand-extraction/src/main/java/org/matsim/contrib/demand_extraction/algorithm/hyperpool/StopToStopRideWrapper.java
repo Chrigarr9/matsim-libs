@@ -2,6 +2,7 @@ package org.matsim.contrib.demand_extraction.algorithm.hyperpool;
 
 import java.util.Comparator;
 import java.util.Objects;
+import java.util.function.Supplier;
 
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
@@ -19,25 +20,33 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation;
  * pickup and dropoff stops as if they were the origin and destination of a request,
  * making it easier to apply the same matching and bundling algorithms used in Stage 1.
  *
+ * <h3>Fat vs stub backing</h3>
+ * The wrapper supports two construction modes:
+ * <ul>
+ *   <li><strong>Fat mode</strong> — backed by a full {@link Ride} object.  All getter values
+ *       are derived from the ride at construction time and cached as scalars.  The deferred
+ *       materializer is {@code () -> ride}.</li>
+ *   <li><strong>Stub mode (Plan A2 Task 5)</strong> — backed by scalar fields resolved from
+ *       an {@link org.matsim.contrib.demand_extraction.algorithm.bamas.stub.S2SStubColumns} row.
+ *       The full ride is constructed lazily via {@link #materialize()} only when the per-cluster
+ *       bundling code needs it (
+ *       {@link org.matsim.contrib.demand_extraction.algorithm.hyperpool.HyperPoolGenerator}
+ *       lines 720, 785–786, 807).  The scalar fields are sufficient for all clustering decisions
+ *       (graph construction, compatibility checks, stop-sequence generation).</li>
+ * </ul>
+ *
  * <p>Key features:
  * <ul>
- *   <li>Validates that the wrapped ride has variant {@link RideVariant#STOP_TO_STOP}</li>
+ *   <li>Validates that the wrapped ride has variant {@link RideVariant#STOP_TO_STOP}
+ *       (fat mode only — stub mode relies on the caller's invariant).</li>
  *   <li>Provides convenient access to pickup/dropoff stops</li>
  *   <li>Exposes passenger count from the underlying ride</li>
  *   <li>Provides departure time based on the ride's start time</li>
  *   <li>Includes a comparator for sorting by departure time</li>
+ *   <li>{@link #equals}/{@link #hashCode}/{@link #wrapsSameRide} are based on {@code rideIndex}
+ *       — this is what makes the inner {@link HyperPoolGenerator} HashMap-keyed graph
+ *       deterministic across fat and stub paths.</li>
  * </ul>
- *
- * <p>Example usage:
- * <pre>{@code
- * Ride stopToStopRide = ...; // A ride with variant == STOP_TO_STOP
- * StopToStopRideWrapper wrapper = new StopToStopRideWrapper(stopToStopRide);
- *
- * StopLocation pickup = wrapper.getPickupStop();
- * StopLocation dropoff = wrapper.getDropoffStop();
- * double departureTime = wrapper.getDepartureTime();
- * int passengers = wrapper.getPassengerCount();
- * }</pre>
  *
  * @see Ride
  * @see RideVariant#STOP_TO_STOP
@@ -53,15 +62,23 @@ public final class StopToStopRideWrapper {
      */
     public static final Comparator<StopToStopRideWrapper> BY_DEPARTURE_TIME = Comparator
         .comparingDouble(StopToStopRideWrapper::getDepartureTime)
-        .thenComparingInt(wrapper -> wrapper.ride.getIndex());
+        .thenComparingInt(wrapper -> wrapper.rideIndex);
 
-    private final Ride ride;
+    // ---- cached scalar fields (both fat and stub mode) ----
+    private final int rideIndex;
     private final StopLocation pickupStop;
     private final StopLocation dropoffStop;
     private final int passengerCount;
+    private final double departureTime;
+    private final double rideTravelTime;
+    private final double rideDistance;
+    private final double endTime;
+
+    /** Deferred materializer; non-null in both modes. */
+    private final Supplier<Ride> materializer;
 
     /**
-     * Creates a new wrapper for a stop-to-stop ride.
+     * Fat mode constructor — creates a wrapper from a full {@link Ride}.
      *
      * @param ride the ride to wrap (must have variant == STOP_TO_STOP)
      * @throws IllegalArgumentException if ride is null, has wrong variant,
@@ -88,30 +105,109 @@ public final class StopToStopRideWrapper {
             );
         }
 
-        this.ride = ride;
-        this.pickupStop = ride.getPickupStop();
-        this.dropoffStop = ride.getDropoffStop();
+        this.rideIndex      = ride.getIndex();
+        this.pickupStop     = ride.getPickupStop();
+        this.dropoffStop    = ride.getDropoffStop();
         this.passengerCount = ride.getDegree();
+        this.departureTime  = ride.getStartTime();
+        this.rideTravelTime = ride.getRideTravelTime();
+        this.rideDistance   = ride.getRideDistance();
+        this.endTime        = ride.getEndTime();
+        this.materializer   = () -> ride;
+    }
+
+    /**
+     * Stub mode constructor (Plan A2 Task 5) — creates a wrapper from pre-resolved scalar
+     * fields plus a deferred materializer that lazily builds the full {@link Ride}.
+     *
+     * <p>The scalar fields must be bit-identical to what the fat constructor would derive
+     * from the materialized ride:
+     * <ul>
+     *   <li>{@code rideIndex} — post-Phase-5 sequential index already stamped on the stub row</li>
+     *   <li>{@code pickupStop}/{@code dropoffStop} — resolved from the stop dictionary</li>
+     *   <li>{@code passengerCount} — stub layer's degree</li>
+     *   <li>{@code departureTime} — {@code S2SStubColumns.startTime(row)}</li>
+     *   <li>{@code rideTravelTime}/{@code rideDistance} — {@code StubScaling.fromDeci(ttDs/distDm)}</li>
+     *   <li>{@code endTime} — {@code departureTime + rideTravelTime}</li>
+     * </ul>
+     *
+     * @param rideIndex     post-Phase-5 sequential index of this S2S ride
+     * @param pickupStop    pickup stop resolved from the stop dictionary
+     * @param dropoffStop   dropoff stop resolved from the stop dictionary
+     * @param passengerCount number of passengers (= stub layer degree)
+     * @param departureTime departure time from the S2S stub's startTime column (seconds)
+     * @param rideTravelTime in-vehicle travel time from the S2S stub (seconds, via StubScaling)
+     * @param rideDistance  in-vehicle distance from the S2S stub (metres, via StubScaling)
+     * @param endTime       {@code departureTime + rideTravelTime}
+     * @param materializer  supplier that lazily constructs the full {@link Ride}; invoked only
+     *                      during per-cluster bundling (not during graph construction)
+     */
+    public StopToStopRideWrapper(
+            int rideIndex,
+            StopLocation pickupStop,
+            StopLocation dropoffStop,
+            int passengerCount,
+            double departureTime,
+            double rideTravelTime,
+            double rideDistance,
+            double endTime,
+            Supplier<Ride> materializer) {
+        this.rideIndex      = rideIndex;
+        this.pickupStop     = pickupStop;
+        this.dropoffStop    = dropoffStop;
+        this.passengerCount = passengerCount;
+        this.departureTime  = departureTime;
+        this.rideTravelTime = rideTravelTime;
+        this.rideDistance   = rideDistance;
+        this.endTime        = endTime;
+        this.materializer   = Objects.requireNonNull(materializer, "materializer");
     }
 
     // ==================== Getters ====================
 
     /**
-     * Returns the wrapped ride.
+     * Materializes the full {@link Ride} for this wrapper.
      *
-     * @return the underlying stop-to-stop ride
+     * <p>In fat mode this returns the ride passed to the constructor immediately.
+     * In stub mode this triggers pinned-stop replay via {@link
+     * org.matsim.contrib.demand_extraction.algorithm.bamas.stub.S2SRideMaterializer} —
+     * an expensive operation that should be called only during per-cluster bundling,
+     * not during graph construction or compatibility checks.
+     *
+     * <p>Replaces the former {@code getRide()} method.  Callers that need the full ride
+     * (e.g.\ bundling code that reads {@code remainingBudgets}, {@code getRequests()},
+     * walk distances) must call this method rather than storing a reference to the ride
+     * at wrapper construction time — that would defeat the stub-backed memory savings.
+     *
+     * @return the full materialized {@link Ride}
      */
-    public Ride getRide() {
-        return ride;
+    public Ride materialize() {
+        return materializer.get();
     }
 
     /**
-     * Returns the ride index from the wrapped ride.
+     * Returns the wrapped ride (fat-mode alias for {@link #materialize()}).
+     *
+     * @deprecated Use {@link #materialize()} at call sites that need the full ride.
+     *             This method is kept for backward compatibility with the fat path but
+     *             triggers full materialization in stub mode.
+     * @return the underlying stop-to-stop ride
+     */
+    @Deprecated
+    public Ride getRide() {
+        return materialize();
+    }
+
+    /**
+     * Returns the ride index.
+     *
+     * <p>This is the post-Phase-5 sequential index used by {@link #equals}/
+     * {@link #hashCode}/the inner HyperPool shareability graph.
      *
      * @return the ride index
      */
     public int getRideIndex() {
-        return ride.getIndex();
+        return rideIndex;
     }
 
     /**
@@ -147,7 +243,7 @@ public final class StopToStopRideWrapper {
      * @return the departure time in seconds
      */
     public double getDepartureTime() {
-        return ride.getStartTime();
+        return departureTime;
     }
 
     /**
@@ -168,7 +264,7 @@ public final class StopToStopRideWrapper {
      * @return the ride travel time in seconds
      */
     public double getRideTravelTime() {
-        return ride.getRideTravelTime();
+        return rideTravelTime;
     }
 
     /**
@@ -177,7 +273,7 @@ public final class StopToStopRideWrapper {
      * @return the ride distance in meters
      */
     public double getRideDistance() {
-        return ride.getRideDistance();
+        return rideDistance;
     }
 
     /**
@@ -186,7 +282,7 @@ public final class StopToStopRideWrapper {
      * @return the end time in seconds
      */
     public double getEndTime() {
-        return ride.getEndTime();
+        return endTime;
     }
 
     /**
@@ -199,7 +295,7 @@ public final class StopToStopRideWrapper {
         if (other == null) {
             return false;
         }
-        return this.ride.getIndex() == other.ride.getIndex();
+        return this.rideIndex == other.rideIndex;
     }
 
     // ==================== Object methods ====================
@@ -208,12 +304,11 @@ public final class StopToStopRideWrapper {
     public String toString() {
         return String.format(
             "StopToStopRideWrapper[rideIndex=%d, pickup=%s, dropoff=%s, passengers=%d, departure=%.1f]",
-            ride.getIndex(),
+            rideIndex,
             pickupStop.getLinkId(),
             dropoffStop.getLinkId(),
             passengerCount,
-            getDepartureTime()
-        );
+            departureTime);
     }
 
     @Override
@@ -222,11 +317,11 @@ public final class StopToStopRideWrapper {
         if (obj == null || getClass() != obj.getClass()) return false;
         StopToStopRideWrapper other = (StopToStopRideWrapper) obj;
         // Two wrappers are equal if they wrap the same ride
-        return ride.getIndex() == other.ride.getIndex();
+        return rideIndex == other.rideIndex;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hashCode(ride.getIndex());
+        return Objects.hashCode(rideIndex);
     }
 }

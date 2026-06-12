@@ -15,6 +15,10 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.S2SRideMaterializer;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.S2SStubColumns;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubScaling;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StopLocationDictionary;
 import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
@@ -654,6 +658,148 @@ public class HyperPoolGenerator {
     }
 
     /**
+     * Plan A2 Task 5 — builds stub-backed wrappers from S2S stub layers.
+     *
+     * <p>Each S2S stub row becomes one {@link StopToStopRideWrapper} backed by
+     * pre-resolved scalar fields (no full {@link Ride} allocated) plus a deferred
+     * {@link S2SRideMaterializer} call for the three bundling call sites.
+     *
+     * <p>Row order = insertion order across layers = Phase-5 output order, matching
+     * the fat path's {@code wrapStopToStopRides(List&lt;Ride&gt;)} construction order.
+     *
+     * @param s2sStubLayers  per-degree S2S stub layers (degree-ascending order from Phase 5)
+     * @param s2sMaterializer pinned-stop replay materializer
+     * @param stopDictionary  the stop dictionary built during Phase 5
+     * @param requestById     global request lookup
+     * @param startIndex      first S2S ride index assigned by Phase 5 (used to map layer row → rideIndex)
+     * @return wrappers in S2S row order (matches master insertion order for equivalent graph)
+     */
+    private List<StopToStopRideWrapper> wrapStopToStopRideStubs(
+            List<S2SStubColumns> s2sStubLayers,
+            S2SRideMaterializer s2sMaterializer,
+            StopLocationDictionary stopDictionary,
+            Map<Integer, DrtRequest> requestById,
+            int startIndex) {
+
+        List<StopToStopRideWrapper> wrappers = new ArrayList<>();
+
+        for (S2SStubColumns layer : s2sStubLayers) {
+            int degree = layer.degree();
+            for (int row = 0; row < layer.size(); row++) {
+                // Resolve stops from dictionary (same objects as used in the fat path)
+                StopLocation pickupStop  = stopDictionary.byId(layer.pickupStopId(row));
+                StopLocation dropoffStop = stopDictionary.byId(layer.dropoffStopId(row));
+
+                // Scalar fields derivable without materializing the full Ride.
+                // Use layer.rideIndex(row) — the exact Phase-5 sequential index stamped
+                // by stubbifyS2SRide — not an independently reconstructed counter, which
+                // would break if layer order ever differs from Phase-5 insertion order.
+                int  rideIndex      = layer.rideIndex(row);
+                int  passengerCount = degree;
+                double departureTime  = layer.startTime(row);
+                double rideTravelTime = StubScaling.fromDeci(layer.travelTimeDs(row));
+                double rideDistance   = StubScaling.fromDeci(layer.rideDistanceDm(row));
+                double endTime        = departureTime + rideTravelTime;
+
+                // Deferred materializer: called only during per-cluster bundling
+                final S2SStubColumns capturedLayer = layer;
+                final int capturedRow = row;
+                java.util.function.Supplier<Ride> materializer =
+                        () -> s2sMaterializer.materialize(capturedLayer, capturedRow, requestById);
+
+                wrappers.add(new StopToStopRideWrapper(
+                        rideIndex, pickupStop, dropoffStop, passengerCount,
+                        departureTime, rideTravelTime, rideDistance, endTime,
+                        materializer));
+            }
+        }
+        return wrappers;
+    }
+
+    /**
+     * Plan A2 Task 5 — stub-mode entry point for Phase 6.
+     *
+     * <p>Accepts S2S stub layers instead of a full {@link Ride} list.  The stub-backed
+     * wrappers expose all fields needed for clustering (stop identities, times,
+     * occupancy) without materializing any full ride.  Full rides are materialized
+     * lazily per-cluster during bundling.
+     *
+     * @param s2sStubLayers  per-degree S2S stub layers from Phase 5
+     * @param s2sMaterializer pinned-stop replay materializer
+     * @param stopDictionary  stop dictionary built during Phase 5
+     * @param requestById     global request lookup
+     * @param networkCache    network routing cache
+     * @param startIndex      S2S start index (for HyperPooledRide index stamping)
+     * @return generated hyper-pooled rides (empty if no clusters formed)
+     */
+    public List<HyperPooledRide> generateFromStubs(
+            List<S2SStubColumns> s2sStubLayers,
+            S2SRideMaterializer s2sMaterializer,
+            StopLocationDictionary stopDictionary,
+            Map<Integer, DrtRequest> requestById,
+            MatsimNetworkCache networkCache,
+            int startIndex) {
+
+        if (s2sStubLayers == null || s2sStubLayers.isEmpty()) {
+            log.info("No S2S stub layers available for hyper-pooling");
+            return Collections.emptyList();
+        }
+
+        int totalS2S = s2sStubLayers.stream().mapToInt(S2SStubColumns::size).sum();
+        if (totalS2S == 0) {
+            log.info("No S2S stub rows for hyper-pooling");
+            return Collections.emptyList();
+        }
+
+        // Reset statistics for this run
+        resetStatistics();
+
+        log.info("Starting hyper-pool generation for {} S2S stub rows (stub mode)", totalS2S);
+
+        // Step 1: Build stub-backed wrappers (no full Ride allocation)
+        List<StopToStopRideWrapper> wrappers = wrapStopToStopRideStubs(
+                s2sStubLayers, s2sMaterializer, stopDictionary, requestById, startIndex);
+        if (wrappers.isEmpty()) {
+            log.info("No valid stop-to-stop wrappers from stubs");
+            return Collections.emptyList();
+        }
+        log.info("Wrapped {} S2S stub rows", wrappers.size());
+
+        // Accumulate original S2S VKT for statistics
+        for (StopToStopRideWrapper wrapper : wrappers) {
+            totalVktOriginalS2S += wrapper.getRideDistance() / 1000.0;
+        }
+
+        // Steps 2–5: identical to fat-path generate() (shareability graph → clusters → bundling)
+        HyperPoolShareabilityGraph graph = buildShareabilityGraph(wrappers);
+        List<Set<StopToStopRideWrapper>> clusters = findClusters(graph);
+        log.info("Found {} clusters from {} wrappers", clusters.size(), wrappers.size());
+
+        List<HyperPooledRide> result = new ArrayList<>();
+        int hyperPoolIndex = startIndex + totalS2S; // HyperPooledRides follow S2S in index space
+        for (Set<StopToStopRideWrapper> cluster : clusters) {
+            clustersAttempted++;
+            try {
+                HyperPooledRide hyperPooledRide = generateHyperPooledRide(cluster, hyperPoolIndex);
+                if (hyperPooledRide != null) {
+                    result.add(hyperPooledRide);
+                    hyperPoolIndex++;
+                    clustersSucceeded++;
+                    totalHyperPooledRides++;
+                    totalPassengersHyperPooled += hyperPooledRide.getTotalPassengerCount();
+                    totalVktHyperPooled += hyperPooledRide.getTotalVehicleKilometers();
+                }
+            } catch (Exception e) {
+                clustersFailed++;
+                log.warn("Failed to generate hyper-pooled ride from cluster: {}", e.getMessage());
+            }
+        }
+
+        log.info("Generated {} hyper-pooled rides from {} clusters (stub mode)", result.size(), clusters.size());
+        return result;
+    }
+
+    /**
      * Builds the shareability graph for stop-to-stop rides.
      */
     private HyperPoolShareabilityGraph buildShareabilityGraph(List<StopToStopRideWrapper> wrappers) {
@@ -717,7 +863,7 @@ public class HyperPoolGenerator {
 
         Map<StopToStopRideWrapper, double[]> result = new HashMap<>();
         for (StopToStopRideWrapper wrapper : cluster) {
-            Ride sourceRide = wrapper.getRide();
+            Ride sourceRide = wrapper.materialize(); // stub mode: pinned-stop replay
             int deg = sourceRide.getDegree();
             double[] remainingBudgets = sourceRide.getRemainingBudgets();
             double[] passengerTravelTimes = sourceRide.getPassengerTravelTimes();
@@ -782,8 +928,9 @@ public class HyperPoolGenerator {
         List<Ride> sourceRides = new ArrayList<>();
 
         for (StopToStopRideWrapper wrapper : cluster) {
-            sourceRides.add(wrapper.getRide());
-            DrtRequest[] rideRequests = wrapper.getRide().getRequests();
+            Ride clusterRide = wrapper.materialize(); // stub mode: pinned-stop replay (once per wrapper)
+            sourceRides.add(clusterRide);
+            DrtRequest[] rideRequests = clusterRide.getRequests();
             for (DrtRequest req : rideRequests) {
                 allRequests.add(req);
             }
@@ -804,7 +951,7 @@ public class HyperPoolGenerator {
         // Calculate per-passenger metrics
         int passengerIdx = 0;
         for (StopToStopRideWrapper wrapper : cluster) {
-            Ride sourceRide = wrapper.getRide();
+            Ride sourceRide = wrapper.materialize(); // stub mode: pinned-stop replay
             double[] sourceAccessWalks = sourceRide.getAccessWalkDistances();
             double[] sourceEgressWalks = sourceRide.getEgressWalkDistances();
 
