@@ -249,7 +249,13 @@ public final class BamasEngine {
 			// is null only on the fat pair path's first iteration, where the fat overload runs.
 			List<Ride> extended;
 			if (stubMode && prevStubLayer != null) {
-				extended = extender.extendRides(prevStubLayer, reqArray, nextRideIndex);
+				org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns extensionParents = prevStubLayer;
+				if (exMasConfig.getExtensionParentsTopK() > 0
+						&& (degree + 1) >= exMasConfig.getExtensionParentsTopKMinDegree()
+						&& prevStubLayer.degree() >= 3) {
+					extensionParents = filterExtensionParents(prevStubLayer, requestById);
+				}
+				extended = extender.extendRides(extensionParents, reqArray, nextRideIndex);
 			} else {
 				extended = extender.extendRides(currentDegreeRides, nextRideIndex);
 			}
@@ -989,6 +995,30 @@ public final class BamasEngine {
 			pickupOrdered[i] = reqArray[positions[originLocal[i]]];
 		}
 		return Arrays.stream(pickupOrdered).mapToDouble(DrtRequest::getDistance).sum();
+	}
+
+	/**
+	 * Plan B: select the EXTEND-marked subset of degree-D stub parents for top-K
+	 * extension pruning, returning a new StubColumns containing only the marked rows
+	 * in their original lex order. The full {@code parents} layer is unchanged (it is
+	 * already in stubLayers for output and encoded in the prior degree graph); only
+	 * the producer parents for the NEXT degree are restricted. K=0 never reaches here.
+	 */
+	private org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns filterExtensionParents(
+			org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns parents,
+			java.util.Map<Integer, DrtRequest> requestById) {
+		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns filtered =
+				org.matsim.contrib.demand_extraction.algorithm.bamas.extension.ExtensionParentFilter.filter(
+						parents, requestById,
+						exMasConfig.getExtensionParentsTopK(),
+						exMasConfig.getExtensionParentsTopKMetric(),
+						exMasConfig.getExtensionParentsSelectionRule(),
+						exMasConfig.getExtensionParentsMmrLambda());
+		log.info("extension_parents_top_k: degree {} parents kept {}/{} (K={}, metric={}, rule={}, lambda={})",
+				parents.degree(), filtered.size(), parents.size(),
+				exMasConfig.getExtensionParentsTopK(), exMasConfig.getExtensionParentsTopKMetric(),
+				exMasConfig.getExtensionParentsSelectionRule(), exMasConfig.getExtensionParentsMmrLambda());
+		return filtered;
 	}
 
 	/**

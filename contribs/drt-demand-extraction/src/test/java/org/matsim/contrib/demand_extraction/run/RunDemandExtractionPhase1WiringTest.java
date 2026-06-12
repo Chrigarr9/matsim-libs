@@ -122,7 +122,10 @@ class RunDemandExtractionPhase1WiringTest {
 				b.enableStopBased, b.enableHyperPooling, b.enableBudgetAwareConstraints,
 				b.maxWalkDistanceMeters, b.hubSetGeoJsonPath, b.hubTransferBufferSeconds,
 				b.requestClassificationsPath, b.fleetSide, b.metropolePolygonPath,
-				b.maxOrderingNodes);
+				b.maxOrderingNodes,
+				b.extensionParentsTopK, b.extensionParentsTopKMinDegree,
+				b.extensionParentsTopKMetric, b.extensionParentsSelectionRule,
+				b.extensionParentsMmrLambda, b.extensionParentsTier2NodeCap);
 	}
 
 	/** Mutable builder so tests can override individual fields in a lambda. */
@@ -154,6 +157,14 @@ class RunDemandExtractionPhase1WiringTest {
 		ExMasConfigGroup.FleetSide fleetSide = null;
 		String metropolePolygonPath = null;
 		long maxOrderingNodes = -1;
+		int extensionParentsTopK = 0;
+		int extensionParentsTopKMinDegree = 4;
+		ExMasConfigGroup.PruningQualityMetric extensionParentsTopKMetric =
+				ExMasConfigGroup.PruningQualityMetric.ABS_SAVINGS;
+		ExMasConfigGroup.ExtensionParentsSelectionRule extensionParentsSelectionRule =
+				ExMasConfigGroup.ExtensionParentsSelectionRule.TOP_K;
+		double extensionParentsMmrLambda = 0.0;
+		long extensionParentsTier2NodeCap = 0L;
 	}
 
 }

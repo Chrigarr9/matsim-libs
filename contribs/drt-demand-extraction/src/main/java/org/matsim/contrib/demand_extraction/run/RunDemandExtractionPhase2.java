@@ -65,6 +65,9 @@ public final class RunDemandExtractionPhase2 {
 				case "--network" -> networkXml = args[++i];
 				case "--travel-times" -> travelTimesTsv = args[++i];
 				case "--output-dir" -> outputDir = args[++i];
+				case "--extension-parents-top-k", "--extension-parents-top-k-min-degree",
+				     "--extension-parents-top-k-metric", "--extension-parents-selection-rule",
+				     "--extension-parents-mmr-lambda" -> i++; // applied via applyPhase2KnobOverrides
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -119,6 +122,21 @@ public final class RunDemandExtractionPhase2 {
 		return dst;
 	}
 
+	/** Optional Phase-2 overrides for the extension_parents_top_k knob, so a smoke
+	 *  run can exercise the knob against a cached (K=0) dump without re-running Phase 1. */
+	static void applyPhase2KnobOverrides(String[] args, ExMasConfigGroup cfg) {
+		for (int i = 0; i < args.length; i++) {
+			switch (args[i]) {
+				case "--extension-parents-top-k" -> cfg.setExtensionParentsTopK(Integer.parseInt(args[++i]));
+				case "--extension-parents-top-k-min-degree" -> cfg.setExtensionParentsTopKMinDegree(Integer.parseInt(args[++i]));
+				case "--extension-parents-top-k-metric" -> cfg.setExtensionParentsTopKMetric(ExMasConfigGroup.PruningQualityMetric.valueOf(args[++i].toUpperCase()));
+				case "--extension-parents-selection-rule" -> cfg.setExtensionParentsSelectionRule(ExMasConfigGroup.ExtensionParentsSelectionRule.valueOf(args[++i].toUpperCase()));
+				case "--extension-parents-mmr-lambda" -> cfg.setExtensionParentsMmrLambda(Double.parseDouble(args[++i]));
+				default -> { }
+			}
+		}
+	}
+
 	public static void main(String[] args) throws IOException {
 		LoggingSetup.configure();
 		long overallStartMs = System.currentTimeMillis();
@@ -158,6 +176,7 @@ public final class RunDemandExtractionPhase2 {
 
 		ExMasConfigGroup exMasCfg = injector.getInstance(ExMasConfigGroup.class);
 		assertDumpSupportsConfig(dump.scoringContextsVersion(), exMasCfg);
+		applyPhase2KnobOverrides(args, exMasCfg);
 
 		log.info("PHASE 2 STEP 3: running {} algorithm", exMasCfg.getAlgorithm());
 		ExMasAlgorithm algorithm = injector.getInstance(ExMasAlgorithm.class);

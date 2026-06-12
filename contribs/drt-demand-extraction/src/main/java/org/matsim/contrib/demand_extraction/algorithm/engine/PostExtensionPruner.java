@@ -362,7 +362,7 @@ public final class PostExtensionPruner {
 	}
 
 	/** Sum of per-passenger direct distances in PICKUP order (FP non-commutative). */
-	private static double sumDirectDistanceStub(StubColumns layer, int row, Map<Integer, DrtRequest> requestById) {
+	public static double sumDirectDistanceStub(StubColumns layer, int row, Map<Integer, DrtRequest> requestById) {
 		int degree = layer.degree();
 		int[] sortedSet = layer.requestIndices(row);
 		int[] originsLocal = OrderingCodec.unpack(layer.originOrder(row), degree);
