@@ -1,7 +1,6 @@
 package org.matsim.contrib.demand_extraction.run;
 
 import java.io.IOException;
-import java.nio.file.Path;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Network;
