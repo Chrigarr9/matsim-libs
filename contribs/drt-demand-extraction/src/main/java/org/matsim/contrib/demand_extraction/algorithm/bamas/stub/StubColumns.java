@@ -211,6 +211,53 @@ public final class StubColumns {
 		return Arrays.copyOfRange(positionsFlat, row * degree, row * degree + degree);
 	}
 
+	/** True if this layer carries the optional {@code positionsFlat} column (degree-2 pair layer only). */
+	public boolean hasPositions() {
+		return positionsFlat != null;
+	}
+
+	// -----------------------------------------------------------------------
+	// Bulk array access (package-private) — for binary checkpoint IO (Plan A3).
+	// These return the LIVE backing arrays; the first {@code size()} rows are valid
+	// ({@code size()*degree} elements for the flat columns). Callers must treat them as
+	// read-only and must not retain references past the StubColumns' lifetime. Streaming
+	// the raw arrays avoids per-row allocation when persisting 10^7-10^8 rows at 100%.
+	// -----------------------------------------------------------------------
+
+	int[]  setsFlatRaw()       { return setsFlat; }
+	long[] originOrderRaw()    { return originOrder; }
+	long[] destOrderRaw()      { return destOrder; }
+	int[]  rideDistanceDmRaw() { return rideDistanceDm; }
+	int[]  travelTimeDsRaw()   { return travelTimeDs; }
+	byte[] flagsRaw()          { return flags; }
+	/** May be {@code null} (degree-3+ layers). */
+	int[]  positionsFlatRaw()  { return positionsFlat; }
+
+	/**
+	 * Build a {@link StubColumns} directly from deserialized column arrays (Plan A3 IO read).
+	 *
+	 * <p>The arrays are ADOPTED as-is (no copy); each must hold exactly {@code size} rows
+	 * ({@code size*degree} elements for {@code setsFlat} and, if non-null, {@code positionsFlat}).
+	 * Capacity is set to {@code size}; a subsequent {@link #addRow} would grow via the normal
+	 * doubling path. Used only on the resume path where loaded layers are complete (never appended to).
+	 *
+	 * @param positionsFlat the optional position column, or {@code null} if this layer has none
+	 */
+	static StubColumns adopt(int degree, int size,
+			int[] setsFlat, long[] originOrder, long[] destOrder,
+			int[] rideDistanceDm, int[] travelTimeDs, byte[] flags, int[] positionsFlat) {
+		StubColumns sc = new StubColumns(degree);
+		sc.setsFlat = setsFlat;
+		sc.originOrder = originOrder;
+		sc.destOrder = destOrder;
+		sc.rideDistanceDm = rideDistanceDm;
+		sc.travelTimeDs = travelTimeDs;
+		sc.flags = flags;
+		sc.positionsFlat = positionsFlat;
+		sc.size = size;
+		return sc;
+	}
+
 	// -----------------------------------------------------------------------
 	// startTime helper
 	// -----------------------------------------------------------------------
