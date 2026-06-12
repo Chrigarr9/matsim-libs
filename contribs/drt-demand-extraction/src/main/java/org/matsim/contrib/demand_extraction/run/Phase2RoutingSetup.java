@@ -5,12 +5,13 @@ import java.io.IOException;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.population.Person;
+import org.matsim.contrib.demand_extraction.algorithm.network.DeterministicTravelDisutility;
 import org.matsim.contrib.demand_extraction.algorithm.network.OfflineTravelTimes;
-import org.matsim.contrib.demand_extraction.algorithm.network.TimeDistanceTravelDisutility;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.network.io.MatsimNetworkReader;
 import org.matsim.core.population.PopulationUtils;
+import org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutility;
 import org.matsim.core.router.speedy.SpeedyALTFactory;
 import org.matsim.core.router.util.LeastCostPathCalculator;
 import org.matsim.core.router.util.TravelDisutility;
@@ -23,7 +24,7 @@ import org.matsim.vehicles.VehicleUtils;
 
 /**
  * Shared phase-2 routing setup: loads the network + offline travel times and
- * builds a SpeedyALT router with the deterministic time-distance disutility,
+ * builds a SpeedyALT router with the {@link DeterministicTravelDisutility} wrap,
  * exactly as the demand extraction does. Used by route/detour export runners so
  * their routing is bit-for-bit the phase-2 routing.
  */
@@ -31,8 +32,6 @@ public final class Phase2RoutingSetup {
 
     public static final int TRAVEL_TIME_BIN_SIZE = OfflineTravelTimes.TRAVEL_TIME_BIN_SIZE;
     public static final int TRAVEL_TIME_END = OfflineTravelTimes.TRAVEL_TIME_END;
-    private static final double DET_TIME_COEF = 1.0;
-    private static final double DET_DIST_COEF = 1e-9;
 
     public final Network network;
     public final LeastCostPathCalculator router;
@@ -52,7 +51,11 @@ public final class Phase2RoutingSetup {
         Network network = scenario.getNetwork();
 
         TravelTime travelTime = OfflineTravelTimes.load(travelTimesPath);
-        TravelDisutility disutility = new TimeDistanceTravelDisutility(travelTime, DET_TIME_COEF, DET_DIST_COEF);
+        // Identical wrap to MatsimNetworkCache's injected path (Lyon fixture binds
+        // OnlyTimeDependentTravelDisutilityFactory for car), so route/detour exports
+        // are bit-for-bit the phase-2 routing.
+        TravelDisutility disutility = DeterministicTravelDisutility.wrap(
+                new OnlyTimeDependentTravelDisutility(travelTime), travelTime, network);
         LeastCostPathCalculator router = new SpeedyALTFactory().createPathCalculator(network, disutility, travelTime);
 
         Person dummyPerson = PopulationUtils.getFactory().createPerson(Id.createPersonId("phase2_dummy"));

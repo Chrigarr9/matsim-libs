@@ -22,8 +22,9 @@ import org.matsim.vehicles.Vehicle;
 /**
  * Export MATSim-routed OD paths for DRT requests, using the SAME routing the
  * phase-2 demand extraction uses: offline travel times ({@code travel_times.tsv},
- * 15-min bins, 36 h clamp) + SpeedyALT + deterministic time-distance disutility
- * ({@code TimeDistanceTravelDisutility(tt, 1.0, 1e-9)}).
+ * 15-min bins, 36 h clamp) + SpeedyALT +
+ * {@link org.matsim.contrib.demand_extraction.algorithm.network.DeterministicTravelDisutility}
+ * wrapping {@code OnlyTimeDependentTravelDisutility}.
  *
  * <p>Motivation: {@link org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache}
  * computes the same {@code Path} but discards {@code path.links}, keeping only
