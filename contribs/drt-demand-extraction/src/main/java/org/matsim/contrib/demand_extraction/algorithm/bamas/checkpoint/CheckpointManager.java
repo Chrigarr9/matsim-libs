@@ -208,6 +208,38 @@ public final class CheckpointManager {
 		}
 	}
 
+	// ------------------------------------------------------------------
+	// Plan A3 Task 6 — journal integrity gate.
+	// ------------------------------------------------------------------
+
+	/**
+	 * Number of connection-cache journal barriers a journal must contain to cover the completed
+	 * degrees recorded in this manifest: one base-barrier (drained before {@link #writeBase}) plus
+	 * one per completed extension degree (drained before each {@link #writeDegree}). A clean journal
+	 * always has exactly this many committed barriers (each is fsync'd before its manifest update),
+	 * so a journal with fewer has been truncated/corrupted below the high-water mark.
+	 */
+	public int expectedJournalBarriers() {
+		return (baseWritten ? 1 : 0) + perDegree.size();
+	}
+
+	/**
+	 * Refuse the resume if the journal does not cover every completed degree (truncated/corrupted
+	 * below the last barrier's high-water mark). A torn tail BEYOND the last committed barrier is
+	 * fine (those records belong to an unfinished degree the manifest never recorded); fewer
+	 * committed barriers than {@link #expectedJournalBarriers()} is a defect.
+	 */
+	public void requireJournalCoversCompletedDegrees(int committedBarriers) {
+		int expected = expectedJournalBarriers();
+		if (committedBarriers < expected) {
+			throw new IllegalStateException("Connection-cache journal in " + dir
+					+ " covers only " + committedBarriers + " checkpoint barrier(s) but the manifest"
+					+ " records " + expected + " completed (highestDegree=" + highestDegree + ") — the"
+					+ " journal is truncated/damaged below the last barrier; resume cannot guarantee"
+					+ " bit-identical output. Delete the checkpoint dir and rerun.");
+		}
+	}
+
 	/** Read back the pre-prune pair universe persisted by {@link #writeBase}. */
 	public StubColumns readBase() {
 		return readStubFile(PAIR_STUBS);

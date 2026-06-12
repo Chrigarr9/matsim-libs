@@ -235,7 +235,13 @@ public final class BamasEngine {
 									+ journalPath + " but it is missing — the checkpoint is incomplete; "
 									+ "delete the dir and rerun.");
 						}
-						network.bulkLoadFromJournal(ConnectionCacheJournal.read(journalPath));
+						ConnectionCacheJournal.Contents journalContents =
+								ConnectionCacheJournal.read(journalPath);
+						// Plan A3 Task 6: refuse a journal truncated/damaged below the completed-degree
+						// high-water mark (a torn tail beyond the last barrier is fine; missing a whole
+						// completed barrier is not).
+						checkpointMgr.requireJournalCoversCompletedDegrees(journalContents.committedBarrierCount());
+						network.bulkLoadFromJournal(journalContents);
 					}
 					cacheJournal = ConnectionCacheJournal.Writer.openForAppend(journalPath);
 				} catch (java.io.IOException e) {

@@ -135,6 +135,44 @@ class CheckpointManagerTest {
 		assertThrows(IllegalStateException.class, mgr::readManifest);
 	}
 
+	@Test
+	void expectedJournalBarriersAndRefusal(@TempDir Path dir) {
+		// Write base + two extension degrees using writeBase/writeDegree (same as production).
+		CheckpointManager mgr = new CheckpointManager(dir, "fp-task6");
+		mgr.init();
+
+		// Before any write: 0 expected barriers.
+		assertEquals(0, mgr.expectedJournalBarriers());
+
+		// After base: 1 expected barrier.
+		StubColumns pairs = new StubColumns(2);
+		pairs.addRow(new int[]{1, 2}, 0x1L, 0x2L, 100, 50, (byte) 0, new int[]{0, 1});
+		mgr.writeBase(pairs);
+		assertEquals(1, mgr.expectedJournalBarriers());
+
+		// After degree 3: 2 expected barriers.
+		StubColumns d3 = new StubColumns(3);
+		d3.addRow(new int[]{1, 2, 3}, 0x123L, 0x321L, 200, 90, (byte) 0);
+		mgr.writeDegree(3, d3, 7);
+		assertEquals(2, mgr.expectedJournalBarriers());
+
+		// After degree 4: 3 expected barriers.
+		StubColumns d4 = new StubColumns(4);
+		d4.addRow(new int[]{1, 2, 3, 4}, 0x1234L, 0x4321L, 300, 120, (byte) 1);
+		mgr.writeDegree(4, d4, 11);
+		assertEquals(3, mgr.expectedJournalBarriers());
+
+		// requireJournalCoversCompletedDegrees: exact count passes silently.
+		mgr.requireJournalCoversCompletedDegrees(3);
+
+		// One fewer barrier than expected → must refuse with IllegalStateException.
+		assertThrows(IllegalStateException.class,
+				() -> mgr.requireJournalCoversCompletedDegrees(2));
+
+		// More than expected (e.g. torn-tail extra) → still passes.
+		mgr.requireJournalCoversCompletedDegrees(4);
+	}
+
 	private static StubColumns read(Path p) throws IOException {
 		try (InputStream in = Files.newInputStream(p)) {
 			return StubColumnsIO.read(in);

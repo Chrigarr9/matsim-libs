@@ -218,10 +218,12 @@ public final class ConnectionCacheJournal {
     public static final class Contents {
         private final List<Segment> segments;
         private final List<Sssp> ssspKeys;
+        private final int committedBarrierCount;
 
-        Contents(List<Segment> segments, List<Sssp> ssspKeys) {
+        Contents(List<Segment> segments, List<Sssp> ssspKeys, int committedBarrierCount) {
             this.segments = List.copyOf(segments);
             this.ssspKeys = List.copyOf(ssspKeys);
+            this.committedBarrierCount = committedBarrierCount;
         }
 
         /** All committed segments, across all barriers, in write order. */
@@ -229,6 +231,14 @@ public final class ConnectionCacheJournal {
 
         /** All committed SSSP keys, in write order. */
         public List<Sssp> ssspKeys()    { return ssspKeys; }
+
+        /**
+         * Number of complete BARRIER markers read = number of durable checkpoint drains the
+         * journal covers. Each barrier is fsync'd before the manifest records the corresponding
+         * degree done, so a clean journal has exactly as many committed barriers as the manifest
+         * implies ({@code (baseWritten?1:0) + perDegree.size()}).
+         */
+        public int committedBarrierCount() { return committedBarrierCount; }
     }
 
     // =========================================================================
@@ -259,6 +269,7 @@ public final class ConnectionCacheJournal {
             List<Sssp>    committedS  = new ArrayList<>();
             List<Segment> pending     = new ArrayList<>();
             List<Sssp>    pendingS    = new ArrayList<>();
+            int committedBarriers = 0;
 
             try {
                 while (true) {
@@ -295,6 +306,7 @@ public final class ConnectionCacheJournal {
                             committedS.addAll(pendingS);
                             pending.clear();
                             pendingS.clear();
+                            committedBarriers++;
                         }
                         default ->
                             throw new IOException(String.format(
@@ -311,7 +323,7 @@ public final class ConnectionCacheJournal {
                 //  pre-BARRIER record would be in `pending`, which we discard — correct.)
             }
 
-            return new Contents(committed, committedS);
+            return new Contents(committed, committedS, committedBarriers);
         }
     }
 

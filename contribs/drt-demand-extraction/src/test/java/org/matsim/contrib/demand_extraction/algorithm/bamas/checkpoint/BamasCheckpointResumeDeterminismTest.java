@@ -6,9 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -271,6 +273,119 @@ class BamasCheckpointResumeDeterminismTest {
 		changed.setPruningDistanceSavingsLogScale(0.25); // a stub/cache-identity-affecting knob
 		assertThrows(IllegalStateException.class,
 				() -> engine(freshCache(), changed).run(requests()));
+	}
+
+	// -------------------------------------------------------------------------
+	// Plan A3 Task 6 — journal integrity gate tests.
+	// -------------------------------------------------------------------------
+
+	@Test
+	void deletedJournalRefusesResume(@TempDir Path dir) throws IOException {
+		// Write a full checkpoint.
+		ExMasConfigGroup writeCfg = config();
+		writeCfg.setCheckpointDir(dir.toString());
+		RideStores.toList(engine(freshCache(), writeCfg).run(requests()));
+		assertTrue(Files.exists(dir.resolve("cache.journal")));
+
+		// Delete the journal — resume must refuse.
+		Files.delete(dir.resolve("cache.journal"));
+		ExMasConfigGroup resumeCfg = config();
+		resumeCfg.setCheckpointDir(dir.toString());
+		assertThrows(IllegalStateException.class,
+				() -> RideStores.toList(engine(freshCache(), resumeCfg).run(requests())));
+	}
+
+	@Test
+	void journalTruncatedBelowHighWaterRefusesResume(@TempDir Path dir) throws IOException {
+		// Write a full degree-4 checkpoint (3 committed barriers: base + d3 + d4).
+		ExMasConfigGroup writeCfg = config();
+		writeCfg.setCheckpointDir(dir.toString());
+		RideStores.toList(engine(freshCache(), writeCfg).run(requests()));
+
+		// Truncate cache.journal by exactly 1 byte: the last byte is the TAG_BARRIER (0x04)
+		// of the degree-4 barrier. Dropping it demotes those records to a torn tail →
+		// only 2 committed barriers remain, but manifest says highestDegree=4 ⇒ expected 3.
+		Path journal = dir.resolve("cache.journal");
+		try (FileChannel ch = FileChannel.open(journal, StandardOpenOption.WRITE)) {
+			ch.truncate(Files.size(journal) - 1);
+		}
+
+		// Resume must refuse with a message mentioning "barrier".
+		ExMasConfigGroup resumeCfg = config();
+		resumeCfg.setCheckpointDir(dir.toString());
+		IllegalStateException ex = assertThrows(IllegalStateException.class,
+				() -> RideStores.toList(engine(freshCache(), resumeCfg).run(requests())));
+		assertTrue(ex.getMessage().toLowerCase().contains("barrier"),
+				"refusal message should mention 'barrier', got: " + ex.getMessage());
+	}
+
+	@Test
+	void journalTornTailBeyondHighWaterStillResumes(@TempDir Path dir) throws IOException {
+		// Golden (no-checkpoint).
+		List<Ride> golden = RideStores.toList(engine(freshCache(), config()).run(requests()));
+
+		// Write a full degree-4 checkpoint.
+		ExMasConfigGroup writeCfg = config();
+		writeCfg.setCheckpointDir(dir.toString());
+		RideStores.toList(engine(freshCache(), writeCfg).run(requests()));
+
+		// Append a stray partial record after the last committed barrier to simulate a crash
+		// during the next (unfinished) append: tag 2 = SEGMENT, then a truncated payload.
+		// read() will parse the 3 committed barriers then EOF in the partial record →
+		// committedBarrierCount=3 ≥ expected 3 ⇒ resume proceeds.
+		Path journal = dir.resolve("cache.journal");
+		Files.write(journal, new byte[]{2, 0, 0, 0, 1}, StandardOpenOption.APPEND);
+
+		// Resume must succeed and produce bit-identical values.
+		ExMasConfigGroup resumeCfg = config();
+		resumeCfg.setCheckpointDir(dir.toString());
+		List<Ride> resumed = RideStores.toList(engine(freshCache(), resumeCfg).run(requests()));
+		assertEquals(valueSignature(golden), valueSignature(resumed),
+				"resume with a torn tail beyond the last barrier must still produce identical rides");
+	}
+
+	@Test
+	void journalTruncatedToDegreeHighWaterReExtendsViaReroute(
+			@TempDir Path full, @TempDir Path rolled) throws IOException {
+		// Golden (no-checkpoint).
+		List<Ride> golden = RideStores.toList(engine(freshCache(), config()).run(requests()));
+
+		// Produce a full degree-4 checkpoint.
+		ExMasConfigGroup writeCfg = config();
+		writeCfg.setCheckpointDir(full.toString());
+		RideStores.toList(engine(freshCache(), writeCfg).run(requests()));
+
+		// Build a rolled-back dir: pair stubs + degree_3 + manifest at highestDegree=3.
+		// (Same logic as resumeIntoLoopReExtendsFinalDegree.)
+		Files.copy(full.resolve("pair_stubs_preprune.bin"), rolled.resolve("pair_stubs_preprune.bin"));
+		Files.copy(full.resolve("degree_3.stubs.bin"), rolled.resolve("degree_3.stubs.bin"));
+		List<String> manifest = Files.readAllLines(full.resolve("manifest.txt"), StandardCharsets.UTF_8);
+		List<String> rolledManifest = new ArrayList<>();
+		for (String line : manifest) {
+			if (line.startsWith("degree.4.")) {
+				continue;
+			}
+			rolledManifest.add(line.startsWith("highestDegree=") ? "highestDegree=3" : line);
+		}
+		Files.write(rolled.resolve("manifest.txt"), rolledManifest, StandardCharsets.UTF_8);
+
+		// Copy the journal then truncate by 1 byte, so the degree-4 barrier + its records
+		// become an unloaded torn tail. Base + degree-3 = 2 committed barriers, which equals
+		// the rolled-back manifest's expected 2 ⇒ resume PROCEEDS but degree-4 ODs that
+		// were only in the dropped journal records must re-route point-to-point (backstop).
+		Path journalFull = full.resolve("cache.journal");
+		Path journalRolled = rolled.resolve("cache.journal");
+		Files.copy(journalFull, journalRolled);
+		try (FileChannel ch = FileChannel.open(journalRolled, StandardOpenOption.WRITE)) {
+			ch.truncate(Files.size(journalRolled) - 1);
+		}
+
+		// Resume must succeed and produce bit-identical values via the re-route backstop.
+		ExMasConfigGroup resumeCfg = config();
+		resumeCfg.setCheckpointDir(rolled.toString());
+		List<Ride> resumed = RideStores.toList(engine(freshCache(), resumeCfg).run(requests()));
+		assertEquals(valueSignature(golden), valueSignature(resumed),
+				"re-route backstop must produce bit-identical rides when degree-4 journal records are dropped");
 	}
 
 	// -------------------------------------------------------------------------
