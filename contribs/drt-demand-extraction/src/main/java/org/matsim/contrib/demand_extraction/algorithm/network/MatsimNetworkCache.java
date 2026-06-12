@@ -5,8 +5,10 @@ import java.io.BufferedWriter;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -95,6 +97,21 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	// when an individual getSegment call happened to populate one destination of that origin.
 	// Using ConcurrentHashMap as a set (value = Boolean.TRUE).
 	private final ConcurrentHashMap<SsspKey, Boolean> ssspCompleted = new ConcurrentHashMap<>();
+
+	// ── Journaling (Plan A3 checkpoint/resume) ────────────────────────────────
+	// When disabled (default) the volatile read is the only overhead — routing paths
+	// are byte-identical to pre-journaling code.
+
+	/** When true, newly-inserted cache/sssp keys are captured in the pending queues. */
+	private volatile boolean journalingEnabled = false;
+
+	/** Keys of cache entries inserted since the last drainPendingToJournal (or since enableJournaling). */
+	private final ConcurrentLinkedQueue<CacheKey> pendingSegmentKeys = new ConcurrentLinkedQueue<>();
+
+	/** Keys of ssspCompleted entries inserted since the last drainPendingToJournal. */
+	private final ConcurrentLinkedQueue<SsspKey> pendingSsspKeys = new ConcurrentLinkedQueue<>();
+
+	// ─────────────────────────────────────────────────────────────────────────
 
 	// SSSP tree for batch precomputation (one per thread, NOT thread-safe)
 	private final ThreadLocal<LeastCostPathTree> threadLocalTree;
@@ -227,8 +244,11 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 
 		// Use computeIfAbsent for atomic cache operations. This ensures only ONE thread
 		// computes the segment for a given key, preventing race conditions in routers.
-		return cache.computeIfAbsent(key, k ->
-				computeSegment(originLinkId, destLinkId, canonicalDepartureTime));
+		return cache.computeIfAbsent(key, k -> {
+			TravelSegment seg = computeSegment(originLinkId, destLinkId, canonicalDepartureTime);
+			if (journalingEnabled) pendingSegmentKeys.add(k);
+			return seg;
+		});
 	}
 
 	/**
@@ -278,6 +298,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 			new LeastCostPathTree.TravelTimeStopCriterion(maxTravelTimeSeconds);
 		tree.calculate(fromLink, canonicalDepartureTime, dummyPerson, dummyVehicle, stopCriterion);
 		ssspCompleted.put(ssspKey, Boolean.TRUE);
+		if (journalingEnabled) pendingSsspKeys.add(ssspKey);
 		batchTreesComputed.incrementAndGet();
 
 		for (Id<Link> toLinkId : toLinkIds) {
@@ -285,7 +306,11 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 			if (cache.containsKey(key)) continue;
 
 			if (fromLinkId.equals(toLinkId)) {
-				cache.computeIfAbsent(key, k -> computeSegment(fromLinkId, toLinkId, canonicalDepartureTime));
+				cache.computeIfAbsent(key, k -> {
+					TravelSegment seg = computeSegment(fromLinkId, toLinkId, canonicalDepartureTime);
+					if (journalingEnabled) pendingSegmentKeys.add(k);
+					return seg;
+				});
 				batchSegmentsPopulated.incrementAndGet();
 				continue;
 			}
@@ -293,6 +318,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 			Link toLink = network.getLinks().get(toLinkId);
 			if (toLink == null) {
 				cache.put(key, TravelSegment.unreachable());
+				if (journalingEnabled) pendingSegmentKeys.add(key);
 				batchSegmentsPopulated.incrementAndGet();
 				continue;
 			}
@@ -304,6 +330,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 			// these adjacent link-to-link cases point-to-point instead.
 			if (fromLink.getToNode().getId().equals(toLink.getFromNode().getId())) {
 				cache.put(key, computeSegment(fromLinkId, toLinkId, canonicalDepartureTime));
+				if (journalingEnabled) pendingSegmentKeys.add(key);
 				batchSegmentsPopulated.incrementAndGet();
 				continue;
 			}
@@ -323,6 +350,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 				double dist = tree.getDistance(toNodeIdx) + toLink.getLength();
 				double utility = -(tree.getCost(toNodeIdx) + toLinkDisutility);
 				cache.put(key, new TravelSegment(tt, dist, utility));
+				if (journalingEnabled) pendingSegmentKeys.add(key);
 				batchSegmentsPopulated.incrementAndGet();
 			}
 			// else: SSSP stop-criterion didn't reach this node within the bound — leave the
@@ -557,7 +585,81 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		totalRoutingAttempts.set(0);
 		routingFailures.set(0);
 	}
-	
+
+	// ── Journaling API (Plan A3 checkpoint/resume) ────────────────────────────
+
+	/**
+	 * Enable journaling — from this point on, every newly-inserted cache/sssp entry
+	 * is captured in the pending queues for draining at checkpoint barriers.
+	 *
+	 * <p>Must be called before routing begins if journaling is desired.
+	 * Once enabled it cannot be disabled (the knob is one-way for correctness).
+	 */
+	public void enableJournaling() {
+		this.journalingEnabled = true;
+	}
+
+	/**
+	 * Drain all pending (newly-inserted since the last drain or since enableJournaling)
+	 * cache and sssp entries into the journal, then write a single BARRIER marker and fsync.
+	 *
+	 * <p>Must be called from a single thread at a checkpoint barrier — no routing should
+	 * be concurrently inserting into the cache when this method runs.
+	 *
+	 * @param writer open journal writer (caller owns the lifecycle)
+	 * @throws IOException if writing fails
+	 */
+	public void drainPendingToJournal(ConnectionCacheJournal.Writer writer) throws IOException {
+		List<ConnectionCacheJournal.Segment> segments = new ArrayList<>();
+		List<ConnectionCacheJournal.Sssp> ssspKeys = new ArrayList<>();
+
+		CacheKey segKey;
+		while ((segKey = pendingSegmentKeys.poll()) != null) {
+			TravelSegment seg = cache.get(segKey);
+			if (seg == null) continue; // defensive: entry was removed (e.g. clearCache in tests)
+			segments.add(new ConnectionCacheJournal.Segment(
+					segKey.origin.toString(),
+					segKey.destination.toString(),
+					segKey.timeBin,
+					seg.getTravelTime(),
+					seg.getDistance(),
+					seg.getNetworkUtility()));
+		}
+
+		SsspKey ssspKey;
+		while ((ssspKey = pendingSsspKeys.poll()) != null) {
+			ssspKeys.add(new ConnectionCacheJournal.Sssp(
+					ssspKey.origin.toString(),
+					ssspKey.timeBin));
+		}
+
+		writer.appendBarrier(segments, ssspKeys);
+	}
+
+	/**
+	 * Bulk-load committed journal contents into this cache, reconstructing both
+	 * the connection-cache map and the ssspCompleted map.
+	 *
+	 * <p>Intended for use at resume time, before any routing begins, to restore
+	 * the cache to the exact state it was in when the checkpoint was taken.
+	 *
+	 * @param contents result of {@link ConnectionCacheJournal#read(java.nio.file.Path)}
+	 */
+	public void bulkLoadFromJournal(ConnectionCacheJournal.Contents contents) {
+		for (ConnectionCacheJournal.Segment seg : contents.segments()) {
+			Id<Link> from = Id.createLinkId(seg.fromLink());
+			Id<Link> to   = Id.createLinkId(seg.toLink());
+			cache.put(new CacheKey(from, to, seg.bin()),
+					new TravelSegment(seg.tt(), seg.dist(), seg.utility()));
+		}
+		for (ConnectionCacheJournal.Sssp sssp : contents.ssspKeys()) {
+			Id<Link> from = Id.createLinkId(sssp.fromLink());
+			ssspCompleted.put(new SsspKey(from, sssp.bin()), Boolean.TRUE);
+		}
+	}
+
+	// ─────────────────────────────────────────────────────────────────────────
+
 	/**
 	 * Simple pair class for O-D connections.
 	 */
@@ -701,6 +803,14 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	 */
 	TravelSegment peekForTesting(Id<Link> origin, Id<Link> dest, int timeBin) {
 		return cache.get(new CacheKey(origin, dest, timeBin));
+	}
+
+	/**
+	 * Check whether the given (origin, timeBin) pair is present in ssspCompleted.
+	 * Intended for use in unit tests only.
+	 */
+	boolean isSsspCompletedForTesting(Id<Link> origin, int bin) {
+		return ssspCompleted.containsKey(new SsspKey(origin, bin));
 	}
 
 	private MatsimNetworkCache() {

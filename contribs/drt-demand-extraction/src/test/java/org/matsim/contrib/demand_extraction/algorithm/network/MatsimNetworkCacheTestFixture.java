@@ -33,6 +33,11 @@ public final class MatsimNetworkCacheTestFixture {
         return cache.peekForTesting(origin, dest, timeBin);
     }
 
+    /** Check whether a given (origin, timeBin) pair is present in ssspCompleted. */
+    public static boolean isSsspCompleted(MatsimNetworkCache cache, Id<Link> origin, int timeBin) {
+        return cache.isSsspCompletedForTesting(origin, timeBin);
+    }
+
     /** Build a MatsimNetworkCache with real routing capability for integration tests.
      *  Uses Dijkstra for cache-miss point-to-point routing. */
     public static MatsimNetworkCache createWithRouting(Network network, TravelTime tt, TravelDisutility td, int timeBinSize) {
