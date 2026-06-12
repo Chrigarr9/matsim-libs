@@ -613,6 +613,12 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	 * bit-identically point-to-point on resume, no journal needed) does not grow the pending queue
 	 * unboundedly. Only safe to call when no further barrier will be written: any still-pending
 	 * entries are intentionally dropped because they will not be journaled.
+	 *
+	 * <p>Thread-safety: the engine calls this from the single coordinating thread after all
+	 * parallel generation has joined, so it is NOT concurrent with the routing threads that
+	 * enqueue into the pending queues. {@code journalingEnabled} is volatile and the queues are
+	 * concurrent, so a late stray enqueue would be memory-safe, but the contract is single-threaded
+	 * quiescence at this call: clearing here races with no live producer.
 	 */
 	public void disableJournaling() {
 		this.journalingEnabled = false;

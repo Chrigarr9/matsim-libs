@@ -250,6 +250,14 @@ public final class BamasEngine {
 			}
 		}
 
+		// Plan A3 Task 5: release the connection-cache journal's FileChannel on ANY abnormal exit
+		// from generation, not only via the normal close before the streaming return below. In the
+		// production process-abort model the OS reclaims the FD and the per-barrier fsync keeps the
+		// on-disk journal durable regardless; this guard additionally stops a leaked channel from
+		// blocking journal reopen inside a long-lived (or Windows-locked) JVM. The success path
+		// still closes the writer at the streaming return, so this catch fires only when an
+		// exception propagates first. The body keeps its original indentation under the try.
+		try {
         // Phase 2: Generate pair rides with budget validation
 		log.info("");
 		log.info("PHASE 2: Pair Ride Generation");
@@ -605,6 +613,18 @@ public final class BamasEngine {
 				}
 			}
 			return new StubRideStore(allRides, stubLayers, materializer, requestById);
+		}
+		} catch (Throwable t) {
+			// Best-effort release on the failure path; the propagating exception is the real signal.
+			if (cacheJournal != null) {
+				try {
+					network.disableJournaling();
+					cacheJournal.close();
+				} catch (java.io.IOException ignored) {
+					// nothing actionable — the original throwable is rethrown below
+				}
+			}
+			throw t;
 		}
 
 		// Phase 5: Stop-Based Ride Generation (HyperPool Stage 1)

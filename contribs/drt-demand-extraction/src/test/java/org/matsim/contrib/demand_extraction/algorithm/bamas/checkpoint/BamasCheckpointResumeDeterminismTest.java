@@ -209,6 +209,8 @@ class BamasCheckpointResumeDeterminismTest {
 
 	/** True if a cache.journal exists and holds more than the 8-byte header (i.e. has real data). */
 	private static boolean journalNonEmpty(Path journal) throws IOException {
+		// 8L == the fixed file header ConnectionCacheJournal writes once: MAGIC (int, 4B) + VERSION
+		// (int, 4B). A size strictly larger means at least one tagged record was appended after it.
 		return Files.exists(journal) && Files.size(journal) > 8L;
 	}
 
@@ -239,6 +241,11 @@ class BamasCheckpointResumeDeterminismTest {
 		// The journal is NOT rolled back (a real crash would leave it at the degree-3 high-water
 		// mark; here it still holds all entries). Either way bulk-load warms the cache, so the
 		// re-extended degree 4 materialises to the same routed values.
+		// TODO(Task 7): add a sub-case that TRUNCATES the journal to the degree-3 high-water mark
+		// (drop the degree-4 BARRIER and its records) to exercise the true post-crash journal state
+		// + the re-route-on-miss backstop, rather than resuming with a journal that still holds the
+		// degree-4 entries. The kill-resume determinism gate (Lyon 1%, kill at d=4/d=6) covers this
+		// end-to-end; this is the cheap unit-level mirror.
 		Files.copy(full.resolve("cache.journal"), rolled.resolve("cache.journal"));
 
 		// Resume from the rolled-back checkpoint: loads degree_3, rebuilds the degree-3 DegreeGraph
