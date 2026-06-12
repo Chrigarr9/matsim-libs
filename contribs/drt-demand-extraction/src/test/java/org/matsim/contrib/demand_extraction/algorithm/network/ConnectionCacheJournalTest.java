@@ -294,4 +294,36 @@ public class ConnectionCacheJournalTest {
         // Reading a non-existent file should throw IOException (file not found)
         assertThrows(IOException.class, () -> ConnectionCacheJournal.read(file));
     }
+
+    // -------------------------------------------------------------------------
+    // Test 9: committedBarrierCount — one per durable barrier; a torn tail does
+    //         not inflate it (Plan A3 Task 6 high-water gate relies on this).
+    // -------------------------------------------------------------------------
+    @Test
+    void committedBarrierCount_countsBarriersNotTornTail() throws IOException {
+        Path file = tmp.resolve("count.journal");
+
+        // Zero barriers (header only) → 0.
+        try (var w = ConnectionCacheJournal.Writer.openForAppend(file)) {
+            // no appendBarrier
+        }
+        assertEquals(0, ConnectionCacheJournal.read(file).committedBarrierCount());
+
+        // Three barriers → 3 (the third has empty collections — appendBarrier still emits a marker).
+        try (var w = ConnectionCacheJournal.Writer.openForAppend(file)) {
+            w.appendBarrier(List.of(new ConnectionCacheJournal.Segment("A", "B", 0, 1.0, 2.0, 3.0)), List.of());
+            w.appendBarrier(List.of(new ConnectionCacheJournal.Segment("B", "C", 1, 4.0, 5.0, 6.0)),
+                    List.of(new ConnectionCacheJournal.Sssp("B", 1)));
+            w.appendBarrier(List.of(), List.of());
+        }
+        assertEquals(3, ConnectionCacheJournal.read(file).committedBarrierCount());
+
+        // A torn partial record after the last barrier must NOT raise the count.
+        try (var raf = new RandomAccessFile(file.toFile(), "rw")) {
+            raf.seek(Files.size(file));
+            raf.write(new byte[]{0x02, 0x00, 0x00, 0x00, 0x01}); // partial SEGMENT (tag + 4 of 32 payload bytes)
+        }
+        assertEquals(3, ConnectionCacheJournal.read(file).committedBarrierCount(),
+                "a torn tail beyond the last barrier must not change the committed barrier count");
+    }
 }

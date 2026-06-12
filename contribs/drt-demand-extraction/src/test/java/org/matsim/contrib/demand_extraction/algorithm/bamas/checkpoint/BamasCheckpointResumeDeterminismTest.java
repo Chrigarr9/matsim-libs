@@ -28,6 +28,7 @@ import org.matsim.api.core.v01.network.Node;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasEngine;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStores;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
+import org.matsim.contrib.demand_extraction.algorithm.network.ConnectionCacheJournal;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCacheTestFixture;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
@@ -216,6 +217,27 @@ class BamasCheckpointResumeDeterminismTest {
 		return Files.exists(journal) && Files.size(journal) > 8L;
 	}
 
+	/**
+	 * Drop the journal's final byte — which, on a cleanly-closed journal, is the last barrier's
+	 * {@code TAG_BARRIER} marker (0x04): {@code appendBarrier} writes it last + fsyncs, and
+	 * {@code close()} only flushes (no trailer). Asserting the byte first makes these truncation
+	 * tests fail self-descriptively if the on-disk format ever grows a footer. Demoting the last
+	 * barrier marker turns its preceding records into a torn tail ⇒ one fewer committed barrier.
+	 */
+	private static void dropLastBarrierByte(Path journal) throws IOException {
+		long size = Files.size(journal);
+		byte[] last = new byte[1];
+		try (FileChannel ch = FileChannel.open(journal, StandardOpenOption.READ)) {
+			ch.position(size - 1);
+			ch.read(java.nio.ByteBuffer.wrap(last));
+		}
+		assertEquals(4, last[0],
+				"journal's final byte must be the TAG_BARRIER (0x04) this truncation is meant to drop");
+		try (FileChannel ch = FileChannel.open(journal, StandardOpenOption.WRITE)) {
+			ch.truncate(size - 1);
+		}
+	}
+
 	@Test
 	void resumeIntoLoopReExtendsFinalDegree(@TempDir Path full, @TempDir Path rolled) throws IOException {
 		List<Ride> golden = RideStores.toList(engine(freshCache(), config()).run(requests()));
@@ -302,13 +324,14 @@ class BamasCheckpointResumeDeterminismTest {
 		writeCfg.setCheckpointDir(dir.toString());
 		RideStores.toList(engine(freshCache(), writeCfg).run(requests()));
 
-		// Truncate cache.journal by exactly 1 byte: the last byte is the TAG_BARRIER (0x04)
-		// of the degree-4 barrier. Dropping it demotes those records to a torn tail →
-		// only 2 committed barriers remain, but manifest says highestDegree=4 ⇒ expected 3.
+		// Drop the degree-4 barrier marker → only 2 committed barriers remain, but the manifest
+		// still says highestDegree=4 ⇒ expected 3.
 		Path journal = dir.resolve("cache.journal");
-		try (FileChannel ch = FileChannel.open(journal, StandardOpenOption.WRITE)) {
-			ch.truncate(Files.size(journal) - 1);
-		}
+		assertEquals(3, ConnectionCacheJournal.read(journal).committedBarrierCount(),
+				"precondition: a full degree-4 journal has base + d3 + d4 = 3 committed barriers");
+		dropLastBarrierByte(journal);
+		assertEquals(2, ConnectionCacheJournal.read(journal).committedBarrierCount(),
+				"dropping the d4 barrier marker must leave exactly 2 committed barriers");
 
 		// Resume must refuse with a message mentioning "barrier".
 		ExMasConfigGroup resumeCfg = config();
@@ -329,12 +352,15 @@ class BamasCheckpointResumeDeterminismTest {
 		writeCfg.setCheckpointDir(dir.toString());
 		RideStores.toList(engine(freshCache(), writeCfg).run(requests()));
 
-		// Append a stray partial record after the last committed barrier to simulate a crash
-		// during the next (unfinished) append: tag 2 = SEGMENT, then a truncated payload.
-		// read() will parse the 3 committed barriers then EOF in the partial record →
-		// committedBarrierCount=3 ≥ expected 3 ⇒ resume proceeds.
+		// Append a stray partial record after the last committed barrier to simulate a crash during
+		// the next (unfinished) append: byte 2 = TAG_SEGMENT, then 4 bytes of a fromId. A full
+		// SEGMENT needs 2 ints + 3 doubles (32 bytes after the tag), so 4 bytes is guaranteed
+		// incomplete ⇒ read() parses the 3 committed barriers, then EOFs in this partial record and
+		// discards it: committedBarrierCount stays 3 ≥ expected 3 ⇒ resume proceeds.
 		Path journal = dir.resolve("cache.journal");
 		Files.write(journal, new byte[]{2, 0, 0, 0, 1}, StandardOpenOption.APPEND);
+		assertEquals(3, ConnectionCacheJournal.read(journal).committedBarrierCount(),
+				"a torn tail beyond the last barrier must not change the committed barrier count");
 
 		// Resume must succeed and produce bit-identical values.
 		ExMasConfigGroup resumeCfg = config();
@@ -345,8 +371,8 @@ class BamasCheckpointResumeDeterminismTest {
 	}
 
 	@Test
-	void journalTruncatedToDegreeHighWaterReExtendsViaReroute(
-			@TempDir Path full, @TempDir Path rolled) throws IOException {
+	void journalTruncatedExactlyToHighWaterStillResumes(@TempDir Path full, @TempDir Path rolled)
+			throws IOException {
 		// Golden (no-checkpoint).
 		List<Ride> golden = RideStores.toList(engine(freshCache(), config()).run(requests()));
 
@@ -355,37 +381,54 @@ class BamasCheckpointResumeDeterminismTest {
 		writeCfg.setCheckpointDir(full.toString());
 		RideStores.toList(engine(freshCache(), writeCfg).run(requests()));
 
-		// Build a rolled-back dir: pair stubs + degree_3 + manifest at highestDegree=3.
-		// (Same logic as resumeIntoLoopReExtendsFinalDegree.)
-		Files.copy(full.resolve("pair_stubs_preprune.bin"), rolled.resolve("pair_stubs_preprune.bin"));
-		Files.copy(full.resolve("degree_3.stubs.bin"), rolled.resolve("degree_3.stubs.bin"));
-		List<String> manifest = Files.readAllLines(full.resolve("manifest.txt"), StandardCharsets.UTF_8);
-		List<String> rolledManifest = new ArrayList<>();
-		for (String line : manifest) {
-			if (line.startsWith("degree.4.")) {
-				continue;
-			}
-			rolledManifest.add(line.startsWith("highestDegree=") ? "highestDegree=3" : line);
-		}
-		Files.write(rolled.resolve("manifest.txt"), rolledManifest, StandardCharsets.UTF_8);
+		// Roll the manifest back to highestDegree=3 (degree 4 must be re-extended) AND drop the
+		// degree-4 barrier marker from the journal — exactly the post-crash state: a journal whose
+		// last durable barrier is the degree-3 high-water mark. Base + degree-3 = 2 committed
+		// barriers == the rolled manifest's expected 2, so the gate ADMITS it and resume proceeds.
+		rollBackToDegree3(full, rolled);
+		dropLastBarrierByte(rolled.resolve("cache.journal"));
 
-		// Copy the journal then truncate by 1 byte, so the degree-4 barrier + its records
-		// become an unloaded torn tail. Base + degree-3 = 2 committed barriers, which equals
-		// the rolled-back manifest's expected 2 ⇒ resume PROCEEDS but degree-4 ODs that
-		// were only in the dropped journal records must re-route point-to-point (backstop).
-		Path journalFull = full.resolve("cache.journal");
-		Path journalRolled = rolled.resolve("cache.journal");
-		Files.copy(journalFull, journalRolled);
-		try (FileChannel ch = FileChannel.open(journalRolled, StandardOpenOption.WRITE)) {
-			ch.truncate(Files.size(journalRolled) - 1);
-		}
+		// The truncation genuinely dropped one durable barrier (3 → 2): the manifest and the journal
+		// now agree at the degree-3 high-water mark.
+		assertEquals(3, ConnectionCacheJournal.read(full.resolve("cache.journal")).committedBarrierCount(),
+				"a full degree-4 journal has base + d3 + d4 = 3 committed barriers");
+		assertEquals(2, ConnectionCacheJournal.read(rolled.resolve("cache.journal")).committedBarrierCount(),
+				"dropping the d4 barrier leaves exactly the rolled manifest's expected 2");
 
-		// Resume must succeed and produce bit-identical values via the re-route backstop.
+		// Resume must proceed (gate admits the exactly-truncated journal) and be bit-identical.
 		ExMasConfigGroup resumeCfg = config();
 		resumeCfg.setCheckpointDir(rolled.toString());
 		List<Ride> resumed = RideStores.toList(engine(freshCache(), resumeCfg).run(requests()));
 		assertEquals(valueSignature(golden), valueSignature(resumed),
-				"re-route backstop must produce bit-identical rides when degree-4 journal records are dropped");
+				"resume from a journal truncated to exactly the completed-degree high-water mark must "
+				+ "reproduce the golden bit-for-bit");
+
+		// NOTE — what this does NOT prove: the scoped re-route backstop. On this FreeSpeed corridor
+		// every request shares the same OD, so pair-gen's SSSP precompute already caches every segment
+		// degree-4 extension needs; the d4 barrier carries no NEW segments and re-extension hits the
+		// warm base cache (verified: dropping the d4 barrier above dropped 0 segments — barrier count
+		// fell 3→2 but the loaded segment set is unchanged). So no point-to-point re-route is exercised
+		// here. The backstop's SSSP-vs-point-to-point divergence handling is proven by the Task 7 Lyon
+		// gate, where extension genuinely routes ODs outside the precomputed cones.
+	}
+
+	/**
+	 * Stage a resume dir rolled back to highestDegree=3: copy the pre-prune pair universe, the
+	 * degree-3 layer, the (degree-4-stripped) manifest, and the full cache journal from {@code src}.
+	 */
+	private static void rollBackToDegree3(Path src, Path dest) throws IOException {
+		Files.copy(src.resolve("pair_stubs_preprune.bin"), dest.resolve("pair_stubs_preprune.bin"));
+		Files.copy(src.resolve("degree_3.stubs.bin"), dest.resolve("degree_3.stubs.bin"));
+		List<String> manifest = Files.readAllLines(src.resolve("manifest.txt"), StandardCharsets.UTF_8);
+		List<String> rolled = new ArrayList<>();
+		for (String line : manifest) {
+			if (line.startsWith("degree.4.")) {
+				continue; // drop the degree-4 entries
+			}
+			rolled.add(line.startsWith("highestDegree=") ? "highestDegree=3" : line);
+		}
+		Files.write(dest.resolve("manifest.txt"), rolled, StandardCharsets.UTF_8);
+		Files.copy(src.resolve("cache.journal"), dest.resolve("cache.journal"));
 	}
 
 	// -------------------------------------------------------------------------
