@@ -42,20 +42,24 @@ import org.matsim.core.scoring.functions.ScoringParametersForPerson;
 import org.matsim.core.trafficmonitoring.FreeSpeedTravelTime;
 
 /**
- * Plan A3 Task 4 — resume determinism on the streaming pair-stub D2D path.
+ * Plan A3 Task 4 + 5 — resume determinism on the streaming pair-stub D2D path.
  *
  * <p>Self-contained (no Lyon env): a short corridor network plus a handful of mutually-shareable
  * requests that pool up to degree 4 under a pass-through budget validator. The engine takes the
  * {@code pairStubPath} (stub mode default-on, stop-based off, maxDegree&gt;2), so checkpoints are
  * written and resume is exercised end-to-end.
  *
- * <h3>What this asserts — and what it deliberately does not</h3>
- * The resume reloads the per-degree {@code StubColumns} from disk byte-for-byte, so the ride
- * STRUCTURE (per-degree request sets, pickup ordering, FIFO/LIFO kind, degree) is reproduced
- * exactly regardless of the connection cache. This test asserts that structural parity. The
- * per-ride routed VALUES (distance / time / budget) are re-materialised at export against the
- * resumed run's (cold) cache, and are only bit-identical once the connection-cache journal lands
- * (Plan A3 Task 5) — that value parity is the Task 7 headline gate, not asserted here.
+ * <h3>What this asserts</h3>
+ * Resume reloads the per-degree {@code StubColumns} from disk byte-for-byte (ride STRUCTURE:
+ * request sets, pickup ordering, FIFO/LIFO kind, degree) AND, with the Task-5 connection-cache
+ * journal, repopulates the routing cache so the per-ride routed VALUES (distance, travel time,
+ * network utility, start/end time) re-materialise bit-identically too. Both signatures are asserted
+ * for the complete-checkpoint resume and the resume-into-loop case.
+ *
+ * <p>Note: on this trivial FreeSpeed corridor, point-to-point and SSSP routing happen to agree, so
+ * value parity would also hold with a cold cache here; the journal's <i>necessity</i> shows only at
+ * Lyon scale (the Task 7 gate). What this test proves is that the journal wiring does not corrupt or
+ * drop values — a strong end-to-end check of the cache persist/restore path.
  */
 @Tag("fast")
 class BamasCheckpointResumeDeterminismTest {
@@ -157,28 +161,55 @@ class BamasCheckpointResumeDeterminismTest {
 		return sig;
 	}
 
+	/**
+	 * Full signature per ride: structure PLUS the routed values (distance, travel time, network
+	 * utility, start/end time) as raw long bits, so any divergence in the journal-restored cache
+	 * is caught bit-exactly.
+	 */
+	private static List<String> valueSignature(List<Ride> rides) {
+		List<String> sig = new ArrayList<>(rides.size());
+		for (Ride r : rides) {
+			sig.add(r.getDegree() + "|" + Arrays.toString(r.getRequestIndices()) + "|" + r.getKind()
+					+ "|d=" + Double.doubleToRawLongBits(r.getRideDistance())
+					+ "|tt=" + Double.doubleToRawLongBits(r.getRideTravelTime())
+					+ "|u=" + Double.doubleToRawLongBits(r.getRideNetworkUtility())
+					+ "|s=" + Double.doubleToRawLongBits(r.getStartTime())
+					+ "|e=" + Double.doubleToRawLongBits(r.getEndTime()));
+		}
+		sig.sort(null);
+		return sig;
+	}
+
 	@Test
-	void resumeFromCompleteCheckpointReproducesStructure(@TempDir Path dir) {
+	void resumeFromCompleteCheckpointReproducesStructure(@TempDir Path dir) throws IOException {
 		// Baseline: a fresh run with no checkpointing.
 		List<Ride> golden = RideStores.toList(engine(freshCache(), config()).run(requests()));
 		assertTrue(golden.stream().anyMatch(r -> r.getDegree() == 4),
 				"scenario must pool to degree 4 to exercise the extension loop");
 
-		// Fresh run WITH checkpointing — writes base + degree_3 + degree_4 + manifest.
+		// Fresh run WITH checkpointing — writes base + degree_3 + degree_4 + manifest + journal.
 		ExMasConfigGroup writeCfg = config();
 		writeCfg.setCheckpointDir(dir.toString());
 		List<Ride> written = RideStores.toList(engine(freshCache(), writeCfg).run(requests()));
-		assertEquals(structure(golden), structure(written),
-				"checkpoint-writing run must match the no-checkpoint baseline");
+		assertEquals(valueSignature(golden), valueSignature(written),
+				"checkpoint-writing run must match the no-checkpoint baseline (values included)");
 		assertTrue(Files.exists(dir.resolve("degree_4.stubs.bin")));
+		assertTrue(journalNonEmpty(dir.resolve("cache.journal")),
+				"a checkpoint run must write a non-empty connection-cache journal");
 
-		// Resume from the COMPLETE checkpoint (cold cache): highest==maxDegree ⇒ the loop is
-		// skipped, every layer is loaded, export reproduces the structure.
+		// Resume from the COMPLETE checkpoint (fresh cold cache): highest==maxDegree ⇒ the loop is
+		// skipped, every layer is loaded, the journal repopulates the cache, and export reproduces
+		// both the structure AND the routed values bit-for-bit.
 		ExMasConfigGroup resumeCfg = config();
 		resumeCfg.setCheckpointDir(dir.toString());
 		List<Ride> resumed = RideStores.toList(engine(freshCache(), resumeCfg).run(requests()));
-		assertEquals(structure(golden), structure(resumed),
-				"resume from a complete checkpoint must reproduce the ride structure");
+		assertEquals(valueSignature(golden), valueSignature(resumed),
+				"resume from a complete checkpoint must reproduce rides AND routed values");
+	}
+
+	/** True if a cache.journal exists and holds more than the 8-byte header (i.e. has real data). */
+	private static boolean journalNonEmpty(Path journal) throws IOException {
+		return Files.exists(journal) && Files.size(journal) > 8L;
 	}
 
 	@Test
@@ -205,13 +236,19 @@ class BamasCheckpointResumeDeterminismTest {
 		Files.write(rolled.resolve("manifest.txt"), rolledManifest, StandardCharsets.UTF_8);
 		assertFalse(Files.exists(rolled.resolve("degree_4.stubs.bin")));
 
+		// The journal is NOT rolled back (a real crash would leave it at the degree-3 high-water
+		// mark; here it still holds all entries). Either way bulk-load warms the cache, so the
+		// re-extended degree 4 materialises to the same routed values.
+		Files.copy(full.resolve("cache.journal"), rolled.resolve("cache.journal"));
+
 		// Resume from the rolled-back checkpoint: loads degree_3, rebuilds the degree-3 DegreeGraph
-		// + pair graph deterministically, continues the loop at degree 3 → re-extends degree 4.
+		// + pair graph deterministically, bulk-loads the journal, continues the loop at degree 3 →
+		// re-extends degree 4 to the same structure AND routed values.
 		ExMasConfigGroup resumeCfg = config();
 		resumeCfg.setCheckpointDir(rolled.toString());
 		List<Ride> resumed = RideStores.toList(engine(freshCache(), resumeCfg).run(requests()));
-		assertEquals(structure(golden), structure(resumed),
-				"resume into the loop must re-extend the final degree to the same structure");
+		assertEquals(valueSignature(golden), valueSignature(resumed),
+				"resume into the loop must re-extend the final degree to the same rides AND values");
 	}
 
 	@Test

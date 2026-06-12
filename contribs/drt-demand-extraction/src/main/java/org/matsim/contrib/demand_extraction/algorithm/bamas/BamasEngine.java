@@ -24,6 +24,7 @@ import org.matsim.contrib.demand_extraction.algorithm.generation.StopBasedRideGe
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.hyperpool.HyperPoolGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.hyperpool.StopCompatibilityChecker;
+import org.matsim.contrib.demand_extraction.algorithm.network.ConnectionCacheJournal;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.MaterializedRideStore;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStore;
@@ -190,6 +191,11 @@ public final class BamasEngine {
 		CheckpointManager checkpointMgr = null;
 		boolean resuming = false;
 		CheckpointManager.Manifest resumeManifest = null;
+		// Plan A3 Task 5 — connection-cache journal writer (open only on the checkpointing
+		// pair-stub path; null otherwise). Persists the SSSP-populated routing entries from the
+		// phases resume SKIPS, so a resumed run reproduces those (non-point-to-point-reproducible)
+		// cache values exactly. Closed before the streaming-export return.
+		ConnectionCacheJournal.Writer cacheJournal = null;
 		if (exMasConfig.isCheckpointingEnabled()) {
 			if (pairStubPath) {
 				String fingerprint = RunFingerprint.compute(exMasConfig,
@@ -212,6 +218,30 @@ public final class BamasEngine {
 							exMasConfig.getCheckpointDir(), m.highestDegree);
 				} else {
 					log.info("Plan A3 checkpointing ENABLED (fresh) -> {}", exMasConfig.getCheckpointDir());
+				}
+
+				// Journal setup. Enable capture BEFORE pair generation routes (singles, generated
+				// earlier above, route point-to-point and are regenerated identically on resume, so
+				// they need no journal). On resume, pair-gen is skipped, so the journal is the ONLY
+				// source of its SSSP cache values — bulk-load them before any routing; then reopen
+				// the same journal to append entries from any degrees this resumed run recomputes.
+				network.enableJournaling();
+				java.nio.file.Path journalPath = java.nio.file.Path.of(
+						exMasConfig.getCheckpointDir()).resolve("cache.journal");
+				try {
+					if (resuming) {
+						if (!java.nio.file.Files.exists(journalPath)) {
+							throw new IllegalStateException("Resume requires the connection-cache journal "
+									+ journalPath + " but it is missing — the checkpoint is incomplete; "
+									+ "delete the dir and rerun.");
+						}
+						network.bulkLoadFromJournal(ConnectionCacheJournal.read(journalPath));
+					}
+					cacheJournal = ConnectionCacheJournal.Writer.openForAppend(journalPath);
+				} catch (java.io.IOException e) {
+					throw new java.io.UncheckedIOException(
+							"Cannot open/read connection-cache journal " + journalPath
+							+ " — corrupt or unreadable checkpoint; delete the dir and rerun.", e);
 				}
 			} else {
 				log.warn("checkpointDir is set but checkpointing is only supported on the streaming "
@@ -266,6 +296,9 @@ public final class BamasEngine {
 			// persisted universe matches what the graph was built from. Skipped on resume (the
 			// base checkpoint is already on disk and was just read back from it).
 			if (checkpointMgr != null && !resuming) {
+				// Journal the pair-gen SSSP entries durably BEFORE the manifest records base done,
+				// so a crash after the manifest still finds those entries on resume.
+				drainJournalBarrier(cacheJournal);
 				checkpointMgr.writeBase(allPairStubs);
 			}
 
@@ -419,6 +452,9 @@ public final class BamasEngine {
 				// RATIO prune; post-loop COVERAGE_TOPK re-applies uniformly on resume too).
 				// generatedCount (pre-prune) restores nextRideIndex exactly. Manifest written last.
 				if (checkpointMgr != null) {
+					// Journal this degree's new SSSP entries durably before the manifest records
+					// the degree complete (same crash-consistency ordering as the base barrier).
+					drainJournalBarrier(cacheJournal);
 					checkpointMgr.writeDegree(degree + 1, layer, generatedCount);
 				}
 			} else {
@@ -556,6 +592,18 @@ public final class BamasEngine {
 			log.info("Stub mode (streaming): exporting {} D2D rides ({} fat singles+pairs + {} stub rows) "
 					+ "via StubRideStore — no batch-materialize, no fat sort/reindex",
 					totalD2D, allRides.size(), stubLayerRows);
+			// Plan A3 Task 5: all checkpoint barriers are drained. The lazy export below routes
+			// only the never-cached backstop class (point-to-point, reproduced identically on
+			// resume), so stop capturing — otherwise export-time inserts would grow the pending
+			// queue unbounded with no barrier to drain them — and close the writer.
+			if (cacheJournal != null) {
+				network.disableJournaling();
+				try {
+					cacheJournal.close();
+				} catch (java.io.IOException e) {
+					throw new java.io.UncheckedIOException("Cannot close connection-cache journal", e);
+				}
+			}
 			return new StubRideStore(allRides, stubLayers, materializer, requestById);
 		}
 
@@ -654,6 +702,23 @@ public final class BamasEngine {
 		log.info("");
 		network.logRoutingStatistics();
 		return new MaterializedRideStore(allRides);
+	}
+
+	/**
+	 * Plan A3 Task 5 — append the cache entries inserted since the last barrier to the connection
+	 * cache journal and fsync, at a checkpoint barrier. No-op when journaling is off
+	 * ({@code journal == null}). Wraps the checked IO as unchecked so the barrier call sites stay
+	 * uncluttered; an IO failure here aborts the run (the checkpoint contract cannot be honored).
+	 */
+	private void drainJournalBarrier(ConnectionCacheJournal.Writer journal) {
+		if (journal == null) {
+			return;
+		}
+		try {
+			network.drainPendingToJournal(journal);
+		} catch (java.io.IOException e) {
+			throw new java.io.UncheckedIOException("Cannot append to connection-cache journal", e);
+		}
 	}
 
 	private ShareabilityGraph buildGraph(List<Ride> pairRides) {

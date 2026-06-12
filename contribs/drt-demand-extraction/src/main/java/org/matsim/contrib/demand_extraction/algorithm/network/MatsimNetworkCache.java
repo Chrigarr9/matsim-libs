@@ -601,10 +601,23 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	 * is captured in the pending queues for draining at checkpoint barriers.
 	 *
 	 * <p>Must be called before routing begins if journaling is desired.
-	 * Once enabled it cannot be disabled (the knob is one-way for correctness).
 	 */
 	public void enableJournaling() {
 		this.journalingEnabled = true;
+	}
+
+	/**
+	 * Stop capturing newly-inserted entries and discard anything still pending. Called by the
+	 * engine once the LAST checkpoint barrier has been drained and generation is complete, so the
+	 * subsequent lazy export pass (which routes the never-cached "backstop" class — reproduced
+	 * bit-identically point-to-point on resume, no journal needed) does not grow the pending queue
+	 * unboundedly. Only safe to call when no further barrier will be written: any still-pending
+	 * entries are intentionally dropped because they will not be journaled.
+	 */
+	public void disableJournaling() {
+		this.journalingEnabled = false;
+		pendingSegmentKeys.clear();
+		pendingSsspKeys.clear();
 	}
 
 	/**
