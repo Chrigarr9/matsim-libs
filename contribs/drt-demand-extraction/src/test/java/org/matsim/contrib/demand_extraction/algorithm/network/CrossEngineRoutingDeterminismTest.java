@@ -128,5 +128,15 @@ class CrossEngineRoutingDeterminismTest {
 				"... identical distance");
 		assertEquals(viaBatch.getNetworkUtility(), viaMiss.getNetworkUtility(), 0.0,
 				"... identical utility");
+
+		// Wrap-sensitivity: the DeterministicTravelDisutility eps*length term makes the
+		// routing cost strictly exceed pure travel time. networkUtility = -(cost), so
+		// -networkUtility must be strictly greater than travelTime. Remove the wrap and
+		// this fails (cost == travelTime for a time-only base) — THIS is what makes the
+		// gate catch a "wrap removed" regression, which engine tie-break agreement alone does not.
+		assertTrue(-viaBatch.getNetworkUtility() > viaBatch.getTravelTime() + 1e-9,
+				"wrapped cost must exceed pure travel time by the eps*length tie-breaker (batch fill)");
+		assertTrue(-viaMiss.getNetworkUtility() > viaMiss.getTravelTime() + 1e-9,
+				"wrapped cost must exceed pure travel time by the eps*length tie-breaker (miss fill)");
 	}
 }
