@@ -61,6 +61,10 @@ public final class BamasEngine {
 	private List<Ride> allRides;
 	private List<HyperPooledRide> hyperPooledRides;
 	private ShareabilityGraph graph;
+	// Plan A2 Task 3 — stub layers and D2D materializer, set during run() and consumed by
+	// generateStopBasedRidesBatched (Phase 5) which executes outside the inner try block.
+	private List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> runStubLayers;
+	private org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer runD2DMaterializer;
 
 	// Plan A3 — optional routing-input file paths for the checkpoint fingerprint. When set,
 	// their content hashes enrich the (otherwise config-only) RunFingerprint so a resume refuses
@@ -368,6 +372,7 @@ public final class BamasEngine {
 		// it is not retained past each iteration. Task 12 makes export streaming.
 		List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> stubLayers =
 				stubMode ? new ArrayList<>() : null;
+		this.runStubLayers = stubLayers; // Plan A2: expose to Phase 5 outside the try block
 		// Task 13: on the pairStubPath the degree-2 survivor layer is the FIRST stub layer, so
 		// the StubRideStore concatenation is fat-singles → pair-layer → degree-3 → … (contract
 		// #3). extensionLayerStart marks where degree-3+ layers begin, so the post-loop
@@ -517,35 +522,24 @@ public final class BamasEngine {
 			}
 		}
 
-		// Fat-stub path only (stub mode WITH stop-based): batch-materialize the degree-3+
-		// layers into fat Ride objects and concatenate with the still-fat singles + pairs in
-		// allRides, so Phase 5 stop-based generation can consume the full D2D set. The final
-		// sort + reindex (below) then runs UNCHANGED, exactly as in the fat path. The
-		// streaming D2D path (stubMode && !enableStopBased) skips this entirely — it folds
-		// materialize + sort + reindex into StubRideStore and returns below, before Phase 5.
-		// NON-DEFERRED: materialize replays buildRideFromOrdering + validateAndPopulateBudgets,
-		// so remainingBudgets is populated inline (see RideMaterializer).
-		if (stubMode && !streamingD2D) {
-			org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer materializer =
-					new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
-							network, budgetValidator);
-			int materialized = 0;
-			for (org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer : stubLayers) {
-				for (int row = 0; row < layer.size(); row++) {
-					allRides.add(materializer.materialize(layer, row, requestById));
-					materialized++;
-				}
-			}
-			log.info("Stub mode (fat path, stop-based enabled): materialized {} degree-3+ extension rides from {} per-degree layers",
-					materialized, stubLayers.size());
-		}
+		// Plan A2 Task 3 — stub mode WITH stop-based: Phase 5 now consumes D2D rides via
+		// batched on-demand materialization instead of bulk-materializing all stubs into allRides
+		// first. The materializer is stored as an instance field so Phase 5 (outside this try
+		// block) can call generateStopBasedRidesBatched with it. allRides still holds the fat
+		// singles+pairs; the stub layers are fed to Phase 5 directly without expanding into allRides.
+		// NON-DEFERRED contract is preserved: RideMaterializer always populates remainingBudgets.
+		this.runD2DMaterializer = (stubMode && !streamingD2D)
+				? new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
+						network, budgetValidator)
+				: null;
 
 		// Seam (c) — deferred budgets relocated to the export pass.
 		// stub mode (either branch): remainingBudgets is populated inline by
 		// RideMaterializer.validateAndPopulateBudgets — the streaming path does it lazily
-		// during forEachMaterialized, the fat-stub path did it in the batch-materialize loop
-		// above. Either way the stub layers themselves carry NO budgets, so populateBudgetsBatch
-		// must NOT also run in stub mode (it would double-populate / run on stub-less rows).
+		// during forEachMaterialized, the stop-based stub path (Plan A2) does it per-batch
+		// inside generateStopBasedRidesBatched. Either way the stub layers themselves carry
+		// NO budgets, so populateBudgetsBatch must NOT also run in stub mode (it would
+		// double-populate / run on stub-less rows).
 		// Only the non-stub deferred path needs the batch. NOTE: the parity gate scenario is
 		// NON-DEFERRED (deferExtensionBudgetValidation=false), so it does NOT exercise this
 		// branch — the correctness of the stub-mode skip is reasoned, not gate-verified.
@@ -649,7 +643,14 @@ public final class BamasEngine {
 			log.info("PHASE 5: Stop-Based Ride Generation (HyperPool Stage 1)");
 			log.info("======================================================================");
 
-			stopBasedRides = generateStopBasedRides(allRides);
+			// Plan A2 Task 3: stub mode uses batched materialization; fat path uses the
+			// original single-pass approach (allRides is already fully materialised).
+			if (runD2DMaterializer != null) {
+				stopBasedRides = generateStopBasedRidesBatched(
+						allRides, runStubLayers, runD2DMaterializer, requestById);
+			} else {
+				stopBasedRides = generateStopBasedRides(allRides);
+			}
 			if (!stopBasedRides.isEmpty()) {
 				allRides.addAll(stopBasedRides);
 				log.info("Added {} stop-to-stop ride variants", stopBasedRides.size());
@@ -842,6 +843,107 @@ public final class BamasEngine {
 		// Generate stop-based rides (indices will be assigned after the main algorithm)
 		int startIndex = doorToDoorRides.size();
 		return generator.generateStopBasedRides(d2dRides, startIndex);
+	}
+
+	/**
+	 * Plan A2 Task 3 — batched D2D materialization feeding {@link StopBasedRideGenerator}.
+	 *
+	 * <p>Replaces the former bulk-materialize-then-Phase-5 flow. Instead of expanding all
+	 * stub layers into {@code allRides} before calling {@code generateStopBasedRides}, this
+	 * method feeds D2D rides to the generator in two passes:
+	 * <ol>
+	 *   <li>Fat rides already in {@code fatRides} (singles + pairs, already materialised).
+	 *   <li>Degree-3+ stub layers, materialised in fixed-size batches (100 k rows).
+	 * </ol>
+	 *
+	 * <p><strong>Parity contract:</strong> The {@link StopBasedRideGenerator} sorts conversion
+	 * candidates by {@code sourceRide.getIndex()} before assigning S2S indices. In the current
+	 * code, all pairs and all materialised stubs carry index 0 (pairs from
+	 * {@code PairGenerator.buildRide(c, 0)}, stubs from {@code RideMaterializer} which also
+	 * returns index 0). A stable sort over index-0 elements preserves input order. Therefore
+	 * two-pass feeding (fat rides first, stubs second — each pass sorted by index 0 in input
+	 * order) produces the SAME candidate sequence as the former single-pass feed, and thus the
+	 * same S2S output. The {@code nextIndex} is threaded across passes by actual produced
+	 * count, not by batch size, so no index gaps occur when conversions fail.
+	 *
+	 * @param fatRides     fat singles + pairs already in allRides
+	 * @param stubs        degree-3+ per-degree stub layers (never null in stub mode)
+	 * @param materializer D2D stub materializer (RideMaterializer instance)
+	 * @param requestById  global request lookup (passed to materializer)
+	 * @return all generated stop-based rides, with sequentially threaded S2S indices
+	 */
+	private List<Ride> generateStopBasedRidesBatched(
+			List<Ride> fatRides,
+			List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> stubs,
+			org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer materializer,
+			java.util.Map<Integer, DrtRequest> requestById) {
+
+		// Total D2D count (fat + stub rows): the S2S startIndex must follow ALL D2D rides,
+		// matching master's pre-Phase-5 index = allRides.size() after all D2D are appended.
+		int totalStubRows = 0;
+		for (org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer : stubs) {
+			totalStubRows += layer.size();
+		}
+		int totalD2DCount = fatRides.size() + totalStubRows;
+
+		if (totalD2DCount == 0) {
+			return new ArrayList<>();
+		}
+
+		// Create stop finder and generator ONCE (shared across all batches).
+		Network matsimNetwork = network.getNetwork();
+		StopFinderFactory factory = new StopFinderFactory(matsimNetwork, facilities, exMasConfig);
+		StopFinder stopFinder = factory.create();
+		WalkingDistanceCalculator walkCalculator = factory.createWalkingDistanceCalculator();
+		int algorithmProcessCount = exMasConfig.getAlgorithmProcessCount();
+		org.matsim.contrib.demand_extraction.algorithm.generation.WalkBudgetProvider walkBudgetProvider =
+				budgetToConstraints == null ? null :
+				(budget, req, tt, dist, delay) ->
+						budgetToConstraints.budgetToMaxWalkDistance(budget, null, req, tt, dist, delay);
+		StopBasedRideGenerator generator = new StopBasedRideGenerator(
+				network, stopFinder, walkCalculator, budgetValidator, exMasConfig, algorithmProcessCount,
+				walkBudgetProvider);
+
+		List<Ride> allS2SRides = new ArrayList<>();
+		// S2S indices start at totalD2DCount and are threaded across batches by actual
+		// produced count (condition 3 from the plan: not startIndex + batchSize·k).
+		int nextIndex = totalD2DCount;
+
+		// Pass 1: fat rides (singles + pairs). Singles are filtered by the generator (degree < 2).
+		// All pairs have index 0 → stable sort within this pass keeps them in input order.
+		List<Ride> fatD2DBatch = fatRides.stream()
+				.filter(r -> r.getVariant() == org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant.DOOR_TO_DOOR)
+				.collect(Collectors.toList());
+		if (!fatD2DBatch.isEmpty()) {
+			List<Ride> batch1S2S = generator.generateStopBasedRides(fatD2DBatch, nextIndex);
+			allS2SRides.addAll(batch1S2S);
+			nextIndex += batch1S2S.size();
+		}
+
+		// Pass 2: stub layers, materialised in batches of STUB_BATCH_SIZE rows.
+		// Each materialised stub ride carries index 0 → parity condition holds (see Javadoc).
+		final int STUB_BATCH_SIZE = 100_000;
+		log.info("Plan A2 Task 3: feeding {} stub rows in batches of {} to Phase 5",
+				totalStubRows, STUB_BATCH_SIZE);
+		int totalMaterialized = 0;
+		for (org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer : stubs) {
+			int layerSize = layer.size();
+			for (int batchStart = 0; batchStart < layerSize; batchStart += STUB_BATCH_SIZE) {
+				int batchEnd = Math.min(batchStart + STUB_BATCH_SIZE, layerSize);
+				List<Ride> stubBatch = new ArrayList<>(batchEnd - batchStart);
+				for (int row = batchStart; row < batchEnd; row++) {
+					stubBatch.add(materializer.materialize(layer, row, requestById));
+				}
+				totalMaterialized += stubBatch.size();
+				List<Ride> batchS2S = generator.generateStopBasedRides(stubBatch, nextIndex);
+				allS2SRides.addAll(batchS2S);
+				nextIndex += batchS2S.size();
+			}
+		}
+		log.info("Plan A2 Task 3: materialised {} stub rows, generated {} S2S rides total",
+				totalMaterialized, allS2SRides.size());
+
+		return allS2SRides;
 	}
 
 	/**
