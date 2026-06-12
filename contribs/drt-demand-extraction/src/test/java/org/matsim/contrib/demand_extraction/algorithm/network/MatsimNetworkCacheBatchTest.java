@@ -31,7 +31,7 @@ public class MatsimNetworkCacheBatchTest {
 	private List<Id<Link>> linkIds;
 
 	/**
-	 * Rebuild the shared cache before each test. SpeedyALT stores internal node/link index
+	 * Rebuild the cache instance before each test. SpeedyALT stores internal node/link index
 	 * arrays that are invalidated when MATSim's AutoResetIdCaches fires between tests (e.g.
 	 * after a test that creates a new network with different link IDs). Per-test setup
 	 * ensures each test gets a pristine SpeedyALT instance on a freshly registered network.
@@ -50,7 +50,6 @@ public class MatsimNetworkCacheBatchTest {
 	@Test
 	@SuppressWarnings("unchecked")
 	void batchPrecomputeMatchesPointToPoint() {
-		cache.clearCache();
 		assertTrue(linkIds.size() >= 6, "Need at least 6 links, got " + linkIds.size());
 
 		Id<Link> origin = linkIds.get(0);
@@ -97,7 +96,6 @@ public class MatsimNetworkCacheBatchTest {
 		Id<Link> far = linkIds.get(linkIds.size() - 1);
 
 		double departureTime = 8 * 3600;
-		cache.clearCache();
 
 		// Get actual travel time to nearby target
 		TravelSegment nearbyPtp = cache.getSegment(origin, nearby, departureTime);

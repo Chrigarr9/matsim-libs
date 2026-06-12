@@ -133,21 +133,9 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		// not from discarding the mode costs.
 		String drtMode = config.getDrtMode();
 
-		TravelTime drtTravelTime;
-		try {
-			drtTravelTime = injector.getInstance(Key.get(TravelTime.class, Names.named(drtMode)));
-		} catch (Exception e) {
-			drtTravelTime = injector.getInstance(Key.get(TravelTime.class, Names.named(TransportMode.car)));
-		}
-
-		TravelDisutilityFactory drtDisutilityFactory;
-		try {
-			drtDisutilityFactory = injector.getInstance(
-					Key.get(TravelDisutilityFactory.class, Names.named(drtMode)));
-		} catch (Exception e) {
-			drtDisutilityFactory = injector.getInstance(
-					Key.get(TravelDisutilityFactory.class, Names.named(TransportMode.car)));
-		}
+		TravelTime drtTravelTime = injectNamedOrFallback(injector, TravelTime.class, drtMode, TransportMode.car);
+		TravelDisutilityFactory drtDisutilityFactory = injectNamedOrFallback(
+				injector, TravelDisutilityFactory.class, drtMode, TransportMode.car);
 		TravelDisutility baseDisutility = drtDisutilityFactory.createTravelDisutility(drtTravelTime);
 
 		// Deterministic by construction: unique optimum (eps*length tie-breaker) +
@@ -664,6 +652,22 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		public B getSecond() { return second; }
 	}
 	
+	/**
+	 * Attempt to resolve a Guice binding for {@code type} named {@code mode}; on
+	 * {@link com.google.inject.ConfigurationException} (no binding registered for that name),
+	 * fall back to the binding named {@code fallbackMode}. Any other exception — in particular
+	 * {@link com.google.inject.ProvisionException} (binding exists but its provider threw) —
+	 * is intentionally not caught so misconfiguration surfaces immediately.
+	 */
+	private static <T> T injectNamedOrFallback(Injector injector, Class<T> type, String mode, String fallbackMode) {
+		try {
+			return injector.getInstance(Key.get(type, Names.named(mode)));
+		} catch (com.google.inject.ConfigurationException e) {
+			log.debug("No {} bound for mode '{}', falling back to '{}'", type.getSimpleName(), mode, fallbackMode);
+			return injector.getInstance(Key.get(type, Names.named(fallbackMode)));
+		}
+	}
+
 	// Use a thread-local router to allow parallel routing on cache misses.
 	// SpeedyALT is not thread-safe across threads, but separate instances are safe.
 	private TravelSegment computeSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
@@ -696,12 +700,11 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 				// Use dummy person/vehicle for generic routing (required by TravelDisutility)
 				// Always thread-local: per-thread SpeedyALT instances are constructed
 				// identically from the same factory/network/disutility/travelTime, so
-				// they give identical paths for identical OD queries. The legacy
-				// synchronized(routerLock) + sharedRouter branch was a global serialization
-				// point — JFR (2026-05-27) showed 15/16 workers blocked there, dominating
-				// the predecessors phase. ConcurrentHashMap.computeIfAbsent already
-				// serializes same-OD callers via bucket locks, preserving per-OD
-				// cache determinism.
+				// they give identical paths for identical OD queries. The previous single
+				// synchronized shared router was a global serialization point — JFR
+				// (2026-05-27) showed 15/16 workers blocked there, dominating the
+				// predecessors phase. ConcurrentHashMap.computeIfAbsent already serializes
+				// same-OD callers via bucket locks, preserving per-OD cache determinism.
 				Path path = threadLocalRouter.get().calcLeastCostPath(
 						originLink,
 						destLink,
