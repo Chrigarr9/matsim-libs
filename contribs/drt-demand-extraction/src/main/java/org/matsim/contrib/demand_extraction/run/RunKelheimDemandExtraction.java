@@ -135,6 +135,7 @@ public class RunKelheimDemandExtraction {
 			} else if ("--sample".equals(args[i]) && i + 1 < args.length) {
 				sampleSize = Integer.parseInt(args[i + 1]);
 			} else if ("--deterministic".equals(args[i])) {
+				log.warn("--deterministic is deprecated and ignored: routing is always deterministic.");
 				deterministic = true;
 			} else if ("--algorithm-process-count".equals(args[i]) && i + 1 < args.length) {
 				algorithmProcessCountArg = Integer.parseInt(args[i + 1]);
@@ -188,7 +189,7 @@ public class RunKelheimDemandExtraction {
 		}
 		
 		// Configure for demand extraction
-		configureForDemandExtraction(config, outputDir, sampleSize, algorithmProcessCount, heuristicsProcessCount, deterministic);
+		configureForDemandExtraction(config, outputDir, sampleSize, algorithmProcessCount, heuristicsProcessCount);
 		ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class).setAlgorithm(algorithmStrategy);
 		String runId = config.controller().getRunId();
 		
@@ -546,8 +547,7 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 			Path outputDir,
 			int sampleSize,
 			int algorithmProcessCount,
-			int heuristicsProcessCount,
-			boolean deterministic) {
+			int heuristicsProcessCount) {
 		log.info("Configuring for demand extraction...");
 		
 		// Disable VSP config consistency checker - we're not running a full simulation
@@ -566,8 +566,8 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 		config.controller().setWritePlansInterval(0);
 		
 		// Configure ExMAS
-		configureExMas(config, algorithmProcessCount, heuristicsProcessCount, deterministic);
-		
+		configureExMas(config, algorithmProcessCount, heuristicsProcessCount);
+
 		// Add activity scoring parameters (required for Kelheim's duration-specific activities)
 		// Kelheim uses SnzActivities naming convention (home_7200, work_28800, etc.)
 		// The matsim core Activities class covers both edu_* and educ_* naming conventions
@@ -581,7 +581,7 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 	 * Configure ExMAS algorithm parameters.
 	 * Settings aligned with ExMasKelheimE2ETest for consistency.
 	 */
-	private static void configureExMas(Config config, int algorithmProcessCount, int heuristicsProcessCount, boolean deterministic) {
+	private static void configureExMas(Config config, int algorithmProcessCount, int heuristicsProcessCount) {
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		
 		// DRT mode must match Kelheim config
@@ -600,10 +600,7 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 
 		exMasConfig.setAlgorithmProcessCount(algorithmProcessCount);
 		exMasConfig.setHeuristicsProcessCount(heuristicsProcessCount);
-		if (deterministic) {
-			exMasConfig.setUseDeterministicNetworkRouting(true);
-		}
-		
+
 		// Private vehicle modes (create subtour dependencies)
 		Set<String> privateVehicles = new HashSet<>();
 		privateVehicles.add(TransportMode.car);
@@ -674,10 +671,9 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 		log.info("  Calc predecessors: {}", exMasConfig.isCalcPredecessors());
 		log.info("  algorithmProcessCount: {}", exMasConfig.getAlgorithmProcessCount());
 		log.info("  heuristicsProcessCount: {}", exMasConfig.getHeuristicsProcessCount());
-		log.info("  deterministicNetworkRouting: {}", exMasConfig.isUseDeterministicNetworkRouting());
 		log.info("  Opportunity cost model: {}", exMasConfig.getOpportunityCostModel());
 	}
-	
+
 	/**
 	 * Filter out freight agents from the population.
 	 * 

@@ -118,7 +118,7 @@ class RunDemandExtractionPhase1WiringTest {
 				b.sample, b.scenarioDir, b.prefix, b.travelTimesPath, b.outputDir,
 				b.searchHorizon, b.maxDetourFactor, b.minDrtCostPerKm, b.pruningCoverageK,
 				b.algorithm, b.tripFilterRadiusKm, b.noExclusionZone, b.noPredecessors,
-				b.noShapley, b.deterministicRouting, b.maxPoolingDegree, b.predecessorsFilterTime,
+				b.noShapley, b.maxPoolingDegree, b.predecessorsFilterTime,
 				b.enableStopBased, b.enableHyperPooling, b.enableBudgetAwareConstraints,
 				b.maxWalkDistanceMeters, b.hubSetGeoJsonPath, b.hubTransferBufferSeconds,
 				b.requestClassificationsPath, b.fleetSide, b.metropolePolygonPath,
@@ -144,7 +144,6 @@ class RunDemandExtractionPhase1WiringTest {
 		boolean noExclusionZone = false;
 		boolean noPredecessors = false;
 		boolean noShapley = false;
-		boolean deterministicRouting = false;
 		int maxPoolingDegree = -1;
 		double predecessorsFilterTime = Double.NaN;
 		boolean enableStopBased = false;

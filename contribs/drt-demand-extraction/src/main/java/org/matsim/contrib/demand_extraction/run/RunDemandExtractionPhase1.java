@@ -83,7 +83,7 @@ public final class RunDemandExtractionPhase1 {
 					+ "[--search-horizon <s>] [--max-detour-factor <f>] "
 					+ "[--min-drt-cost-per-km <eur>] [--pruning-coverage-k <int>] "
 					+ "[--trip-filter-radius-km <km>] [--no-exclusion-zone] "
-					+ "[--no-predecessors] [--no-shapley] [--deterministic-routing] "
+					+ "[--no-predecessors] [--no-shapley] "
 					+ "[--max-pooling-degree <int>]");
 			System.exit(1);
 		}
@@ -155,9 +155,6 @@ public final class RunDemandExtractionPhase1 {
 		}
 		if (p.noShapley) {
 			exMas.setCalcShapleyValues(false);
-		}
-		if (p.deterministicRouting) {
-			exMas.setUseDeterministicNetworkRouting(true);
 		}
 		if (p.maxPoolingDegree > 0) {
 			exMas.setMaxPoolingDegree(p.maxPoolingDegree);

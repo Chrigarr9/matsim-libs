@@ -115,7 +115,10 @@ public class RunBavaria30kmDemandExtraction {
 				case "--dmc-start-rate" -> dmcStartRate = Double.parseDouble(args[++i]);
 				case "--dmc-end-rate" -> dmcEndRate = Double.parseDouble(args[++i]);
 				case "--output-dir" -> outputDir = args[++i];
-				case "--deterministic" -> deterministic = true;
+				case "--deterministic" -> {
+					log.warn("--deterministic is deprecated and ignored: routing is always deterministic.");
+					deterministic = true;
+				}
 				case "--algorithm-process-count" -> algorithmProcessCountArg = Integer.parseInt(args[++i]);
 				case "--heuristics-process-count" -> heuristicsProcessCountArg = Integer.parseInt(args[++i]);
 				case "--no-cleanup" -> cleanup = false;
@@ -204,7 +207,7 @@ public class RunBavaria30kmDemandExtraction {
 		}
 
 		configureForDemandExtraction(config, outDir, sampleSize, iterations,
-				algorithmProcessCount, heuristicsProcessCount, deterministic, noPruning,
+				algorithmProcessCount, heuristicsProcessCount, noPruning,
 				noPredecessors, maxDegree, interDegreeKeep);
 
 		// Pruner CLI overrides applied after configureForDemandExtraction (which registers
@@ -685,7 +688,7 @@ public class RunBavaria30kmDemandExtraction {
 	 */
 	private static void configureForDemandExtraction(Config config, Path outputDir,
 			int sampleSize, int iterations, int algorithmProcessCount,
-			int heuristicsProcessCount, boolean deterministic, boolean noPruning,
+			int heuristicsProcessCount, boolean noPruning,
 			boolean noPredecessors, int maxDegree, double interDegreeKeep) {
 
 		// VSP defaults
@@ -712,7 +715,7 @@ public class RunBavaria30kmDemandExtraction {
 		// DemandExtractionModule reads DRT fare params from Config, not from Guice bindings.
 
 		// Configure ExMAS (same as RunKelheimDemandExtraction)
-		configureExMas(config, algorithmProcessCount, heuristicsProcessCount, deterministic,
+		configureExMas(config, algorithmProcessCount, heuristicsProcessCount,
 				noPruning, noPredecessors, maxDegree, interDegreeKeep);
 
 		logScoringParameters(config);
@@ -726,7 +729,7 @@ public class RunBavaria30kmDemandExtraction {
 	 * Configure ExMAS algorithm parameters.
 	 * Settings aligned with ExMasKelheimE2ETest for consistency.
 	 */
-	private static void configureExMas(Config config, int algorithmProcessCount, int heuristicsProcessCount, boolean deterministic, boolean noPruning,
+	private static void configureExMas(Config config, int algorithmProcessCount, int heuristicsProcessCount, boolean noPruning,
 			boolean noPredecessors, int maxDegree, double interDegreeKeep) {
 		ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 
@@ -746,9 +749,6 @@ public class RunBavaria30kmDemandExtraction {
 
 		exMasConfig.setAlgorithmProcessCount(algorithmProcessCount);
 		exMasConfig.setHeuristicsProcessCount(heuristicsProcessCount);
-		if (deterministic) {
-			exMasConfig.setUseDeterministicNetworkRouting(true);
-		}
 
 		// Private vehicle modes (create subtour dependencies)
 		Set<String> privateVehicles = new HashSet<>();
@@ -842,7 +842,6 @@ public class RunBavaria30kmDemandExtraction {
 		log.info("  Calc predecessors: {}", exMasConfig.isCalcPredecessors());
 		log.info("  algorithmProcessCount: {}", exMasConfig.getAlgorithmProcessCount());
 		log.info("  heuristicsProcessCount: {}", exMasConfig.getHeuristicsProcessCount());
-		log.info("  deterministicNetworkRouting: {}", exMasConfig.isUseDeterministicNetworkRouting());
 		log.info("  Opportunity cost model: {}", exMasConfig.getOpportunityCostModel());
 	}
 

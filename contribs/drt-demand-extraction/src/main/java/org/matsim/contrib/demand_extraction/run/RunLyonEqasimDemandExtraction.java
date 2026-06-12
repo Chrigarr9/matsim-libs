@@ -67,10 +67,6 @@ public class RunLyonEqasimDemandExtraction {
 		public final boolean noPredecessors;
 		/** When true, disables Shapley-value calculation. */
 		public final boolean noShapley;
-		/** When true, forces all cache-miss routing through a single shared locked router
-		 *  (OnlyTimeDependentTravelDisutility). Eliminates thread-local SpeedyALT variation
-		 *  for uncovered segments, making parallel runs byte-identical. */
-		public final boolean deterministicRouting;
 		/** Override maxPoolingDegree. -1 = keep config/profile default. Use 1 to skip
 		 *  pair generation entirely (drt_requests.csv + singles only — fast path for
 		 *  regenerating the requests CSV). */
@@ -121,7 +117,7 @@ public class RunLyonEqasimDemandExtraction {
 				double minDrtCostPerKm, int pruningCoverageK,
 				ExMasConfigGroup.Algorithm algorithm,
 				double tripFilterRadiusKm, boolean noExclusionZone,
-				boolean noPredecessors, boolean noShapley, boolean deterministicRouting,
+				boolean noPredecessors, boolean noShapley,
 				int maxPoolingDegree, double predecessorsFilterTime,
 				boolean enableStopBased, boolean enableHyperPooling,
 				boolean enableBudgetAwareConstraints, double maxWalkDistanceMeters,
@@ -147,7 +143,6 @@ public class RunLyonEqasimDemandExtraction {
 			this.noExclusionZone = noExclusionZone;
 			this.noPredecessors = noPredecessors;
 			this.noShapley = noShapley;
-			this.deterministicRouting = deterministicRouting;
 			this.maxPoolingDegree = maxPoolingDegree;
 			this.predecessorsFilterTime = predecessorsFilterTime;
 			this.enableStopBased = enableStopBased;
@@ -184,7 +179,6 @@ public class RunLyonEqasimDemandExtraction {
 		boolean noExclusionZone = false;
 		boolean noPredecessors = false;
 		boolean noShapley = false;
-		boolean deterministicRouting = false;
 		int maxPoolingDegree = -1;
 		double predecessorsFilterTime = Double.NaN;
 		boolean enableStopBased = false;
@@ -220,7 +214,9 @@ public class RunLyonEqasimDemandExtraction {
 				case "--no-exclusion-zone" -> noExclusionZone = true;
 				case "--no-predecessors" -> noPredecessors = true;
 				case "--no-shapley" -> noShapley = true;
-				case "--deterministic-routing" -> deterministicRouting = true;
+				case "--deterministic-routing" -> log.warn(
+						"--deterministic-routing is deprecated and ignored: routing is always "
+						+ "deterministic (DeterministicTravelDisutility tie-breaker).");
 				case "--max-pooling-degree" -> maxPoolingDegree = Integer.parseInt(args[++i]);
 				case "--predecessors-filter-time" -> predecessorsFilterTime = Double.parseDouble(args[++i]);
 				case "--enable-stop-based" -> enableStopBased = true;
@@ -245,7 +241,7 @@ public class RunLyonEqasimDemandExtraction {
 		}
 		return new ParsedArgs(sample, scenarioDir, prefix, travelTimesPath, outputDir,
 				searchHorizon, maxDetourFactor, minDrtCostPerKm, pruningCoverageK, algorithm,
-				tripFilterRadiusKm, noExclusionZone, noPredecessors, noShapley, deterministicRouting,
+				tripFilterRadiusKm, noExclusionZone, noPredecessors, noShapley,
 				maxPoolingDegree, predecessorsFilterTime,
 				enableStopBased, enableHyperPooling, enableBudgetAwareConstraints, maxWalkDistanceMeters,
 				hubSetGeoJsonPath, hubTransferBufferSeconds, requestClassificationsPath, fleetSide, metropolePolygonPath,
@@ -378,7 +374,7 @@ public class RunLyonEqasimDemandExtraction {
 					+ "[--search-horizon <s>] [--max-detour-factor <f>] "
 					+ "[--min-drt-cost-per-km <eur>] [--pruning-coverage-k <int>] "
 					+ "[--trip-filter-radius-km <km>] [--no-exclusion-zone] "
-					+ "[--no-predecessors] [--no-shapley] [--deterministic-routing] "
+					+ "[--no-predecessors] [--no-shapley] "
 					+ "[--max-pooling-degree <int>] "
 					+ "[--enable-stop-based] [--enable-hyperpooling] "
 					+ "[--enable-budget-aware-constraints] [--max-walk-distance-meters <m>] "
@@ -530,10 +526,6 @@ public class RunLyonEqasimDemandExtraction {
 		if (p.noShapley) {
 			log.info("  Override: Shapley disabled");
 			exMas.setCalcShapleyValues(false);
-		}
-		if (p.deterministicRouting) {
-			log.info("  Override: deterministic routing enabled (shared locked router, time-only disutility)");
-			exMas.setUseDeterministicNetworkRouting(true);
 		}
 		if (p.maxPoolingDegree > 0) {
 			log.info("  Override: maxPoolingDegree = {}", p.maxPoolingDegree);

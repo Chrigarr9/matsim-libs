@@ -77,18 +77,15 @@ class RunLyonEqasimDemandExtractionWiringTest {
     }
 
     @Test
-    void parsesDeterministicRoutingFlag() {
+    void acceptsDeprecatedDeterministicRoutingFlagAsNoOp() {
+        // Python workflows (paper1/paper2) still pass the flag; parsing must not fail.
         RunLyonEqasimDemandExtraction.ParsedArgs args = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--algorithm", "bamas",
-                "--sample", "10",
-                "--scenario-dir", "/tmp/x",
-                "--prefix", "lyon_drt_area_",
-                "--travel-times", "/tmp/y",
-                "--output-dir", "/tmp/z",
+                "--sample", "1",
+                "--scenario-dir", "scenario",
+                "--travel-times", "tt.tsv",
                 "--deterministic-routing"
         });
-
-        assertTrue(args.deterministicRouting);
+        assertEquals(1, args.sample);
     }
 
     @Test

@@ -214,11 +214,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	 */
 	private long maxOrderingNodesAfterFirstValid = 0;
 
-	// Network routing settings
-	// If true, uses OnlyTimeDependentTravelDisutility for deterministic routing (ignores tolls)
-	// If false, uses mode-specific TravelDisutility which may include tolls and other costs
-	private boolean useDeterministicNetworkRouting = false;
-
 	// PT routing settings
 	// If true, allows the PT router to optimize departure time to reduce waiting
 	// This means agents can leave earlier/later to catch better PT connections
@@ -989,16 +984,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.maxOrderingNodesAfterFirstValid = Math.max(0L, maxOrderingNodesAfterFirstValid);
 	}
 
-	@StringGetter("useDeterministicNetworkRouting")
-	public boolean isUseDeterministicNetworkRouting() {
-		return useDeterministicNetworkRouting;
-	}
-
-	@StringSetter("useDeterministicNetworkRouting")
-	public void setUseDeterministicNetworkRouting(boolean useDeterministicNetworkRouting) {
-		this.useDeterministicNetworkRouting = useDeterministicNetworkRouting;
-	}
-
 	@StringGetter("ptOptimizeDepartureTime")
 	public boolean isPtOptimizeDepartureTime() {
 		return ptOptimizeDepartureTime;
@@ -1663,9 +1648,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"dominates deg-8/9 cost; never loses a feasible ride). Absolute node count, NOT per-degree. " +
 				"Recommended: 200000 (~97% exact-best, ~5.4x fewer nodes) or 1000000 (~99% exact, ~3x). " +
 				"Default: 0");
-		map.put("useDeterministicNetworkRouting",
-				"If true, uses time-only travel disutility (deterministic but ignores tolls). " +
-				"If false, uses mode-specific travel disutility (includes tolls but may have slight variation). Default: false");
 		map.put("ptOptimizeDepartureTime",
 				"If true, PT router can optimize departure time to reduce waiting times. " +
 				"Agent can leave earlier/later to catch better connections. Default: true");
