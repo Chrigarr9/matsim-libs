@@ -195,7 +195,7 @@ public class RunBavaria30kmDemandExtraction {
 
 		// Build config, create scenario, run
 		Config config = buildConfig(scenarioPath, populationPath, sampleSize, iterations,
-				dmcStartRate, dmcEndRate, deterministic);
+				dmcStartRate, dmcEndRate);
 
 		int algorithmProcessCount = algorithmProcessCountArg != null
 				? algorithmProcessCountArg : (deterministic ? 1 : -1);
@@ -369,8 +369,7 @@ public class RunBavaria30kmDemandExtraction {
 	 * and Kelheim v3.0 calibrated scoring parameters.
 	 */
 	private static Config buildConfig(String scenarioPath, String populationPath,
-			int sampleSize, int iterations, double dmcStartRate, double dmcEndRate,
-			boolean deterministic) {
+			int sampleSize, int iterations, double dmcStartRate, double dmcEndRate) {
 
 		Config config = ConfigUtils.createConfig(
 				new ExMasConfigGroup(),
