@@ -83,7 +83,7 @@ class PttActualTraversalAccountingTest {
 		TravelTime tt = new FreeSpeedTravelTime();
 		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
 		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+				.createWithRouting(network, tt, td, 900);
 
 		List<DrtRequest> all = loadRequestsFromCsv(requestsCsv, network);
 		Map<Integer, DrtRequest> byIdx = new HashMap<>();

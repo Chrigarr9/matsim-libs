@@ -129,7 +129,7 @@ class D3EnumerationGapDiagnosticTest {
 		TravelTime tt = new FreeSpeedTravelTime();
 		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
 		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+				.createWithRouting(network, tt, td, 900);
 
 		// ── 3. Requests from CSV — filter to target triangle ──────────────────
 		List<DrtRequest> allRequests = loadRequestsFromCsv(requestsCsv, network);

@@ -157,7 +157,7 @@ class RoutingDeterminismTest {
 		TravelTime tt = new FreeSpeedTravelTime();
 		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
 		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+				.createWithRouting(network, tt, td, 900);
 
 		Map<Integer, RoutePoint> routePoints = loadRoutePoints(requestsCsv,
 				REQUEST_1010, REQUEST_3259, REQUEST_3265);

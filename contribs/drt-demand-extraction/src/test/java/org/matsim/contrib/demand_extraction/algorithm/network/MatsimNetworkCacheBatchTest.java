@@ -7,7 +7,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.matsim.api.core.v01.Coord;
 import org.matsim.api.core.v01.Id;
@@ -27,11 +27,17 @@ import org.matsim.core.trafficmonitoring.FreeSpeedTravelTime;
  */
 public class MatsimNetworkCacheBatchTest {
 
-	private static MatsimNetworkCache cache;
-	private static List<Id<Link>> linkIds;
+	private MatsimNetworkCache cache;
+	private List<Id<Link>> linkIds;
 
-	@BeforeAll
-	static void setUp() {
+	/**
+	 * Rebuild the shared cache before each test. SpeedyALT stores internal node/link index
+	 * arrays that are invalidated when MATSim's AutoResetIdCaches fires between tests (e.g.
+	 * after a test that creates a new network with different link IDs). Per-test setup
+	 * ensures each test gets a pristine SpeedyALT instance on a freshly registered network.
+	 */
+	@BeforeEach
+	void setUp() {
 		Network network = buildGridNetwork(5, 5, 200.0, 15.0);
 		var tt = new FreeSpeedTravelTime();
 		var td = new OnlyTimeDependentTravelDisutility(tt);

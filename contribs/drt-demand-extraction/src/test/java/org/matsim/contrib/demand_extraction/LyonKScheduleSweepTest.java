@@ -138,7 +138,7 @@ class LyonKScheduleSweepTest {
 		TravelTime tt = new FreeSpeedTravelTime();
 		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
 		MatsimNetworkCache cache = MatsimNetworkCacheTestFixture
-				.createWithSpeedyAltRoutingDeterministic(network, tt, td, 900);
+				.createWithRouting(network, tt, td, 900);
 		log.info("Routing cache built (SpeedyALT deterministic).");
 
 		// ── 3. Requests from CSV ─────────────────────────────────────────────────

@@ -38,24 +38,11 @@ public final class MatsimNetworkCacheTestFixture {
         return cache.isSsspCompletedForTesting(origin, timeBin);
     }
 
-    /** Build a MatsimNetworkCache with real routing capability for integration tests.
-     *  Uses Dijkstra for cache-miss point-to-point routing. */
+    /** Build a MatsimNetworkCache with real routing that mirrors production exactly:
+     *  the given disutility is wrapped in DeterministicTravelDisutility; SpeedyALT for
+     *  cache-miss point-to-point + LeastCostPathTree for batch SSSP, both from the same
+     *  wrapped instance. Deterministic across instances, threads, and JVMs. */
     public static MatsimNetworkCache createWithRouting(Network network, TravelTime tt, TravelDisutility td, int timeBinSize) {
         return new MatsimNetworkCache(network, tt, td, timeBinSize);
-    }
-
-    /** Build a MatsimNetworkCache that mirrors the production routing path:
-     *  SpeedyALT (A* with landmarks) for cache-miss point-to-point + LeastCostPathTree for batch SSSP.
-     *  Use this when a test needs to exercise the same routing combination eqasim runs in production. */
-    public static MatsimNetworkCache createWithSpeedyAltRouting(Network network, TravelTime tt, TravelDisutility td, int timeBinSize) {
-        return new MatsimNetworkCache(network, tt, td, timeBinSize, /* useSpeedyAlt= */ true);
-    }
-
-    /** Same as {@link #createWithSpeedyAltRouting} but additionally enables the production
-    *  {@code useDeterministicNetworkRouting=true} guarantees: shared deterministic cache misses,
-    *  deterministic time-distance tie-breaking, and raw additive segment metrics. Required when
-     *  comparing outputs across separate JVM invocations (e.g. the Lyon R1/R2/R3/R4 chain). */
-    public static MatsimNetworkCache createWithSpeedyAltRoutingDeterministic(Network network, TravelTime tt, TravelDisutility td, int timeBinSize) {
-        return new MatsimNetworkCache(network, tt, td, timeBinSize, /* useSpeedyAlt= */ true, /* deterministic= */ true);
     }
 }
