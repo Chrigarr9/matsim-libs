@@ -101,6 +101,7 @@ public final class PairGenerator {
 			Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
 			if (validated != null) {
 				pairs.add(validated);
+				promotePairChainSegments(c);
 				nextRideIndex++;
 				if (c.kind == RideKind.FIFO) fifoCreated++;
 				else lifoCreated++;
@@ -177,6 +178,7 @@ public final class PairGenerator {
 					positions[k] = pos;
 				}
 				pairStubs.addRow(s.sortedSet, s.originPacked, s.destPacked, s.distDm, s.ttDs, s.flags, positions);
+				promotePairChainSegments(c);
 				nextRideIndex++;
 				if (c.kind == RideKind.FIFO) fifoCreated++;
 				else lifoCreated++;
@@ -396,6 +398,32 @@ public final class PairGenerator {
 		if (c == null) return null;
 
 		return buildRide(c, 0);
+	}
+
+	/**
+	 * Promote the chain segments an accepted pair was routed from into the never-evicted retained
+	 * tier (design 2026-06-12 §3, Task 7). A feasible FIFO/LIFO pair reads a fixed set of segments
+	 * at the single fixed bin {@code reqI.requestTime}; these are exactly the {@code (from, to)}
+	 * triples {@link #tryFifoCandidate}/{@link #tryLifoCandidate} routed, re-derived here from the
+	 * candidate's requests and kind. Promotion is purely additive — it never routes a new OD, so it
+	 * adds no cache keys (the segments are already cached from candidate evaluation); it only shields
+	 * them from a later watermark eviction so degree-3+ extension and export re-read them as hits.
+	 */
+	private void promotePairChainSegments(PairCandidate c) {
+		DrtRequest i = c.reqI;
+		DrtRequest j = c.reqJ;
+		double t = i.requestTime;
+		// O_i → O_j (shared by both kinds).
+		network.promoteSegment(i.originLinkId, j.originLinkId, t);
+		if (c.kind == RideKind.FIFO) {
+			// O_j → D_i, D_i → D_j (mirrors tryFifoCandidate).
+			network.promoteSegment(j.originLinkId, i.destinationLinkId, t);
+			network.promoteSegment(i.destinationLinkId, j.destinationLinkId, t);
+		} else {
+			// O_j → D_j, D_j → D_i (mirrors tryLifoCandidate).
+			network.promoteSegment(j.originLinkId, j.destinationLinkId, t);
+			network.promoteSegment(j.destinationLinkId, i.destinationLinkId, t);
+		}
 	}
 
 	/**

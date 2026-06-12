@@ -486,6 +486,34 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		cache.clear();
 	}
 
+	// ── Tier promotion / compaction (design 2026-06-12 §3) ─────────────────────
+
+	/**
+	 * Promote one OD/bin segment into the never-evicted retained tier (no-op on a cache miss).
+	 *
+	 * <p>Purely additive: it never routes and never invents a value — it only moves an
+	 * already-cached speculative segment to the retained tier so a later watermark eviction
+	 * cannot drop it. The {@code departureTime} is mapped to its time bin exactly as
+	 * {@link #getSegment} does, so the promoted key matches the key the lookup populated.
+	 *
+	 * <p>Called by the generators at the points a segment is known to be re-read by a later
+	 * phase (feasible-pair acceptance, survivor legs at the degree barrier, predecessor-window
+	 * candidate evaluation), so those values are immune to eviction.
+	 */
+	public void promoteSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
+		int timeBin = (int) (departureTime / timeBinSize);
+		cache.promote(PackedKeyCodec.segmentKey(originLinkId.index(), destLinkId.index(), timeBin));
+	}
+
+	/**
+	 * Merge the retained-tier overlay into a fresh frozen snapshot (~40 B/entry). Call only from
+	 * the single-threaded generation barriers (after pair generation completes, at each degree
+	 * barrier) — never concurrently with routing.
+	 */
+	public void compactRetained() {
+		cache.compactRetained();
+	}
+
 	/**
 	 * Get current cache size (number of cached segments).
 	 */
@@ -832,6 +860,17 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	 */
 	boolean isSsspCompletedForTesting(Id<Link> origin, int bin) {
 		return cache.isSsspDone(PackedKeyCodec.ssspKey(origin.index(), bin));
+	}
+
+	/**
+	 * Rotate (drop the oldest generation of) the speculative tier. Two consecutive calls drop
+	 * everything ever put speculative; a promoted (retained) segment survives. Lets the promotion
+	 * unit test exercise eviction without a real {@link HeapWatermark} breach.
+	 *
+	 * <p>Intended for use in unit tests only — production eviction is driven by the watermark.
+	 */
+	void evictSpeculativeForTesting() {
+		cache.evictSpeculative();
 	}
 
 	private MatsimNetworkCache() {

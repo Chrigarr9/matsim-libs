@@ -47,4 +47,21 @@ public interface TravelSegmentLookup {
 	                             Id<Link>[] toLinkIds, double maxTravelTimeSeconds) {
 		// no-op: stubs rely entirely on getSegment
 	}
+
+	/**
+	 * Optional promotion: move the {@code (origin, dest, bin)} segment into a never-evicted
+	 * retained tier so it survives watermark eviction. Used by the predecessor-window pass to pin
+	 * every evaluated handoff segment (the export domain).
+	 *
+	 * <p>The default implementation is a no-op — test stubs and simple implementations have no tiers.
+	 * {@link MatsimNetworkCache} overrides this with the real promotion.
+	 *
+	 * @param originLinkId  the departure link
+	 * @param destLinkId    the arrival link
+	 * @param departureTime departure time in seconds since midnight
+	 */
+	@SuppressWarnings("unused")
+	default void promoteSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
+		// no-op: stubs have no retained tier
+	}
 }

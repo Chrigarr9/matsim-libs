@@ -183,4 +183,74 @@ public final class RideMaterializer {
 		}
 		return validated;
 	}
+
+	/**
+	 * Receiver of one leg {@code (from, to, departureTime)} as it is enumerated by
+	 * {@link #forEachLegSegment}.
+	 */
+	@FunctionalInterface
+	public interface SegmentConsumer {
+		void accept(org.matsim.api.core.v01.Id<org.matsim.api.core.v01.network.Link> from,
+				org.matsim.api.core.v01.Id<org.matsim.api.core.v01.network.Link> to,
+				double departureTime);
+	}
+
+	/**
+	 * Enumerate the leg segments a degree-3+ stub row is built from, in the SAME order and at the
+	 * SAME cumulative departure times as {@link BamasRideExtender#buildRideFromOrdering} (the
+	 * {@code preConn == null} branch). This is the single source of the row's segment key set: the
+	 * materializer routes exactly these legs at export, and the engine promotes exactly these legs
+	 * at the degree barrier (Task 7 Step 3). Sharing the walk guarantees promotion keys equal export
+	 * keys by construction, so promotion adds no new cache key.
+	 *
+	 * <p>Walking advances the clock by the cached travel time of each leg ({@code currentTime +=
+	 * connTT}), so the consumer sees the exact bins {@code getSegment} will use. The lookups are
+	 * cache hits (these legs were routed during enumeration); an unreachable leg short-circuits the
+	 * walk exactly as {@code buildRideFromOrdering} returns null there.
+	 *
+	 * <p>Degree-2 is intentionally rejected: pair stubs route at a fixed bin (not cumulative), and
+	 * their segments are promoted at pair-generation acceptance (Task 7 Step 2), not here.
+	 *
+	 * @param network      routing cache (its {@code getSegment} both warms the clock and returns
+	 *                     the cached value)
+	 * @param cols         the per-degree layer (degree must be {@code >= 3})
+	 * @param row          row index within {@code cols}
+	 * @param requestById  global request lookup keyed by {@link DrtRequest#index}, built identically
+	 *                     to {@link #materialize}'s
+	 * @param consumer     invoked once per leg with {@code (from, to, departureTime)}
+	 */
+	public static void forEachLegSegment(MatsimNetworkCache network, StubColumns cols, int row,
+			Map<Integer, DrtRequest> requestById, SegmentConsumer consumer) {
+		int degree = cols.degree();
+		if (degree < 3) {
+			throw new IllegalArgumentException(
+					"forEachLegSegment is degree-3+ only (degree " + degree + "); degree-2 pair "
+					+ "segments are promoted at pair-generation acceptance");
+		}
+		int[] sortedSet = cols.requestIndices(row);
+		int[] originsLocal = OrderingCodec.unpack(cols.originOrder(row), degree);
+		int[] destsLocal = OrderingCodec.unpack(cols.destOrder(row), degree);
+
+		// Connection sequence [O_1..O_n, D_1..D_n], identical to buildRideFromOrdering.
+		@SuppressWarnings("unchecked")
+		org.matsim.api.core.v01.Id<org.matsim.api.core.v01.network.Link>[] sequence =
+				(org.matsim.api.core.v01.Id<org.matsim.api.core.v01.network.Link>[])
+						new org.matsim.api.core.v01.Id[degree * 2];
+		for (int i = 0; i < degree; i++) {
+			sequence[i] = requestById.get(sortedSet[originsLocal[i]]).originLinkId;
+		}
+		for (int i = 0; i < degree; i++) {
+			sequence[degree + i] = requestById.get(sortedSet[destsLocal[i]]).destinationLinkId;
+		}
+
+		double startTime = requestById.get(sortedSet[originsLocal[0]]).getRequestTime();
+		double currentTime = startTime;
+		for (int i = 0; i < degree * 2 - 1; i++) {
+			consumer.accept(sequence[i], sequence[i + 1], currentTime);
+			org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment seg =
+					network.getSegment(sequence[i], sequence[i + 1], currentTime);
+			if (!seg.isReachable()) return; // mirrors buildRideFromOrdering's early null
+			currentTime += seg.getTravelTime();
+		}
+	}
 }

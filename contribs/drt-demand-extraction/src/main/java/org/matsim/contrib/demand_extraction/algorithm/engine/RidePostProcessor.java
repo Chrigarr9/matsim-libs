@@ -348,6 +348,12 @@ public final class RidePostProcessor {
 
                 // Network routing
                 TravelSegment connection = networkCache.getSegment(from, to, endTime);
+                // Cache-memory tiers (Task 7 Step 4): promote every evaluated handoff segment
+                // (accepted OR rejected below) into the never-evicted retained tier. This window
+                // domain — the lookup set of Python's compute_dynamic_successors — must survive
+                // watermark eviction so the connection_cache export is stable. Promotion is purely
+                // additive: getSegment already cached the value, promote only pins it.
+                networkCache.promoteSegment(from, to, endTime);
                 if (!connection.isReachable()) continue;
 
                 double arrivalTime = endTime + connection.getTravelTime();
