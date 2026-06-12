@@ -114,11 +114,11 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// exists
 	private String drtRoutingMode = "car";
 
-	// Network modes allowed for DRT routing (filters links by allowedModes)
-	// If empty/null, all links are used (for ease of use)
-	// Example: Set.of("car") = only links where car is allowed
-	// Set.of("car", "truck") = links where car OR truck allowed
-	// Set.of() or null = all links (no filtering)
+	// Network link mode filter for HyperPool stop-finding (StopFinderFactory ->
+	// LinkCandidateFinder). Only links whose allowedModes intersect this set are
+	// considered as stop candidates. Empty/null = all links admitted (no filtering).
+	// Example: Set.of("car") = only car-accessible links;
+	// Set.of("car", "truck") = links where car OR truck is allowed.
 	private Set<String> drtAllowedModes = Set.of("car");
 
 	// Modes that represent private vehicles (create subtour dependencies)
@@ -1602,7 +1602,9 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("drtRoutingMode",
 				"Routing mode to use for DRT when no DRT routing module exists. Typically 'car' for network-based routing. Default: 'car'");
 		map.put("drtAllowedModes",
-				"Network modes allowed for DRT routing (comma-separated). Filters links by allowedModes. Empty = all links allowed. Example: 'car' or 'car,truck'. Default: empty (all links)");
+				"Network link mode filter for HyperPool stop-finding (StopFinderFactory -> LinkCandidateFinder). "
+				+ "Only links whose allowedModes intersect this set are considered as stop candidates. "
+				+ "Empty = all links admitted (no filtering). Example: 'car' or 'car,truck'. Default: 'car'");
 		map.put("minDrtCostPerKm",
 				"Minimum DRT cost per kilometer for budget calculation (€/km). Represents best possible pricing. Default: 0.0");
 		map.put("minMaxDetourFactor",

@@ -9,7 +9,6 @@ import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Scenario;
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.network.Network;
-import org.matsim.contrib.demand_extraction.algorithm.DrtRouterProvider;
 import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithm;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasAlgorithm;
 import org.matsim.contrib.demand_extraction.algorithm.engine.RidePostProcessor;
@@ -32,8 +31,6 @@ import org.matsim.core.controler.OutputDirectoryHierarchy.OverwriteFileSetting;
 import org.matsim.core.network.io.MatsimNetworkReader;
 import org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutilityFactory;
 import org.matsim.core.router.costcalculators.TravelDisutilityFactory;
-import org.matsim.core.router.util.LeastCostPathCalculator;
-import org.matsim.core.router.util.LeastCostPathCalculatorFactory;
 import org.matsim.core.router.util.TravelTime;
 import org.matsim.core.scenario.ScenarioUtils;
 
@@ -46,10 +43,11 @@ import com.google.inject.name.Names;
  * Standalone Guice module for the Phase-2 JVM of the low-memory two-phase mode.
  *
  * <p>Uses {@link OnlyTimeDependentTravelDisutilityFactory} and loads offline travel times via
- * {@link OfflineTravelTimes} (same class as {@code LyonEqasimScenarioFixture}), together with
- * {@link DrtRouterProvider} — so Phase-2 per-ride distances/times match the single-process
- * baseline byte-for-byte. The Task-11 hard gate enforces this. Equality now holds by construction
- * (both call the same loader) rather than by verbatim copy.
+ * {@link OfflineTravelTimes} (same class as {@code LyonEqasimScenarioFixture}) — so Phase-2
+ * per-ride distances/times match the single-process baseline byte-for-byte. The Task-11 hard gate
+ * enforces this. Equality holds by construction (both call the same loader, and
+ * {@link org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache} resolves
+ * TravelTime/TravelDisutilityFactory itself) rather than by verbatim copy.
  *
  * <p>The module does <b>not</b> install MATSim's Controler, the eqasim DI graph, or
  * the discrete-mode-choice plumbing. Phase 2 scores DRT directly via
@@ -111,12 +109,11 @@ public final class Phase2Module extends AbstractModule {
 		bind(TravelTime.class).annotatedWith(Names.named(TransportMode.car)).toInstance(travelTime);
 		bind(TravelTime.class).toInstance(travelTime);
 
-		// 4. Disutility + routing factory: matches Lyon fixture.
+		// 4. Disutility: matches Lyon fixture. MatsimNetworkCache resolves its own
+		//    SpeedyALTFactory internally — no LeastCostPathCalculatorFactory binding needed here.
 		TravelDisutilityFactory tdf = new OnlyTimeDependentTravelDisutilityFactory();
 		bind(TravelDisutilityFactory.class).annotatedWith(Names.named(TransportMode.car))
 				.toInstance(tdf);
-		bind(LeastCostPathCalculatorFactory.class).toInstance(
-				new org.matsim.core.router.speedy.SpeedyALTFactory());
 
 		// 5. Scoring adapter: frozen-scalar Phase-2 twin of EqasimScoringAdapter.
 		PhaseOneDumpReader.EqasimScoringParams ep = p2.dumpMeta.eqasimScoringParams();
@@ -145,14 +142,7 @@ public final class Phase2Module extends AbstractModule {
 		// RidePostProcessor has no @Inject ctor in single-process (it's built by hand
 		// inside DemandExtractionListener) — wire it via @Provides instead.
 
-		// 7. DRT-specific router: shared with single-process to avoid drift.
-		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
-		String drtRouterName = "direct" + capitalize(exMas.getDrtMode()) + "Router";
-		bind(LeastCostPathCalculator.class)
-				.annotatedWith(Names.named(drtRouterName))
-				.toProvider(DrtRouterProvider.class);
-
-		// 8. Output directory hierarchy (RidePostProcessor and the rides writer use it
+		// 7. Output directory hierarchy (RidePostProcessor and the rides writer use it
 		//    only indirectly — Phase-2 runner writes outputs through ExMasCsvWriter
 		//    against the run id resolved from the dump meta).
 		OutputDirectoryHierarchy odh = new OutputDirectoryHierarchy(p2.outputDir.toString(),
@@ -198,8 +188,4 @@ public final class Phase2Module extends AbstractModule {
 		return new BudgetValidator(adapter, exMas, ExMasConfigGroup.getWalkSpeed(config));
 	}
 
-	private static String capitalize(String s) {
-		if (s == null || s.isEmpty()) return s;
-		return s.substring(0, 1).toUpperCase() + s.substring(1);
-	}
 }
