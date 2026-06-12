@@ -139,4 +139,47 @@ class CrossEngineRoutingDeterminismTest {
 		assertTrue(-viaMiss.getNetworkUtility() > viaMiss.getTravelTime() + 1e-9,
 				"wrapped cost must exceed pure travel time by the eps*length tie-breaker (miss fill)");
 	}
+
+	/**
+	 * Task 5 contract: a non-adjacent OD routed by cache-miss point-to-point fill
+	 * must be bit-identical to the same OD routed by batchPrecompute (SSSP tree).
+	 *
+	 * <p>Uses the diamond-chain fixture: entry→exit is a multi-hop non-adjacent pair.
+	 * Two fresh caches — one batch-prefilled, one empty (forces cache-miss fill via
+	 * the new tree-based {@code computeSegment} path).
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	void pointToPointFillEqualsBatchPrecomputeFill() {
+		Net net = diamondChain();
+		TravelTime tt = new FreeSpeedTravelTime();
+		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
+
+		// batchCache: OD is pre-filled by SSSP tree via batchPrecompute.
+		MatsimNetworkCache batchCache = MatsimNetworkCacheTestFixture
+				.createWithRouting(net.network(), tt, td, 900);
+		// pointCache: fresh cache — first getSegment call triggers computeSegment (cache-miss).
+		MatsimNetworkCache pointCache = MatsimNetworkCacheTestFixture
+				.createWithRouting(net.network(), tt, td, 900);
+
+		// entry→exit: multi-hop, definitely non-adjacent (K diamonds between them).
+		Id<Link> from = net.entryLink();
+		Id<Link> to = net.exitLink();
+		double depTime = 8 * 3600;
+
+		batchCache.batchPrecompute(from, depTime, new Id[] { to }, 1e9);
+
+		TravelSegment viaTree = batchCache.getSegment(from, to, depTime);
+		TravelSegment viaPoint = pointCache.getSegment(from, to, depTime);
+
+		assertTrue(viaTree.isReachable(), "batch-filled segment must be reachable");
+		assertTrue(viaPoint.isReachable(), "point-to-point-filled segment must be reachable");
+
+		assertEquals(viaTree.getTravelTime(), viaPoint.getTravelTime(), 0.0,
+				"travel time must be bit-identical: tree fill vs point-to-point fill");
+		assertEquals(viaTree.getDistance(), viaPoint.getDistance(), 0.0,
+				"distance must be bit-identical: tree fill vs point-to-point fill");
+		assertEquals(viaTree.getNetworkUtility(), viaPoint.getNetworkUtility(), 0.0,
+				"network utility must be bit-identical: tree fill vs point-to-point fill");
+	}
 }
