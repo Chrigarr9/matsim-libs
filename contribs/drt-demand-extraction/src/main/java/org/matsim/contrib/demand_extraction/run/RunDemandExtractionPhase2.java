@@ -10,6 +10,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.matsim.contrib.demand_extraction.algorithm.AlgorithmResult;
 import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithm;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasAlgorithm;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.MaterializedRideStore;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.engine.RidePostProcessor;
@@ -191,6 +192,15 @@ public final class RunDemandExtractionPhase2 {
 
 		log.info("PHASE 2 STEP 3: running {} algorithm", exMasCfg.getAlgorithm());
 		ExMasAlgorithm algorithm = injector.getInstance(ExMasAlgorithm.class);
+		// C1 — wire the real routing-input file paths into the BAMAS checkpoint fingerprint. Without
+		// this the fingerprint is config-only, so a resume against a DIFFERENT population/travel-times/
+		// network would falsely match and silently corrupt output by mixing incompatible routing inputs.
+		if (algorithm instanceof BamasAlgorithm bamasAlgorithm) {
+			bamasAlgorithm.setFingerprintInputs(
+					layout.requestsCsv(),   // Phase-1 requests dump (drt_requests_phase1.csv)
+					a.travelTimesTsv(),     // --travel-times arg
+					a.networkXml());        // --network arg
+		}
 		// Take a heap snapshot RIGHT before the algorithm starts. Together with
 		// Phase 1's "Used heap at dump" line this gives the operator the
 		// memory-released-by-JVM-split metric:
