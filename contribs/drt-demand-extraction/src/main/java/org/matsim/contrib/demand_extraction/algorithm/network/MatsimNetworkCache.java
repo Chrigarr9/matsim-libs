@@ -297,8 +297,12 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		LeastCostPathTree.StopCriterion stopCriterion =
 			new LeastCostPathTree.TravelTimeStopCriterion(maxTravelTimeSeconds);
 		tree.calculate(fromLink, canonicalDepartureTime, dummyPerson, dummyVehicle, stopCriterion);
-		ssspCompleted.put(ssspKey, Boolean.TRUE);
-		if (journalingEnabled) pendingSsspKeys.add(ssspKey);
+		// putIfAbsent (not put): two threads can pass the containsKey gate above for the same
+		// (fromLink, timeBin) and both compute the tree; only the one that actually inserts the
+		// key journals it, so the journal never accumulates duplicate records for a raced key.
+		if (ssspCompleted.putIfAbsent(ssspKey, Boolean.TRUE) == null && journalingEnabled) {
+			pendingSsspKeys.add(ssspKey);
+		}
 		batchTreesComputed.incrementAndGet();
 
 		for (Id<Link> toLinkId : toLinkIds) {
@@ -317,8 +321,9 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 
 			Link toLink = network.getLinks().get(toLinkId);
 			if (toLink == null) {
-				cache.put(key, TravelSegment.unreachable());
-				if (journalingEnabled) pendingSegmentKeys.add(key);
+				if (cache.putIfAbsent(key, TravelSegment.unreachable()) == null && journalingEnabled) {
+					pendingSegmentKeys.add(key);
+				}
 				batchSegmentsPopulated.incrementAndGet();
 				continue;
 			}
@@ -329,8 +334,10 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 			// (e.g. forbidden immediate turn or only a loop-back path exists). Route
 			// these adjacent link-to-link cases point-to-point instead.
 			if (fromLink.getToNode().getId().equals(toLink.getFromNode().getId())) {
-				cache.put(key, computeSegment(fromLinkId, toLinkId, canonicalDepartureTime));
-				if (journalingEnabled) pendingSegmentKeys.add(key);
+				if (cache.putIfAbsent(key, computeSegment(fromLinkId, toLinkId, canonicalDepartureTime)) == null
+						&& journalingEnabled) {
+					pendingSegmentKeys.add(key);
+				}
 				batchSegmentsPopulated.incrementAndGet();
 				continue;
 			}
@@ -349,8 +356,9 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 				double tt = interLinkTT + toLinkTT;
 				double dist = tree.getDistance(toNodeIdx) + toLink.getLength();
 				double utility = -(tree.getCost(toNodeIdx) + toLinkDisutility);
-				cache.put(key, new TravelSegment(tt, dist, utility));
-				if (journalingEnabled) pendingSegmentKeys.add(key);
+				if (cache.putIfAbsent(key, new TravelSegment(tt, dist, utility)) == null && journalingEnabled) {
+					pendingSegmentKeys.add(key);
+				}
 				batchSegmentsPopulated.incrementAndGet();
 			}
 			// else: SSSP stop-criterion didn't reach this node within the bound — leave the
