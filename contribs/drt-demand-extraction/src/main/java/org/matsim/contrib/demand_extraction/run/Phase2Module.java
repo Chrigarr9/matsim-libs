@@ -1,7 +1,6 @@
 package org.matsim.contrib.demand_extraction.run;
 
 import java.io.IOException;
-import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -10,13 +9,13 @@ import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Scenario;
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.network.Network;
-import org.matsim.contrib.common.timeprofile.TimeDiscretizer;
 import org.matsim.contrib.demand_extraction.algorithm.DrtRouterProvider;
 import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithm;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasAlgorithm;
 import org.matsim.contrib.demand_extraction.algorithm.engine.RidePostProcessor;
 import org.matsim.contrib.demand_extraction.algorithm.exmas.ExMasReferenceAlgorithm;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.network.OfflineTravelTimes;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
@@ -25,7 +24,6 @@ import org.matsim.contrib.demand_extraction.scoring.DemandExtractionScoringAdapt
 import org.matsim.contrib.demand_extraction.scoring.Phase2EqasimAdapter;
 import org.matsim.contrib.drt.run.MultiModeDrtConfigGroup;
 import org.matsim.contrib.dvrp.run.DvrpConfigGroup;
-import org.matsim.contrib.dvrp.trafficmonitoring.DvrpOfflineTravelTimes;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.config.groups.ControllerConfigGroup;
@@ -47,11 +45,11 @@ import com.google.inject.name.Names;
 /**
  * Standalone Guice module for the Phase-2 JVM of the low-memory two-phase mode.
  *
- * <p>Mirrors {@code LyonEqasimScenarioFixture}'s routing setup exactly — same
- * {@link OnlyTimeDependentTravelDisutilityFactory}, same offline travel times via
- * {@link DvrpOfflineTravelTimes} with {@link #TRAVEL_TIME_BIN_SIZE} / {@link #TRAVEL_TIME_END},
- * same {@link DrtRouterProvider} — so Phase-2 per-ride distances/times match the
- * single-process baseline byte-for-byte. The Task-11 hard gate enforces this.
+ * <p>Uses {@link OnlyTimeDependentTravelDisutilityFactory} and loads offline travel times via
+ * {@link OfflineTravelTimes} (same class as {@code LyonEqasimScenarioFixture}), together with
+ * {@link DrtRouterProvider} — so Phase-2 per-ride distances/times match the single-process
+ * baseline byte-for-byte. The Task-11 hard gate enforces this. Equality now holds by construction
+ * (both call the same loader) rather than by verbatim copy.
  *
  * <p>The module does <b>not</b> install MATSim's Controler, the eqasim DI graph, or
  * the discrete-mode-choice plumbing. Phase 2 scores DRT directly via
@@ -60,11 +58,6 @@ import com.google.inject.name.Names;
 public final class Phase2Module extends AbstractModule {
 
 	private static final Logger log = LogManager.getLogger(Phase2Module.class);
-
-	/** 15-min bins, matches {@code LyonEqasimScenarioFixture.TRAVEL_TIME_BIN_SIZE}. */
-	private static final int TRAVEL_TIME_BIN_SIZE = 900;
-	/** 36 h, matches {@code LyonEqasimScenarioFixture.TRAVEL_TIME_END}. */
-	private static final int TRAVEL_TIME_END = 36 * 3600;
 
 	/** Container for everything Phase 2 needs to wire its tiny Guice graph. */
 	public record Phase2Config(
@@ -113,8 +106,8 @@ public final class Phase2Module extends AbstractModule {
 		bind(Scenario.class).toInstance(scenario);
 		bind(Network.class).toInstance(scenario.getNetwork());
 
-		// 3. Offline travel times (must match Lyon fixture's loader byte-for-byte).
-		TravelTime travelTime = loadOfflineTravelTimes(p2.travelTimesTsv.toString());
+		// 3. Offline travel times.
+		TravelTime travelTime = OfflineTravelTimes.load(p2.travelTimesTsv.toString());
 		bind(TravelTime.class).annotatedWith(Names.named(TransportMode.car)).toInstance(travelTime);
 		bind(TravelTime.class).toInstance(travelTime);
 
@@ -203,24 +196,6 @@ public final class Phase2Module extends AbstractModule {
 	BudgetValidator provideBudgetValidator(DemandExtractionScoringAdapter adapter,
 			ExMasConfigGroup exMas, Config config) {
 		return new BudgetValidator(adapter, exMas, ExMasConfigGroup.getWalkSpeed(config));
-	}
-
-	/** Mirrors {@code LyonEqasimScenarioFixture.loadOfflineTravelTimes} verbatim — any drift
-	 *  would break the Task-11 byte-equality gate. */
-	private static TravelTime loadOfflineTravelTimes(String ttFile) {
-		log.info("Phase 2: loading pre-computed travel times from {}", ttFile);
-		TimeDiscretizer timeDiscretizer = new TimeDiscretizer(TRAVEL_TIME_END, TRAVEL_TIME_BIN_SIZE);
-		try {
-			URL ttUrl = Path.of(ttFile).toUri().toURL();
-			double[][] matrix = DvrpOfflineTravelTimes.loadLinkTravelTimes(timeDiscretizer, ttUrl, "\t");
-			TravelTime baseTt = DvrpOfflineTravelTimes.asTravelTime(timeDiscretizer, matrix);
-			log.info("Phase 2: bound travel times ({} bins, clamped to {}h)",
-					timeDiscretizer.getIntervalCount(), TRAVEL_TIME_END / 3600);
-			return (link, time, person, vehicle) ->
-					baseTt.getLinkTravelTime(link, Math.min(time, TRAVEL_TIME_END), person, vehicle);
-		} catch (Exception e) {
-			throw new RuntimeException("Failed to load offline travel times from " + ttFile, e);
-		}
 	}
 
 	private static String capitalize(String s) {

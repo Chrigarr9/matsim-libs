@@ -30,6 +30,7 @@ import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.config.groups.ControllerConfigGroup;
 import org.matsim.core.config.groups.QSimConfigGroup;
 import org.matsim.core.config.groups.VspExperimentalConfigGroup;
+import org.matsim.contrib.demand_extraction.algorithm.network.OfflineTravelTimes;
 import org.matsim.core.controler.AbstractModule;
 import org.matsim.core.controler.Controler;
 import org.matsim.core.controler.OutputDirectoryHierarchy;
@@ -71,10 +72,6 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 	// Exposed so RunLyonEqasimDemandExtraction can reference the same canonical
 	// relative path when building a FilterConfig for --exclusion-zone metropole_lyon.
 	public static final String EXCLUSION_ZONE_SHAPEFILE = "../../data/cutter/metropole_lyon.shp";
-
-	// 15-minute bins matching RunExportTravelTimes
-	private static final int TRAVEL_TIME_BIN_SIZE = 900;
-	private static final int TRAVEL_TIME_END = 36 * 3600;
 
 	/**
 	 * Parametric filter configuration for trip-filter focus, radius, and
@@ -353,7 +350,7 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 		// factory collapses SpeedyALT's A* to Dijkstra (zero scoring gradient on
 		// every link) and routing becomes ~60× slower — see
 		// .project-memory/eqasim-routing-disutility-fix-2026-04-17.md.
-		TravelTime offlineTravelTime = loadOfflineTravelTimes(travelTimesPath);
+		TravelTime offlineTravelTime = OfflineTravelTimes.load(travelTimesPath);
 		controler.addOverridingModule(new AbstractModule() {
 			@Override
 			public void install() {
@@ -373,21 +370,6 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 		} catch (CommandLine.ConfigurationException e) {
 			throw new IllegalStateException("Empty CommandLine should never fail", e);
 		}
-	}
-
-	private static TravelTime loadOfflineTravelTimes(String ttFile) throws IOException {
-		log.info("Loading pre-computed travel times from: {}", ttFile);
-		var timeDiscretizer = new org.matsim.contrib.common.timeprofile.TimeDiscretizer(
-				TRAVEL_TIME_END, TRAVEL_TIME_BIN_SIZE);
-		java.net.URL ttUrl = Path.of(ttFile).toUri().toURL();
-		double[][] matrix = org.matsim.contrib.dvrp.trafficmonitoring.DvrpOfflineTravelTimes
-				.loadLinkTravelTimes(timeDiscretizer, ttUrl, "\t");
-		var baseTt = org.matsim.contrib.dvrp.trafficmonitoring.DvrpOfflineTravelTimes
-				.asTravelTime(timeDiscretizer, matrix);
-		log.info("Bound pre-computed travel times ({} time bins, clamped to {}h)",
-				timeDiscretizer.getIntervalCount(), TRAVEL_TIME_END / 3600);
-		return (link, time, person, vehicle) ->
-				baseTt.getLinkTravelTime(link, Math.min(time, TRAVEL_TIME_END), person, vehicle);
 	}
 
 	@Override
