@@ -10,8 +10,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntConsumer;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -176,12 +179,7 @@ public final class RidePostProcessor {
 
         Map<Integer, double[]> shapleyByRide = new ConcurrentHashMap<>();
         int availableParallelism = resolveParallelism();
-        var stream = IntStream.range(0, rides.size());
-        if (availableParallelism > 1) {
-            stream = stream.parallel();
-        }
-
-        stream.forEach(idx -> {
+        runIndexedParallel(rides.size(), availableParallelism, idx -> {
             Ride ride = rides.get(idx);
             int[] requests = ride.getRequestIndices();
             int n = requests.length;
@@ -279,15 +277,11 @@ public final class RidePostProcessor {
 		log.info("    This requires routing up to {} potential connections via network...", (long) total * (total - 1) / 2);
 
 		long routingStartTime = System.currentTimeMillis();
-        IntStream stream = IntStream.range(0, total);
-        if (parallelism > 1) {
-            stream = stream.parallel();
-        }
 		AtomicInteger processed = new AtomicInteger(0);
 		long routingStartNanos = System.nanoTime();
 
         // Forward search: For each ride i, find successors j
-        stream.forEach(i -> {
+        runIndexedParallel(total, parallelism, i -> {
 			int done = processed.incrementAndGet();
 			if (done == total || (int)(100.0 * done / total) > (int)(100.0 * (done - 1) / total)) {
 				double elapsedSeconds = (System.nanoTime() - routingStartNanos) / 1e9;
@@ -447,6 +441,37 @@ public final class RidePostProcessor {
             return Math.max(1, Runtime.getRuntime().availableProcessors());
         }
         return configured;
+    }
+
+    /**
+     * Run {@code action} over indices {@code [0, total)} with the worker count bounded
+     * to {@code parallelism}. A bare {@link IntStream#parallel()} always uses the common
+     * ForkJoinPool, which is sized to all available cores and so ignores the configured
+     * {@code heuristicsProcessCount}. Submitting the parallel stream inside a dedicated
+     * {@link ForkJoinPool} caps the worker count at exactly {@code parallelism}, honouring
+     * the config. {@code parallelism <= 1} runs sequentially, which is also what makes a
+     * single-threaded run bit-reproducible (the shared connection cache fills in a fixed
+     * order, so post-processing aggregates such as {@code reposTimeMeanOutgoing} are stable).
+     */
+    private void runIndexedParallel(int total, int parallelism, IntConsumer action) {
+        if (parallelism <= 1) {
+            for (int i = 0; i < total; i++) {
+                action.accept(i);
+            }
+            return;
+        }
+        ForkJoinPool pool = new ForkJoinPool(parallelism);
+        try {
+            pool.submit(() -> IntStream.range(0, total).parallel().forEach(action)).get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted during parallel post-processing", e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            throw new RuntimeException("Parallel post-processing failed", cause != null ? cause : e);
+        } finally {
+            pool.shutdown();
+        }
     }
 
 	private static String formatDuration(double seconds) {

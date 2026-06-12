@@ -67,7 +67,8 @@ public final class RunDemandExtractionPhase2 {
 				case "--output-dir" -> outputDir = args[++i];
 				case "--extension-parents-top-k", "--extension-parents-top-k-min-degree",
 				     "--extension-parents-top-k-metric", "--extension-parents-selection-rule",
-				     "--extension-parents-mmr-lambda" -> i++; // applied via applyPhase2KnobOverrides
+				     "--extension-parents-mmr-lambda", "--checkpoint-dir",
+				     "--algorithm-process-count", "--heuristics-process-count" -> i++; // applied via applyPhase2KnobOverrides
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -136,6 +137,12 @@ public final class RunDemandExtractionPhase2 {
 				// pair universe + connection-cache journal at each barrier, and resumes from
 				// the dir if a matching manifest is already present. Off ("") reproduces master.
 				case "--checkpoint-dir" -> cfg.setCheckpointDir(args[++i]);
+				// Thread-count overrides. Both = 1 makes the whole pipeline (algorithm +
+				// post-processing) bit-reproducible: the shared connection cache fills in a
+				// fixed order, so routes and post-processing aggregates are deterministic.
+				// Used by the A3 kill-resume gate to assert true SHA-256 byte-identity.
+				case "--algorithm-process-count" -> cfg.setAlgorithmProcessCount(Integer.parseInt(args[++i]));
+				case "--heuristics-process-count" -> cfg.setHeuristicsProcessCount(Integer.parseInt(args[++i]));
 				default -> { }
 			}
 		}
