@@ -14,6 +14,8 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.extension.BamasRideExtender;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.checkpoint.CheckpointManager;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.checkpoint.RunFingerprint;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.graph.DegreeGraph;
 import org.matsim.contrib.demand_extraction.algorithm.engine.PostExtensionPruner;
 import org.matsim.contrib.demand_extraction.algorithm.generation.PairGenerator;
@@ -149,6 +151,29 @@ public final class BamasEngine {
 		// fallback keep the original fat pair flow (those are not the memory-critical runs).
 		final boolean pairStubPath = streamingD2D && maxDegree > 2;
 
+		// Plan A3 — per-degree checkpoint/resume (off unless checkpointDir is set). Only the
+		// streaming pair-stub D2D path is supported: that IS the week-long exact 100% run the
+		// checkpoints exist for. On any other path the knob is a logged no-op (HyperPool
+		// checkpointing is Plan A2's concern; maxDegree<=2 has no extension to resume).
+		// NOTE (Plan A3 Task 3): the fingerprint here is config-only (file-path hashes are null);
+		// Task 4 threads the requests/travel-times/network paths through and enriches it before
+		// resume — the only place the file-hash component is consumed. The manifest written now is
+		// never read until resume exists, so the config-only form is safe in the interim.
+		CheckpointManager checkpointMgr = null;
+		if (exMasConfig.isCheckpointingEnabled()) {
+			if (pairStubPath) {
+				String fingerprint = RunFingerprint.compute(exMasConfig, null, null, null, "bamas");
+				checkpointMgr = new CheckpointManager(
+						java.nio.file.Path.of(exMasConfig.getCheckpointDir()), fingerprint);
+				checkpointMgr.init();
+				log.info("Plan A3 checkpointing ENABLED -> {}", exMasConfig.getCheckpointDir());
+			} else {
+				log.warn("checkpointDir is set but checkpointing is only supported on the streaming "
+						+ "pair-stub D2D path (stub mode + stop-based OFF + maxDegree>2). "
+						+ "Running WITHOUT checkpoints.");
+			}
+		}
+
         // Phase 2: Generate pair rides with budget validation
 		log.info("");
 		log.info("PHASE 2: Pair Ride Generation");
@@ -176,9 +201,18 @@ public final class BamasEngine {
 			log.info("Graph built: {} edges, {} nodes in {}s",
 					graph.getEdgeCount(), graph.getNodeCount(), String.format("%.1f", graphElapsed / 1000.0));
 
+			// Plan A3: persist the PRE-PRUNE pair universe before it is dropped (review addendum
+			// F6) — on resume the shareability graph rebuilds via buildGraph(allPairStubs) and the
+			// degree-2 survivors via maybePrunePairStubsAfterGraph, both deterministic, so no
+			// separate graph/edge-list serializer is needed. Written before the prune so the
+			// persisted universe matches what the graph was built from.
+			if (checkpointMgr != null) {
+				checkpointMgr.writeBase(allPairStubs);
+			}
+
 			// Best-per-set dedup + distance gate + top-fraction over the stub universe. The
 			// full pair universe is dropped here (only the survivor layer is retained), so
-			// the fat pair universe never coexists with the extension cascade.
+			// the full pair universe never coexists with the extension cascade.
 			pairSurvivorStubs = maybePrunePairStubsAfterGraph(allPairStubs, reqArray);
 		} else {
 			List<Ride> pairRides = pairGen.generatePairs(reqArray);
@@ -285,6 +319,13 @@ public final class BamasEngine {
 				}
 				stubLayers.add(layer);
 				prevStubLayer = layer; // next degree extends this (pruned) layer
+
+				// Plan A3 barrier: the degree-(degree+1) layer is now finalized (post in-loop
+				// RATIO prune; post-loop COVERAGE_TOPK re-applies uniformly on resume too).
+				// generatedCount (pre-prune) restores nextRideIndex exactly. Manifest written last.
+				if (checkpointMgr != null) {
+					checkpointMgr.writeDegree(degree + 1, layer, generatedCount);
+				}
 			} else {
 				// RATIO_THRESHOLD inter-degree pruning only (legacy keep-fraction gate).
 				// COVERAGE_TOPK is applied once after the full cascade — see post-loop block below.
