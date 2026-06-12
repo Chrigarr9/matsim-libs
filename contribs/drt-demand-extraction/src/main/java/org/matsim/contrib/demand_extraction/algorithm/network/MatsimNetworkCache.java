@@ -20,6 +20,7 @@ import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
+import org.matsim.contrib.demand_extraction.algorithm.util.PackedKeyCodec;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.core.population.PopulationUtils;
 import org.matsim.core.router.costcalculators.TravelDisutilityFactory;
@@ -81,14 +82,20 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	private final Person dummyPerson;
 	private final Vehicle dummyVehicle;
 
-	// Cache: (originLinkId, destLinkId, timeBin) -> TravelSegment
-	private final ConcurrentHashMap<CacheKey, TravelSegment> cache = new ConcurrentHashMap<>();
+	// Three-tier connection cache (design 2026-06-12 §3): a compact retained tier over a
+	// two-generation watermark-evicted speculative tier. Keys are packed primitive longs
+	// (PackedKeyCodec): segment keys carry (originLinkIdx, destLinkIdx, timeBin); the SSSP
+	// completion marks carry (originLinkIdx, timeBin). Link indices are MATSim Id.index()
+	// values — stable within this JVM only, so anything persisted (journal, CSV) maps back
+	// to link-id strings via linkIdByIndex(). The previous ssspCompleted map now lives
+	// inside the speculative tier (co-evicted with its segments).
+	private final TieredSegmentCache cache = new TieredSegmentCache();
 
-	// Tracks (originLinkId, timeBin) pairs for which SSSP was actually completed.
-	// batchPrecompute skips only when the SAME origin+timeBin was already SSSP'd — not
-	// when an individual getSegment call happened to populate one destination of that origin.
-	// Using ConcurrentHashMap as a set (value = Boolean.TRUE).
-	private final ConcurrentHashMap<SsspKey, Boolean> ssspCompleted = new ConcurrentHashMap<>();
+	// Lazily-built int index -> Id<Link> back-mapping, used only at export / journal-drain
+	// time to turn packed long keys back into link-id strings. Sized by the global Id
+	// registry; populated from this cache's network links. Volatile + double-checked so the
+	// single-threaded export/drain barriers share one build without locking the hot path.
+	private volatile Id<Link>[] linkByIndex = null;
 
 	// ── Journaling (Plan A3 checkpoint/resume) ────────────────────────────────
 	// When disabled (default) the volatile read is the only overhead — routing paths
@@ -97,11 +104,11 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	/** When true, newly-inserted cache/sssp keys are captured in the pending queues. */
 	private volatile boolean journalingEnabled = false;
 
-	/** Keys of cache entries inserted since the last drainPendingToJournal (or since enableJournaling). */
-	private final ConcurrentLinkedQueue<CacheKey> pendingSegmentKeys = new ConcurrentLinkedQueue<>();
+	/** Packed segment keys inserted since the last drainPendingToJournal (or since enableJournaling). */
+	private final ConcurrentLinkedQueue<Long> pendingSegmentKeys = new ConcurrentLinkedQueue<>();
 
-	/** Keys of ssspCompleted entries inserted since the last drainPendingToJournal. */
-	private final ConcurrentLinkedQueue<SsspKey> pendingSsspKeys = new ConcurrentLinkedQueue<>();
+	/** Packed SSSP keys inserted since the last drainPendingToJournal. */
+	private final ConcurrentLinkedQueue<Long> pendingSsspKeys = new ConcurrentLinkedQueue<>();
 
 	// ─────────────────────────────────────────────────────────────────────────
 
@@ -189,15 +196,21 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		// Canonical departure time for this bin: midpoint
 		double canonicalDepartureTime = (timeBin + 0.5) * timeBinSize;
 
-		CacheKey key = new CacheKey(originLinkId, destLinkId, timeBin);
+		long key = PackedKeyCodec.segmentKey(originLinkId.index(), destLinkId.index(), timeBin);
 
-		// Use computeIfAbsent for atomic cache operations. This ensures only ONE thread
-		// computes the segment for a given key, preventing race conditions in routers.
-		return cache.computeIfAbsent(key, k -> {
-			TravelSegment seg = computeSegment(originLinkId, destLinkId, canonicalDepartureTime);
-			if (journalingEnabled) pendingSegmentKeys.add(k);
-			return seg;
-		});
+		// computeIfAbsent fills a cache miss exactly once under normal use. The tiered cache
+		// allows a rare duplicate fill under a get/rotate race — harmless: routing is
+		// deterministic so both fills carry bit-identical values, and the speculative put is
+		// first-write-wins. Journal the key only when this call actually inserted it.
+		TravelSegment cached = cache.get(key);
+		if (cached != null) return cached;
+		TravelSegment seg = computeSegment(originLinkId, destLinkId, canonicalDepartureTime);
+		if (cache.putSpeculative(key, seg) && journalingEnabled) {
+			pendingSegmentKeys.add(key);
+		}
+		// Re-read so all callers observe the first-write winner (in case of a concurrent fill).
+		TravelSegment winner = cache.get(key);
+		return winner != null ? winner : seg;
 	}
 
 	/**
@@ -236,8 +249,8 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		// routed by the individual LeastCostPathCalculator instead of the SSSP tree.
 		// Different implementations (SpeedyALT vs LeastCostPathTree) give slightly
 		// different travel times for some segments, flipping borderline pair feasibility.
-		SsspKey ssspKey = new SsspKey(fromLinkId, timeBin);
-		if (ssspCompleted.containsKey(ssspKey)) {
+		long ssspKey = PackedKeyCodec.ssspKey(fromLinkId.index(), timeBin);
+		if (cache.isSsspDone(ssspKey)) {
 			batchTreesSkipped.incrementAndGet();
 			return;
 		}
@@ -246,31 +259,31 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		LeastCostPathTree.StopCriterion stopCriterion =
 			new LeastCostPathTree.TravelTimeStopCriterion(maxTravelTimeSeconds);
 		tree.calculate(fromLink, canonicalDepartureTime, dummyPerson, dummyVehicle, stopCriterion);
-		// putIfAbsent (not put): two threads can pass the containsKey gate above for the same
-		// (fromLink, timeBin) and both compute the tree; only the one that actually inserts the
-		// key journals it, so the journal never accumulates duplicate records for a raced key.
-		if (ssspCompleted.putIfAbsent(ssspKey, Boolean.TRUE) == null && journalingEnabled) {
+		// markSssp returns true only for the thread that actually inserted the mark: two threads
+		// can pass the isSsspDone gate above for the same (fromLink, timeBin) and both compute the
+		// tree; only the inserting one journals it, so the journal never accumulates duplicate
+		// SSSP records for a raced key.
+		if (cache.markSssp(ssspKey) && journalingEnabled) {
 			pendingSsspKeys.add(ssspKey);
 		}
 		batchTreesComputed.incrementAndGet();
 
 		for (Id<Link> toLinkId : toLinkIds) {
-			CacheKey key = new CacheKey(fromLinkId, toLinkId, timeBin);
-			if (cache.containsKey(key)) continue;
+			long key = PackedKeyCodec.segmentKey(fromLinkId.index(), toLinkId.index(), timeBin);
+			if (cache.get(key) != null) continue;
 
 			if (fromLinkId.equals(toLinkId)) {
-				cache.computeIfAbsent(key, k -> {
-					TravelSegment seg = computeSegment(fromLinkId, toLinkId, canonicalDepartureTime);
-					if (journalingEnabled) pendingSegmentKeys.add(k);
-					return seg;
-				});
+				TravelSegment seg = computeSegment(fromLinkId, toLinkId, canonicalDepartureTime);
+				if (cache.putSpeculative(key, seg) && journalingEnabled) {
+					pendingSegmentKeys.add(key);
+				}
 				batchSegmentsPopulated.incrementAndGet();
 				continue;
 			}
 
 			Link toLink = network.getLinks().get(toLinkId);
 			if (toLink == null) {
-				if (cache.putIfAbsent(key, TravelSegment.unreachable()) == null && journalingEnabled) {
+				if (cache.putSpeculative(key, TravelSegment.unreachable()) && journalingEnabled) {
 					pendingSegmentKeys.add(key);
 				}
 				batchSegmentsPopulated.incrementAndGet();
@@ -283,7 +296,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 			// (e.g. forbidden immediate turn or only a loop-back path exists). Route
 			// these adjacent link-to-link cases point-to-point instead.
 			if (fromLink.getToNode().getId().equals(toLink.getFromNode().getId())) {
-				if (cache.putIfAbsent(key, computeSegment(fromLinkId, toLinkId, canonicalDepartureTime)) == null
+				if (cache.putSpeculative(key, computeSegment(fromLinkId, toLinkId, canonicalDepartureTime))
 						&& journalingEnabled) {
 					pendingSegmentKeys.add(key);
 				}
@@ -305,7 +318,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 				double tt = interLinkTT + toLinkTT;
 				double dist = tree.getDistance(toNodeIdx) + toLink.getLength();
 				double utility = -(tree.getCost(toNodeIdx) + toLinkDisutility);
-				if (cache.putIfAbsent(key, new TravelSegment(tt, dist, utility)) == null && journalingEnabled) {
+				if (cache.putSpeculative(key, new TravelSegment(tt, dist, utility)) && journalingEnabled) {
 					pendingSegmentKeys.add(key);
 				}
 				batchSegmentsPopulated.incrementAndGet();
@@ -350,25 +363,34 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		try (BufferedWriter writer = new BufferedWriter(new FileWriter(filepath))) {
 			writer.write("origin,destination,time_bin,travel_time,distance\n");
 
-			// Deterministic output: sort keys lexicographically
-			List<CacheKey> sortedKeys = cache.keySet().stream()
-					.sorted((a, b) -> {
-						int cmp = a.origin.toString().compareTo(b.origin.toString());
-						if (cmp != 0) return cmp;
-						cmp = a.destination.toString().compareTo(b.destination.toString());
-						if (cmp != 0) return cmp;
-						return Integer.compare(a.timeBin, b.timeBin);
-					})
-					.toList();
+			Id<Link>[] byIndex = linkByIndex();
+
+			// Collect all keys, then sort by (origin string, dest string, bin) to match the
+			// pre-tiered deterministic ordering exactly. forEachKey walks both tiers deduped.
+			List<Long> keys = new ArrayList<>();
+			cache.forEachKey(keys::add);
+			keys.sort((a, b) -> {
+				String oa = linkStr(byIndex, PackedKeyCodec.origin(a));
+				String ob = linkStr(byIndex, PackedKeyCodec.origin(b));
+				int cmp = oa.compareTo(ob);
+				if (cmp != 0) return cmp;
+				String da = linkStr(byIndex, PackedKeyCodec.dest(a));
+				String db = linkStr(byIndex, PackedKeyCodec.dest(b));
+				cmp = da.compareTo(db);
+				if (cmp != 0) return cmp;
+				return Integer.compare(PackedKeyCodec.bin(a), PackedKeyCodec.bin(b));
+			});
 
 			int exported = 0;
-			for (CacheKey key : sortedKeys) {
+			for (long key : keys) {
 				TravelSegment seg = cache.get(key);
 				if (seg == null || !seg.isReachable()) {
 					continue;
 				}
 				writer.write(String.format(java.util.Locale.US, "%s,%s,%d,%.2f,%.2f\n",
-						key.origin, key.destination, key.timeBin,
+						linkStr(byIndex, PackedKeyCodec.origin(key)),
+						linkStr(byIndex, PackedKeyCodec.dest(key)),
+						PackedKeyCodec.bin(key),
 						seg.getTravelTime(), seg.getDistance()));
 				exported++;
 			}
@@ -402,7 +424,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 
 				Id<Link> origin = Id.createLinkId(originStr);
 				Id<Link> destination = Id.createLinkId(destStr);
-				CacheKey key = new CacheKey(origin, destination, timeBin);
+				long key = PackedKeyCodec.segmentKey(origin.index(), destination.index(), timeBin);
 
 				TravelSegment seg = cache.get(key);
 				if (seg == null) {
@@ -446,9 +468,9 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 					
 					// Only import if links exist in network
 					if (network.getLinks().containsKey(origin) && network.getLinks().containsKey(dest)) {
-						CacheKey key = new CacheKey(origin, dest, timeBin);
+						long key = PackedKeyCodec.segmentKey(origin.index(), dest.index(), timeBin);
 						TravelSegment seg = new TravelSegment(tt, dist, util);
-						cache.put(key, seg);
+						cache.putSpeculative(key, seg);
 					}
 				} catch (Exception e) {
 					// Skip invalid entries
@@ -463,12 +485,12 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	public void clearCache() {
 		cache.clear();
 	}
-	
+
 	/**
 	 * Get current cache size (number of cached segments).
 	 */
 	public int getCacheSize() {
-		return cache.size();
+		return (int) cache.size();
 	}
 
 	/**
@@ -502,6 +524,8 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		int treesSkipped = batchTreesSkipped.get();
 		long ssspSegs = batchSegmentsPopulated.get();
 		long cacheSize = cache.size();
+		long retainedSize = cache.retainedSize();
+		long speculativeSize = cache.speculativeSize();
 
 		if (gets == 0 && trees == 0) {
 			log.info("Network cache: No routing activity");
@@ -520,7 +544,9 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		log.info("  batchPrecompute:   {} trees  ({} skipped)  -> {} segments cached",
 				String.format("%,d", trees), String.format("%,d", treesSkipped),
 				String.format("%,d", ssspSegs));
-		log.info("  Cache total size:  {} entries", String.format("%,d", cacheSize));
+		log.info("  Cache total size:  {} entries  (retained {} / speculative {})",
+				String.format("%,d", cacheSize), String.format("%,d", retainedSize),
+				String.format("%,d", speculativeSize));
 		if (gets > 0 && ssspSegs > 0) {
 			log.info("  SSSP segment reuse estimate: {} SSSP entries / {} hits  " +
 					"(upper bound; same entry may be hit many times)",
@@ -589,24 +615,28 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		List<ConnectionCacheJournal.Segment> segments = new ArrayList<>();
 		List<ConnectionCacheJournal.Sssp> ssspKeys = new ArrayList<>();
 
-		CacheKey segKey;
+		Id<Link>[] byIndex = linkByIndex();
+
+		Long segKey;
 		while ((segKey = pendingSegmentKeys.poll()) != null) {
-			TravelSegment seg = cache.get(segKey);
+			long k = segKey;
+			TravelSegment seg = cache.get(k);
 			if (seg == null) continue; // defensive: entry was removed (e.g. clearCache in tests)
 			segments.add(new ConnectionCacheJournal.Segment(
-					segKey.origin.toString(),
-					segKey.destination.toString(),
-					segKey.timeBin,
+					linkStr(byIndex, PackedKeyCodec.origin(k)),
+					linkStr(byIndex, PackedKeyCodec.dest(k)),
+					PackedKeyCodec.bin(k),
 					seg.getTravelTime(),
 					seg.getDistance(),
 					seg.getNetworkUtility()));
 		}
 
-		SsspKey ssspKey;
+		Long ssspKey;
 		while ((ssspKey = pendingSsspKeys.poll()) != null) {
+			long k = ssspKey;
 			ssspKeys.add(new ConnectionCacheJournal.Sssp(
-					ssspKey.origin.toString(),
-					ssspKey.timeBin));
+					linkStr(byIndex, PackedKeyCodec.ssspOrigin(k)),
+					PackedKeyCodec.ssspBin(k)));
 		}
 
 		writer.appendBarrier(segments, ssspKeys);
@@ -625,12 +655,12 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		for (ConnectionCacheJournal.Segment seg : contents.segments()) {
 			Id<Link> from = Id.createLinkId(seg.fromLink());
 			Id<Link> to   = Id.createLinkId(seg.toLink());
-			cache.put(new CacheKey(from, to, seg.bin()),
+			cache.putSpeculative(PackedKeyCodec.segmentKey(from.index(), to.index(), seg.bin()),
 					new TravelSegment(seg.tt(), seg.dist(), seg.utility()));
 		}
 		for (ConnectionCacheJournal.Sssp sssp : contents.ssspKeys()) {
 			Id<Link> from = Id.createLinkId(sssp.fromLink());
-			ssspCompleted.put(new SsspKey(from, sssp.bin()), Boolean.TRUE);
+			cache.markSssp(PackedKeyCodec.ssspKey(from.index(), sssp.bin()));
 		}
 	}
 
@@ -785,7 +815,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	 * <p>Intended for use in JUnit tests only — not for production code.
 	 */
 	void putForTesting(Id<Link> origin, Id<Link> dest, TravelSegment seg) {
-		cache.put(new CacheKey(origin, dest, 0), seg);
+		cache.putSpeculative(PackedKeyCodec.segmentKey(origin.index(), dest.index(), 0), seg);
 	}
 
 	/**
@@ -793,7 +823,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	 * Intended for diagnostic tests only.
 	 */
 	TravelSegment peekForTesting(Id<Link> origin, Id<Link> dest, int timeBin) {
-		return cache.get(new CacheKey(origin, dest, timeBin));
+		return cache.get(PackedKeyCodec.segmentKey(origin.index(), dest.index(), timeBin));
 	}
 
 	/**
@@ -801,7 +831,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	 * Intended for use in unit tests only.
 	 */
 	boolean isSsspCompletedForTesting(Id<Link> origin, int bin) {
-		return ssspCompleted.containsKey(new SsspKey(origin, bin));
+		return cache.isSsspDone(PackedKeyCodec.ssspKey(origin.index(), bin));
 	}
 
 	private MatsimNetworkCache() {
@@ -845,62 +875,45 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 			new LeastCostPathTree(speedyGraph, travelTime, wrapped));
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────
+	// ── Packed-key string back-mapping (export / journal drain only) ───────────
 
-	/** Key for the ssspCompleted set: origin link + time bin. */
-	private static class SsspKey {
-		private final Id<Link> origin;
-		private final int timeBin;
-
-		SsspKey(Id<Link> origin, int timeBin) {
-			this.origin = origin;
-			this.timeBin = timeBin;
-		}
-
-		@Override
-		public boolean equals(Object obj) {
-			if (this == obj) return true;
-			if (!(obj instanceof SsspKey)) return false;
-			SsspKey other = (SsspKey) obj;
-			return timeBin == other.timeBin && origin.equals(other.origin);
-		}
-
-		@Override
-		public int hashCode() {
-			return 31 * origin.hashCode() + timeBin;
+	/**
+	 * Lazily build and cache the int-index → {@code Id<Link>} array used to turn packed long
+	 * keys back into link-id strings at export / journal-drain time. Sized by the global Id
+	 * registry and populated from this cache's network links. Double-checked: the array is
+	 * built once at the first single-threaded export/drain barrier; concurrent routing never
+	 * calls this.
+	 */
+	@SuppressWarnings("unchecked")
+	private Id<Link>[] linkByIndex() {
+		Id<Link>[] local = linkByIndex;
+		if (local != null) return local;
+		synchronized (this) {
+			if (linkByIndex != null) return linkByIndex;
+			Id<Link>[] arr = (Id<Link>[]) new Id[Id.getNumberOfIds(Link.class)];
+			if (network != null) {
+				for (Id<Link> id : network.getLinks().keySet()) {
+					int idx = id.index();
+					if (idx >= 0 && idx < arr.length) {
+						arr[idx] = id;
+					}
+				}
+			}
+			linkByIndex = arr;
+			return arr;
 		}
 	}
 
 	/**
-	 * Cache key for link-to-link travel at specific time bin.
+	 * Resolve a packed link index to its string form. Falls back to the raw index as a string
+	 * if the index is outside the back-map (only possible for an id created after the array was
+	 * built, which export/drain do not produce — every drained/exported key came from a network
+	 * link present at build time).
 	 */
-	private static class CacheKey {
-		private final Id<Link> origin;
-		private final Id<Link> destination;
-		private final int timeBin;
-		
-		CacheKey(Id<Link> origin, Id<Link> destination, int timeBin) {
-			this.origin = origin;
-			this.destination = destination;
-			this.timeBin = timeBin;
+	private static String linkStr(Id<Link>[] byIndex, int idx) {
+		if (idx >= 0 && idx < byIndex.length && byIndex[idx] != null) {
+			return byIndex[idx].toString();
 		}
-		
-		@Override
-		public boolean equals(Object obj) {
-			if (this == obj) return true;
-			if (!(obj instanceof CacheKey)) return false;
-			CacheKey other = (CacheKey) obj;
-			return timeBin == other.timeBin &&
-					origin.equals(other.origin) &&
-					destination.equals(other.destination);
-		}
-		
-		@Override
-		public int hashCode() {
-			int result = origin.hashCode();
-			result = 31 * result + destination.hashCode();
-			result = 31 * result + timeBin;
-			return result;
-		}
+		return Integer.toString(idx);
 	}
 }

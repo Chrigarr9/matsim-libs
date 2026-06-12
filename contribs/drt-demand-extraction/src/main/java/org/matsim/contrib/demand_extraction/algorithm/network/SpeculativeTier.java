@@ -33,10 +33,15 @@ final class SpeculativeTier {
 		return s != null ? s : old.get(key);
 	}
 
-	void put(long key, TravelSegment seg) {
-		// First write wins within the young generation; an identical key may transiently
-		// exist in old too (harmless duplicate, values identical by determinism rule).
-		young.putIfAbsent(key, seg);
+	/**
+	 * First write wins within the young generation; an identical key may transiently exist in
+	 * old too (harmless duplicate, values identical by determinism rule).
+	 *
+	 * @return {@code true} iff this call inserted the key (no prior mapping in the young
+	 *         generation) — used by the journaling path to record each key exactly once.
+	 */
+	boolean put(long key, TravelSegment seg) {
+		return young.putIfAbsent(key, seg) == null;
 	}
 
 	void remove(long key) {
@@ -44,8 +49,11 @@ final class SpeculativeTier {
 		old.remove(key);
 	}
 
-	void markSssp(long ssspKey) {
-		youngMarks.add(ssspKey);
+	/**
+	 * @return {@code true} iff this call newly marked the SSSP key in the young generation.
+	 */
+	boolean markSssp(long ssspKey) {
+		return youngMarks.add(ssspKey);
 	}
 
 	boolean isSsspDone(long ssspKey) {
@@ -62,5 +70,30 @@ final class SpeculativeTier {
 
 	long size() {
 		return (long) young.size() + old.size();
+	}
+
+	/**
+	 * Visit every segment key currently live (young + old generations), deduped. Intended for
+	 * the single-threaded export/drain paths.
+	 */
+	void forEachKey(it.unimi.dsi.fastutil.longs.LongConsumer action) {
+		ConcurrentHashMap<Long, TravelSegment> y = young;
+		ConcurrentHashMap<Long, TravelSegment> o = old;
+		for (Long key : y.keySet()) {
+			action.accept(key);
+		}
+		for (Long key : o.keySet()) {
+			if (!y.containsKey(key)) {
+				action.accept(key);
+			}
+		}
+	}
+
+	/** Drop both generations and their SSSP marks. Single-threaded call sites only. */
+	synchronized void clear() {
+		young = new ConcurrentHashMap<>();
+		old = new ConcurrentHashMap<>();
+		youngMarks = ConcurrentHashMap.newKeySet();
+		oldMarks = ConcurrentHashMap.newKeySet();
 	}
 }

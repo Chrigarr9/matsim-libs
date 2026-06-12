@@ -84,6 +84,33 @@ final class CompactSegmentStore {
 		return frozen.size + overlay.size();
 	}
 
+	boolean containsKey(long key) {
+		return frozen.index.containsKey(key) || overlay.containsKey(key);
+	}
+
+	/**
+	 * Visit every key currently retained (frozen snapshot + overlay), deduped. Intended for
+	 * the single-threaded export/drain paths; concurrent compaction may shift the snapshot
+	 * but every key present at call time is visited at least once.
+	 */
+	void forEachKey(it.unimi.dsi.fastutil.longs.LongConsumer action) {
+		Frozen f = frozen;
+		for (Long2IntMap.Entry e : f.index.long2IntEntrySet()) {
+			action.accept(e.getLongKey());
+		}
+		for (Long key : overlay.keySet()) {
+			if (!f.index.containsKey((long) key)) {
+				action.accept(key);
+			}
+		}
+	}
+
+	/** Remove all entries (frozen snapshot + overlay). Single-threaded call sites only. */
+	void clear() {
+		frozen = Frozen.EMPTY;
+		overlay.clear();
+	}
+
 	private static final class Frozen {
 		static final Frozen EMPTY =
 				new Frozen(emptyIndex(), new double[0], new double[0], new double[0], 0);
