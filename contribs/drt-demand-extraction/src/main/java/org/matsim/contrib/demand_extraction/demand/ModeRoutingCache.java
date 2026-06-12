@@ -131,12 +131,12 @@ public class ModeRoutingCache {
 		int totalPersons = persons.size();
 		int logInterval = Math.max(1, totalPersons / 10); // Log every 10%
 
-		var personStream = persons.stream();
-		if (!exMasConfig.isUseDeterministicNetworkRouting()) {
-			personStream = personStream.parallel();
-		}
-
-		personStream.forEach(person -> {
+		// Always parallel: per-person routing is independent, results land in
+		// per-person maps, and the shared connection cache is deterministic by
+		// construction (DeterministicTravelDisutility) — order of fill cannot
+		// change any cached value. The old sequential-when-deterministic guard
+		// was the flag's dominant performance penalty.
+		persons.stream().parallel().forEach(person -> {
             TripRouter tripRouter = tripRouterProvider.get();
             Map<Integer, Map<String, ModeAttributes>> personCache = new ConcurrentHashMap<>();
 			Map<Integer, Entry<String, Double>> personBestModes = new ConcurrentHashMap<>();
