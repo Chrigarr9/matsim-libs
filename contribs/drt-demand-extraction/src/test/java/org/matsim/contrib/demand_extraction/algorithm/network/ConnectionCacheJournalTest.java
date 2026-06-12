@@ -18,9 +18,12 @@ import org.junit.jupiter.api.io.TempDir;
  * 1. Round-trip across two barriers (bit-identical doubles, including +Infinity)
  * 2. Dictionary reuse (link seen in barrier A not re-emitted in barrier B)
  * 3. Reopen-and-append (openForAppend on existing journal, 2nd barrier returned on read)
- * 4. Torn tail after last barrier (truncation → read returns committed data only)
- * 5. Corruption within committed region (bad magic → IOException)
+ * 4. Torn tail after last barrier (EOF truncation → read returns committed data only)
+ * 5. Corruption — bad magic → IOException (read and openForAppend)
  * 6. Empty / no-barrier journal (zero barriers → empty contents, no throw)
+ * 7. Non-existent file → read throws IOException
+ * 8. Corrupt record tag after the last barrier → read throws (genuine corruption ≠ clean
+ *    truncation; resume must refuse rather than load a partial cache)
  */
 public class ConnectionCacheJournalTest {
 
@@ -200,6 +203,32 @@ public class ConnectionCacheJournalTest {
         long sizeAfterCleanTwo = Files.size(file);
         assertTrue(sizeAfterCleanTwo <= committedSize * 3,
                 "file size after clean 2-barrier write should be sane");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 4b: a corrupt (unrecognised) record tag after the last barrier is
+    //          genuine corruption, NOT a clean truncation → read must throw.
+    //          (A clean crash only ever leaves valid-tag records ending in EOF,
+    //          covered by Test 4; an unintelligible tag byte means bit-rot, and
+    //          resume must refuse rather than silently load a partial cache.)
+    // -------------------------------------------------------------------------
+    @Test
+    void corruptTagAfterBarrier_throwsIOException() throws IOException {
+        Path file = tmp.resolve("corrupt-tag.journal");
+
+        try (var w = ConnectionCacheJournal.Writer.openForAppend(file)) {
+            w.appendBarrier(List.of(new ConnectionCacheJournal.Segment("X", "Y", 0, 1.0, 2.0, 3.0)), List.of());
+        }
+        long committedSize = Files.size(file);
+
+        // Append a single unrecognised tag byte (0x7F is not DICT/SEGMENT/SSSP/BARRIER).
+        try (var raf = new RandomAccessFile(file.toFile(), "rw")) {
+            raf.seek(committedSize);
+            raf.write(new byte[]{0x7F});
+        }
+
+        assertThrows(IOException.class, () -> ConnectionCacheJournal.read(file),
+                "read must throw on a corrupt record tag (bit-rot, not a clean truncation)");
     }
 
     // -------------------------------------------------------------------------

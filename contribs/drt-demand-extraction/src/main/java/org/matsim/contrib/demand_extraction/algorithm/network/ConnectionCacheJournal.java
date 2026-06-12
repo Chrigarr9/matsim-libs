@@ -106,56 +106,48 @@ public final class ConnectionCacheJournal {
          * corrupt (bad magic/version, or a torn record BEFORE the last barrier marker).
          */
         public static Writer openForAppend(Path journalFile) throws IOException {
+            boolean isNew = !Files.exists(journalFile);
             Map<String, Integer> dict = new HashMap<>();
             int nextId = 0;
-            long truncateTo = -1; // -1 = new file
+            // Default keep-point = header only (8 bytes = MAGIC + VERSION); overwritten below
+            // for an existing file that has at least one committed BARRIER.
+            long truncateTo = 8L;
 
-            if (Files.exists(journalFile)) {
-                // Pass 1: scan committed region to rebuild dict + find truncation point.
+            if (!isNew) {
+                // Pass 1: scan committed region to rebuild dict + find the truncation point.
                 ScanResult scan = scanCommittedRegion(journalFile);
                 dict = scan.dict;
                 nextId = scan.nextId;
-                truncateTo = scan.lastBarrierOffset;
-                // truncateTo == -1 means no BARRIER seen yet; we keep only the header.
+                // No BARRIER yet ⇒ keep only the header; else truncate to the last barrier.
+                truncateTo = scan.lastBarrierOffset == -1 ? 8L : scan.lastBarrierOffset;
             }
 
-            if (truncateTo == -1 && Files.exists(journalFile)) {
-                // File exists but has no BARRIER yet — keep everything up to the last
-                // consistent point, which for a zero-barrier file is the end of the header.
-                // Easiest: truncate to just after the header (8 bytes = MAGIC + VERSION).
-                truncateTo = 8L;
-            }
-
-            // Open channel for append (create if new).
-            FileChannel channel;
-            if (!Files.exists(journalFile)) {
-                // New file: create and write header.
-                channel = FileChannel.open(journalFile,
-                        StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE,
-                        StandardOpenOption.READ);
-                // Write header directly via the channel
-                java.nio.ByteBuffer hdr = java.nio.ByteBuffer.allocate(8);
-                hdr.putInt(MAGIC);
-                hdr.putInt(VERSION);
-                hdr.flip();
-                channel.write(hdr);
-                channel.force(true);
-                truncateTo = 8L;
-            } else {
-                channel = FileChannel.open(journalFile,
-                        StandardOpenOption.WRITE, StandardOpenOption.READ);
-                // Truncate torn tail.
-                if (channel.size() > truncateTo) {
-                    channel.truncate(truncateTo);
+            // Open the channel, then guard every fallible setup step: if anything throws, close
+            // the channel before propagating so a failed open in a crash-recovery retry loop does
+            // not leak the OS file handle (on Windows that would block reopen with AccessDenied).
+            FileChannel channel = isNew
+                    ? FileChannel.open(journalFile, StandardOpenOption.CREATE_NEW,
+                            StandardOpenOption.WRITE, StandardOpenOption.READ)
+                    : FileChannel.open(journalFile,
+                            StandardOpenOption.WRITE, StandardOpenOption.READ);
+            try {
+                if (isNew) {
+                    java.nio.ByteBuffer hdr = java.nio.ByteBuffer.allocate(8);
+                    hdr.putInt(MAGIC);
+                    hdr.putInt(VERSION);
+                    hdr.flip();
+                    channel.write(hdr);
+                    channel.force(true);
+                } else if (channel.size() > truncateTo) {
+                    channel.truncate(truncateTo); // drop any torn tail beyond the last barrier
                 }
+                channel.position(channel.size()); // append at end
+                OutputStream raw = java.nio.channels.Channels.newOutputStream(channel);
+                return new Writer(channel, raw, dict, nextId);
+            } catch (IOException e) {
+                channel.close();
+                throw e;
             }
-
-            // Position channel at end of the truncated file for appending.
-            channel.position(channel.size());
-
-            // Wrap channel in a plain OutputStream for DataOutputStream.
-            OutputStream raw = java.nio.channels.Channels.newOutputStream(channel);
-            return new Writer(channel, raw, dict, nextId);
         }
 
         /**
@@ -246,9 +238,11 @@ public final class ConnectionCacheJournal {
     /**
      * Read the journal up to and including its LAST complete BARRIER marker.
      *
-     * <p>Records after the last BARRIER (a torn tail from a crash mid-append) are silently
-     * ignored. A corrupt magic/version, or a torn record WITHIN the committed region, throws
-     * {@link IOException} — resume must refuse.
+     * <p>A torn tail from a crash mid-append is silently ignored: a clean crash always leaves a
+     * prefix of valid records ending in a truncated (EOF) record, so the EOF is swallowed and the
+     * data up to the last BARRIER is returned. A corrupt magic/version, an <b>unrecognised record
+     * tag</b>, or an unknown link id throws {@link IOException} — those indicate genuine corruption
+     * (not a clean truncation), and resume must refuse rather than silently load a partial cache.
      */
     public static Contents read(Path journalFile) throws IOException {
         try (InputStream raw = Files.newInputStream(journalFile);
