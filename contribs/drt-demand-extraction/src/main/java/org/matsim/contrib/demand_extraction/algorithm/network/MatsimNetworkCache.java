@@ -115,7 +115,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 
 	// getSegment call statistics
 	// cacheGetAttempts counts every call; totalRoutingAttempts (below) counts only cache misses
-	// (calls that fell through to computeSegment). The difference is cache hits.
+	// (calls that fell through to computeSegment / SpeedyALT). The difference is cache hits.
 	private final AtomicLong cacheGetAttempts = new AtomicLong(0);
 
 	// Track routing failures for summary logging (thread-safe)
@@ -513,7 +513,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		if (gets > 0) {
 			log.info("    cache hits:      {}  ({}%)",
 					String.format("%,d", hits), String.format("%.1f", 100.0 * hits / gets));
-			log.info("    cache misses:    {}  ({}%)  [{} failures]",
+			log.info("    SpeedyALT:       {}  ({}%)  [{} failures]",
 					String.format("%,d", speedyAlt), String.format("%.1f", 100.0 * speedyAlt / gets),
 					String.format("%,d", failures));
 		}
@@ -528,7 +528,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		}
 
 		if (speedyAlt > 0 && (100.0 * failures / speedyAlt) > 10.0) {
-			log.warn("High cache-miss routing failure rate ({}%). Check network connectivity.",
+			log.warn("High SpeedyALT failure rate ({}%). Check network connectivity.",
 					String.format("%.1f", 100.0 * failures / speedyAlt));
 		}
 	}
@@ -672,16 +672,16 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	// SpeedyALT is not thread-safe across threads, but separate instances are safe.
 	private TravelSegment computeSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
 		totalRoutingAttempts.incrementAndGet();
-
+		
 		Link originLink = network.getLinks().get(originLinkId);
 		Link destLink = network.getLinks().get(destLinkId);
-
+		
 		if (originLink == null || destLink == null) {
 			// Links don't exist in network
 			routingFailures.incrementAndGet();
 			return createInfinitySegment();
 		}
-
+		
 		if (originLinkId.equals(destLinkId)) {
 			// Same link - only need to traverse the link itself
 			// Use actual travel time (respects simulation state), not freespeed
@@ -693,79 +693,61 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 			double utility = -linkDisutility;
 			return new TravelSegment(linkTravelTime, linkDistance, utility);
 		}
-
-		// Adjacent-link OD: originLink.toNode == destLink.fromNode.
-		// Node-based LeastCostPathTree cannot encode turn legality here (the tree starts
-		// at originLink.toNode, which is already destLink.fromNode — cost = 0 with no
-		// inter-link traversal, masking forbidden immediate turns). Keep the link-based
-		// SpeedyALT path router for these cases. batchPrecompute also defers adjacent
-		// ODs to computeSegment for exactly this reason.
-		if (originLink.getToNode().getId().equals(destLink.getFromNode().getId())) {
-			try {
+		try {
+				// Use link-based routing (new non-deprecated method)
+				// This properly handles turn restrictions and considers full link-to-link
+				// travel
+				// Use dummy person/vehicle for generic routing (required by TravelDisutility)
+				// Always thread-local: per-thread SpeedyALT instances are constructed
+				// identically from the same factory/network/disutility/travelTime, so
+				// they give identical paths for identical OD queries. The previous single
+				// synchronized shared router was a global serialization point — JFR
+				// (2026-05-27) showed 15/16 workers blocked there, dominating the
+				// predecessors phase. ConcurrentHashMap.computeIfAbsent already serializes
+				// same-OD callers via bucket locks, preserving per-OD cache determinism.
 				Path path = threadLocalRouter.get().calcLeastCostPath(
 						originLink,
 						destLink,
 						departureTime,
 						dummyPerson,
 						dummyVehicle);
-
-				if (path == null || path.links.isEmpty()) {
-					routingFailures.incrementAndGet();
-					return createInfinitySegment();
-				}
-
-				double toLinkTT = travelTime.getLinkTravelTime(destLink,
-						departureTime + path.travelTime, dummyPerson, dummyVehicle);
-				double toLinkDisutility = travelDisutility.getLinkTravelDisutility(destLink,
-						departureTime + path.travelTime, dummyPerson, dummyVehicle);
-				double tt = path.travelTime + toLinkTT;
-				double dist = path.links.stream().mapToDouble(Link::getLength).sum() + destLink.getLength();
-				double utility = -(path.travelCost + toLinkDisutility);
-				return new TravelSegment(tt, dist, utility);
-
-			} catch (OutOfMemoryError e) {
-				log.warn("OutOfMemoryError during routing from link {} to link {} - treating as unreachable",
-						originLinkId, destLinkId);
-				routingFailures.incrementAndGet();
-				return createInfinitySegment();
-			} catch (Exception e) {
-				log.warn("Routing exception from link {} to link {}: {} - treating as unreachable",
-						originLinkId, destLinkId, e.getMessage());
-				routingFailures.incrementAndGet();
-				return createInfinitySegment();
-			}
-		}
-
-		// Non-adjacent OD: fill via the SAME mechanism as batchPrecompute so the cached
-		// value is a function of (origin, dest, bin) only — never of fill history.
-		// Under eviction/watermark schemes a segment may be evicted and re-filled: if the
-		// re-fill used a different engine than the original fill, downstream pair/extension
-		// feasibility decisions could flip. Routing via the same LeastCostPathTree guarantees
-		// bit-identical results regardless of fill order or thread scheduling.
-		try {
-			LeastCostPathTree tree = threadLocalTree.get();
-			int targetNode = destLink.getFromNode().getId().index();
-			tree.calculate(originLink, departureTime, dummyPerson, dummyVehicle,
-					(node, arrTime, cost, distance, depTime) -> node == targetNode);
-
-			OptionalTime time = tree.getTime(targetNode);
-			if (time.isUndefined()) {
+			
+			if (path == null || path.links.isEmpty()) {
+				// No path found - track failure
 				routingFailures.incrementAndGet();
 				return createInfinitySegment();
 			}
 
-			// Mirror batchPrecompute's value formula exactly (see lines 300–307):
-			// add destLink traversal so the segment represents "fromLink.toNode → destLink.toNode".
-			double interLinkTT = time.seconds() - departureTime;
-			double toLinkTT = travelTime.getLinkTravelTime(destLink, time.seconds(), dummyPerson, dummyVehicle);
-			double toLinkDisutility = travelDisutility.getLinkTravelDisutility(destLink, time.seconds(), dummyPerson, dummyVehicle);
-			double tt = interLinkTT + toLinkTT;
-			double dist = tree.getDistance(targetNode) + destLink.getLength();
-			double utility = -(tree.getCost(targetNode) + toLinkDisutility);
+			// MATSim routers (SpeedyALT, SpeedyDijkstra, LeastCostPathTree) all
+			// return path.travelTime measured from fromLink.toNode to toLink.fromNode.
+			// It does NOT include traversal of either fromLink or toLink. We add
+			// toLink's traversal so each cache value represents "drive from event at
+			// fromLink (vehicle at fromLink.toNode) to event at toLink (vehicle at
+			// toLink.toNode)" — matching VrpPaths' "vehicle enters and exits links
+			// at toNode" convention used throughout DVRP/DRT. The first link of any
+			// chain (originsOrdered[0].originLinkId) is never the toLink of any
+			// segment, so its traversal is correctly omitted (the vehicle is assumed
+			// to already be at its toNode at startTime).
+			double toLinkTT = travelTime.getLinkTravelTime(destLink,
+					departureTime + path.travelTime, dummyPerson, dummyVehicle);
+			double toLinkDisutility = travelDisutility.getLinkTravelDisutility(destLink,
+					departureTime + path.travelTime, dummyPerson, dummyVehicle);
+			double tt = path.travelTime + toLinkTT;
+			double dist = path.links.stream().mapToDouble(Link::getLength).sum() + destLink.getLength();
+			double utility = -(path.travelCost + toLinkDisutility);
+
 			return new TravelSegment(tt, dist, utility);
-
+			
+		} catch (OutOfMemoryError e) {
+			// SpeedyALT bug: infinite loop in path construction for some link pairs
+			// Treat as routing failure and return infinity segment
+			log.warn("OutOfMemoryError during routing from link {} to link {} - treating as unreachable",
+					originLinkId, destLinkId);
+			routingFailures.incrementAndGet();
+			return createInfinitySegment();
 		} catch (Exception e) {
-			log.warn("Tree routing exception from link {} to link {}: {} - treating as unreachable",
+			// Any other routing exception - treat as failure
+			log.warn("Routing exception from link {} to link {}: {} - treating as unreachable",
 					originLinkId, destLinkId, e.getMessage());
 			routingFailures.incrementAndGet();
 			return createInfinitySegment();
