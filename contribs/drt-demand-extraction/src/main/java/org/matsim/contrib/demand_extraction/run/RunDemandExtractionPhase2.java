@@ -132,6 +132,10 @@ public final class RunDemandExtractionPhase2 {
 				case "--extension-parents-top-k-metric" -> cfg.setExtensionParentsTopKMetric(ExMasConfigGroup.PruningQualityMetric.valueOf(args[++i].toUpperCase()));
 				case "--extension-parents-selection-rule" -> cfg.setExtensionParentsSelectionRule(ExMasConfigGroup.ExtensionParentsSelectionRule.valueOf(args[++i].toUpperCase()));
 				case "--extension-parents-mmr-lambda" -> cfg.setExtensionParentsMmrLambda(Double.parseDouble(args[++i]));
+				// Plan A3: per-degree checkpoint/resume. Set ⇒ the engine writes stubs +
+				// pair universe + connection-cache journal at each barrier, and resumes from
+				// the dir if a matching manifest is already present. Off ("") reproduces master.
+				case "--checkpoint-dir" -> cfg.setCheckpointDir(args[++i]);
 				default -> { }
 			}
 		}

@@ -14,6 +14,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideVariant;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.extension.BamasRideExtender;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.checkpoint.CheckpointKillSwitch;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.checkpoint.CheckpointManager;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.checkpoint.RunFingerprint;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.graph.DegreeGraph;
@@ -314,6 +315,9 @@ public final class BamasEngine {
 				// so a crash after the manifest still finds those entries on resume.
 				drainJournalBarrier(cacheJournal);
 				checkpointMgr.writeBase(allPairStubs);
+				// Plan A3 Task 7: test-only crash injection at the pre-loop base barrier
+				// (degrees 1+2 committed). No-op unless -Dbamas.checkpoint.killAfterDegree=2.
+				CheckpointKillSwitch.maybeHaltAfterDegree(2);
 			}
 
 			// Best-per-set dedup + distance gate + top-fraction over the stub universe. The
@@ -470,6 +474,10 @@ public final class BamasEngine {
 					// the degree complete (same crash-consistency ordering as the base barrier).
 					drainJournalBarrier(cacheJournal);
 					checkpointMgr.writeDegree(degree + 1, layer, generatedCount);
+					// Plan A3 Task 7: test-only crash injection at the in-loop barrier, right
+					// after the degree-(degree+1) manifest is durable. No-op unless
+					// -Dbamas.checkpoint.killAfterDegree=(degree+1).
+					CheckpointKillSwitch.maybeHaltAfterDegree(degree + 1);
 				}
 			} else {
 				// RATIO_THRESHOLD inter-degree pruning only (legacy keep-fraction gate).
