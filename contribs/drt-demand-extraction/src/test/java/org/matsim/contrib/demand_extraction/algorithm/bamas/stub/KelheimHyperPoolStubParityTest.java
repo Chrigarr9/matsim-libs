@@ -231,11 +231,12 @@ class KelheimHyperPoolStubParityTest {
         exMasConfig.setPruningDistanceSavingsMinDegree(3);
         exMasConfig.setPtOptimizeDepartureTime(true);
 
-        // Single-threaded + deterministic routing to avoid connection-cache
-        // non-determinism (documented in Plan A2 and HyperPoolStubParityTest).
+        // Single-threaded for a stable byte-identity reference. Deterministic network
+        // routing is now unconditional (the routing-determinism plan deleted the
+        // useDeterministicNetworkRouting toggle — DeterministicTravelDisutility always
+        // wraps the mode disutility), so no explicit enable is needed.
         exMasConfig.setAlgorithmProcessCount(1);
         exMasConfig.setHeuristicsProcessCount(1);
-        exMasConfig.setUseDeterministicNetworkRouting(true);
 
         // Stage 1: stop-based pooling.
         exMasConfig.setEnableStopBased(true);

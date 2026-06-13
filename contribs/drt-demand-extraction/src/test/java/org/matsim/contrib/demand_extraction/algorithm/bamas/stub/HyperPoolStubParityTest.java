@@ -186,11 +186,11 @@ class HyperPoolStubParityTest {
         exMasConfig.setAlgorithmProcessCount(1);
         exMasConfig.setHeuristicsProcessCount(1);
 
-        // Deterministic network routing: forces cacheModes() to route serially so the
-        // DRT direct-distance for each OD is identical across runs (parallel routing
-        // fills the shared SpeedyALT connection cache in non-deterministic order →
-        // different OD distances in different runs even for the same person/trip).
-        exMasConfig.setUseDeterministicNetworkRouting(true);
+        // Deterministic network routing is now UNCONDITIONAL: the routing-determinism
+        // plan deleted the useDeterministicNetworkRouting toggle because
+        // DeterministicTravelDisutility always wraps the mode disutility (unique
+        // least-cost path across engine/thread/JVM), so the DRT direct-distance for
+        // each OD is identical across runs without an explicit enable.
 
         // HyperPool Stage 1: stop-based pooling.
         exMasConfig.setEnableStopBased(true);
