@@ -464,7 +464,7 @@ public final class BamasRideExtender {
 	 * consume: the canonical-key distance, the sorted request set, and the global
 	 * pickup/dropoff orderings. Nothing else off the parent is read.
 	 */
-	private interface ParentView {
+	interface ParentView {
 		/** Routed ride distance (canonical-key primary). For stubs this is {@code fromDeci}. */
 		double rideDistance();
 		/** Sorted (ascending) global request indices. */
@@ -475,17 +475,26 @@ public final class BamasRideExtender {
 		int[] originsGlobal();
 		/** Global request indices in parent dropoff order. */
 		int[] destsGlobal();
+		/**
+		 * Max ordering-DFS nodes to expand before giving up the search for a FIRST valid ordering.
+		 * 0 = unbounded (tier-1, marked parents). &gt;0 = tier-2 second chance: exhausting this cap
+		 * without a valid ordering yields no extension for the set this parent claims.
+		 */
+		default long firstValidNodeCap() { return 0L; }
 	}
 
 	/** {@link ParentView} backed by a fat {@link Ride}. */
-	private static final class RideParentView implements ParentView {
+	static final class RideParentView implements ParentView {
 		private final Ride ride;
-		RideParentView(Ride ride) { this.ride = ride; }
+		private final long firstValidNodeCap;
+		RideParentView(Ride ride) { this(ride, 0L); }
+		RideParentView(Ride ride, long cap) { this.ride = ride; this.firstValidNodeCap = cap; }
 		@Override public double rideDistance() { return ride.getRideDistance(); }
 		@Override public int[] sortedRequestIndices() { return BamasRideExtender.sortedRequestIndices(ride); }
 		@Override public int[] requestIndices() { return ride.getRequestIndices(); }
 		@Override public int[] originsGlobal() { return ride.getOriginsIndex(); }
 		@Override public int[] destsGlobal() { return ride.getDestinationsIndex(); }
+		@Override public long firstValidNodeCap() { return firstValidNodeCap; }
 	}
 
 	/**
@@ -499,15 +508,18 @@ public final class BamasRideExtender {
 	 * <p>The origin/dest orderings are reconstructed via the same unpack-then-map logic
 	 * as {@link RideRow#originsGlobal()} / {@link RideRow#destsGlobal()}.
 	 */
-	private static final class RowParentView implements ParentView {
+	static final class RowParentView implements ParentView {
 		private final RideLayer cols;
 		private final int row;
 		// Cached sorted request set (the stored slice is already sorted ascending).
 		private final int[] sortedSet;
-		RowParentView(RideLayer cols, int row) {
+		private final long firstValidNodeCap;
+		RowParentView(RideLayer cols, int row) { this(cols, row, 0L); }
+		RowParentView(RideLayer cols, int row, long cap) {
 			this.cols = cols;
 			this.row = row;
 			this.sortedSet = cols.requestIndices(row); // defensive copy, sorted ascending
+			this.firstValidNodeCap = cap;
 		}
 		@Override public double rideDistance() {
 			return RideMetricScaling.fromDeci(cols.rideDistanceDm(row));
@@ -520,6 +532,7 @@ public final class BamasRideExtender {
 		@Override public int[] destsGlobal() {
 			return mapLocalsToGlobal(OrderingCodec.unpack(cols.destOrder(row), cols.degree()));
 		}
+		@Override public long firstValidNodeCap() { return firstValidNodeCap; }
 		private int[] mapLocalsToGlobal(int[] locals) {
 			int[] globals = new int[locals.length];
 			for (int i = 0; i < locals.length; i++) globals[i] = sortedSet[locals[i]];
