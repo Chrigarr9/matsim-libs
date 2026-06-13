@@ -48,6 +48,15 @@ import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
  * general; determinism comes specifically from the disutility decorator above.)
  * <b>{@code checkpointDir} is excluded</b> because the checkpoint location is not part of the
  * algorithm identity (resuming a moved checkpoint dir is legitimate).
+ *
+ * <p><b>Checkpoint fork (Plan B1):</b> the 6-arg {@link #compute(ExMasConfigGroup, Path, Path,
+ * Path, String, int)} overload accepts a {@code resumeHighestDegree} parameter. When the checkpoint
+ * being resumed sits strictly below {@link ExMasConfigGroup#getExtensionParentsTopKMinDegree()},
+ * the {@link #FORKABLE_PARENT_PRUNING_PARAMS} are excluded from the hash. This is sound because
+ * those knobs only shape stub/cache identity at degrees ≥ minDegree; a checkpoint produced entirely
+ * below that threshold cannot have been influenced by them. The 5-arg overload always passes
+ * {@code Integer.MAX_VALUE} (i.e. never below any valid minDegree), so its output is byte-identical
+ * to the pre-fork implementation.
  */
 public final class RunFingerprint {
 
@@ -64,11 +73,30 @@ public final class RunFingerprint {
 			"algorithmProcessCount",  // thread count — routing is deterministic via DeterministicTravelDisutility (CrossEngineRoutingDeterminismTest)
 			"checkpointDir");         // the checkpoint location itself
 
+	/**
+	 * Parent-pruning knobs that can be varied across forks of the same checkpoint, provided the
+	 * checkpoint was written strictly below {@link ExMasConfigGroup#getExtensionParentsTopKMinDegree()}.
+	 * These knobs only shape stub/cache identity at degrees ≥ minDegree, so a checkpoint produced
+	 * entirely below that threshold is unaffected by them.
+	 * <p>Used by {@link #compute(ExMasConfigGroup, Path, Path, Path, String, int)}.
+	 */
+	public static final Set<String> FORKABLE_PARENT_PRUNING_PARAMS = Set.of(
+			"extensionParentsTopK",
+			"extensionParentsTopKMinDegree",
+			"extensionParentsTopKMetric",
+			"extensionParentsSelectionRule",
+			"extensionParentsMmrLambda",
+			"extensionParentsTier2NodeCap");
+
 	private RunFingerprint() {}
 
 	/**
 	 * Compute the fingerprint. File arguments may be {@code null} (e.g. in unit tests), in which
 	 * case a fixed marker is hashed in their place so the structure stays stable.
+	 *
+	 * <p>Equivalent to {@link #compute(ExMasConfigGroup, Path, Path, Path, String, int)} with
+	 * {@code resumeHighestDegree = Integer.MAX_VALUE}: all params are hashed, output is byte-identical
+	 * to the pre-fork implementation.
 	 *
 	 * @param config           the algorithm config
 	 * @param requestsPath     DRT requests file, or {@code null}
@@ -79,16 +107,44 @@ public final class RunFingerprint {
 	 */
 	public static String compute(ExMasConfigGroup config, Path requestsPath, Path travelTimesPath,
 			Path networkPath, String algorithmVersion) {
+		return compute(config, requestsPath, travelTimesPath, networkPath, algorithmVersion,
+				Integer.MAX_VALUE);
+	}
+
+	/**
+	 * Compute the fingerprint for a checkpoint resume. When {@code resumeHighestDegree} is strictly
+	 * less than {@link ExMasConfigGroup#getExtensionParentsTopKMinDegree()}, the
+	 * {@link #FORKABLE_PARENT_PRUNING_PARAMS} are excluded from the hash — this allows one
+	 * pair-gen/degree-3 checkpoint to feed a sweep of different parent-pruning configs without
+	 * triggering a fingerprint mismatch. At or above {@code minDegree} the full param set is hashed,
+	 * preserving the original refusal posture.
+	 *
+	 * @param config               the algorithm config
+	 * @param requestsPath         DRT requests file, or {@code null}
+	 * @param travelTimesPath      travel-times TSV, or {@code null}
+	 * @param networkPath          network file, or {@code null}
+	 * @param algorithmVersion     algorithm/version tag (e.g. {@code "bamas"})
+	 * @param resumeHighestDegree  the highest degree already checkpointed (use {@code Integer.MAX_VALUE}
+	 *                             to hash all params, equivalent to the 5-arg overload)
+	 * @return lowercase hex SHA-256
+	 */
+	public static String compute(ExMasConfigGroup config, Path requestsPath, Path travelTimesPath,
+			Path networkPath, String algorithmVersion, int resumeHighestDegree) {
 		MessageDigest md = sha256();
 
 		update(md, "CHECKPOINT_VERSION=" + CHECKPOINT_VERSION);
 		update(md, "algorithmVersion=" + (algorithmVersion == null ? "null" : algorithmVersion));
 
 		// Config params, sorted for stable ordering, minus the excluded keys.
+		// When resuming strictly below minDegree, also skip the forkable parent-pruning knobs.
+		boolean forkableSkipActive = resumeHighestDegree < config.getExtensionParentsTopKMinDegree();
 		Map<String, String> params = new TreeMap<>(config.getParams());
 		update(md, "config{");
 		for (Map.Entry<String, String> e : params.entrySet()) {
 			if (EXCLUDED_PARAMS.contains(e.getKey())) {
+				continue;
+			}
+			if (forkableSkipActive && FORKABLE_PARENT_PRUNING_PARAMS.contains(e.getKey())) {
 				continue;
 			}
 			update(md, e.getKey() + "=" + e.getValue() + ";");
