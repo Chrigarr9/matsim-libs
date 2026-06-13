@@ -3,12 +3,13 @@ package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -34,84 +35,74 @@ import org.matsim.core.scenario.ScenarioUtils;
 import org.matsim.examples.ExamplesUtils;
 
 /**
- * Plan A2 Task 4 parity gate: verifies that {@link HyperPoolStubRideStore} (stub mode ON,
- * stop-based ON) produces byte-identical {@code exmas_rides.csv} output vs the fat/master
- * path (stub mode OFF).
+ * Stop-based + HyperPool regression gate: verifies that the (now single-path) BAMAS engine
+ * produces byte-identical {@code exmas_rides.csv} to a frozen golden on the dvrp-grid HyperPool
+ * scenario (stop-based ON, hyper-pooling ON).
  *
- * <p>Both runs are single-threaded ({@code algorithmProcessCount=1,
- * heuristicsProcessCount=1}) to avoid the known ~1% connection-cache non-determinism
- * under parallel execution (documented: two concurrent threads fill the shared cache in
- * non-deterministic order, causing ~1% ride-set divergence across runs even without the
- * stub path — NOT an A2 bug).
+ * <h3>History</h3>
+ * Originally a fat-vs-stub parity gate (Plan A2 Task 4): it ran the engine twice
+ * ({@code stubModeEnabled} false then true) and asserted the two {@code exmas_rides.csv} were
+ * SHA-256 equal. The BAMAS cleanup deleted the fat path, so the fat comparand no longer exists.
+ * Before deleting it, the fat output (== the then-passing stub output) was frozen as the committed
+ * golden {@code hyperpool-stopbased-golden.exmas_rides.csv} (SHA-256
+ * {@code d9470b22d9271432afc1ae275d6dac49861ae6a97787c8190ad8373c2da7c647}). This test now pins the
+ * single-path output to that golden, so the original fat-vs-stub guarantee survives the deletion:
+ * a regression that changed the stop-based/hyperpool output would change the SHA here.
  *
- * <p>Uses the lightweight dvrp-grid scenario with HyperPool enabled (same setup as
- * {@link org.matsim.contrib.demand_extraction.ExMasHyperPoolE2ETest}) for a fast,
- * self-contained parity check. The Kelheim HyperPool scenario (with 3× duplicated
- * population) is the correctness reference; the grid scenario is the regression gate.
- *
- * <h3>Acceptance criterion</h3>
- * SHA-256 of {@code exmas_rides.csv} (fat) == SHA-256 of {@code exmas_rides.csv} (stub).
- * This is the primary gate from Plan A2 §Task-4 Step 4.
+ * <p>Single-threaded ({@code algorithmProcessCount=heuristicsProcessCount=1}) and
+ * {@code routingRandomness=0} for byte reproducibility (see {@link #configureMonetaryConstants}).
  */
 @Tag("fast")
 class HyperPoolStubParityTest {
 
+    /** SHA-256 of the frozen golden — recorded for traceability; the test compares the file bytes. */
+    private static final String GOLDEN_SHA =
+            "d9470b22d9271432afc1ae275d6dac49861ae6a97787c8190ad8373c2da7c647";
+    private static final String GOLDEN_RESOURCE = "hyperpool-stopbased-golden.exmas_rides.csv";
+
     @Test
-    void hyperPoolStubModeProducesIdenticalRidesCsvToFatMode() throws IOException, NoSuchAlgorithmException {
+    void hyperPoolOutputMatchesFrozenGolden() throws IOException, NoSuchAlgorithmException {
         Path baseDir = Path.of("test/output/hyperpool-stub-parity-test");
         Files.createDirectories(baseDir);
 
-        // Run 1: fat mode (stubModeEnabled=false) — master/reference path.
-        Path fatDir = baseDir.resolve("fat");
-        Path fatRidesCsv = runHyperPool(fatDir, false);
+        Path ridesCsv = runHyperPool(baseDir.resolve("run"));
 
-        // Run 2: stub mode (stubModeEnabled=true) — Plan A2 Task 4 new path.
-        Path stubDir = baseDir.resolve("stub");
-        Path stubRidesCsv = runHyperPool(stubDir, true);
+        byte[] actual = Files.readAllBytes(ridesCsv);
+        byte[] golden = readGoldenResource();
 
-        // Primary gate: SHA-256 equality.
-        String fatSha  = sha256(fatRidesCsv);
-        String stubSha = sha256(stubRidesCsv);
+        // Sanity: the committed golden bytes still hash to the recorded SHA.
+        assertEquals(GOLDEN_SHA, sha256(golden),
+                "frozen golden resource was modified — its SHA no longer matches the recorded constant");
 
-        // Provide a diagnostic diff count on mismatch.
-        if (!fatSha.equals(stubSha)) {
-            List<String> fatLines  = Files.readAllLines(fatRidesCsv);
-            List<String> stubLines = Files.readAllLines(stubRidesCsv);
+        if (!sha256(actual).equals(sha256(golden))) {
+            List<String> actualLines = Files.readAllLines(ridesCsv);
+            List<String> goldenLines = List.of(new String(golden, StandardCharsets.UTF_8).split("\n", -1));
             int diffLines = 0;
-            int minLen = Math.min(fatLines.size(), stubLines.size());
+            int minLen = Math.min(actualLines.size(), goldenLines.size());
             for (int i = 0; i < minLen; i++) {
-                if (!fatLines.get(i).equals(stubLines.get(i))) diffLines++;
+                if (!actualLines.get(i).stripTrailing().equals(goldenLines.get(i).stripTrailing())) diffLines++;
             }
-            int extraFat  = fatLines.size()  - minLen;
-            int extraStub = stubLines.size() - minLen;
             throw new AssertionError(String.format(
-                "Plan A2 Task 4 parity FAILED: exmas_rides.csv SHA-256 mismatch.%n"
-                + "  fat  SHA: %s (%d lines)%n"
-                + "  stub SHA: %s (%d lines)%n"
-                + "  Differing lines: %d common, +%d fat-only, +%d stub-only%n"
-                + "  fat  CSV: %s%n"
-                + "  stub CSV: %s",
-                fatSha,  fatLines.size(),
-                stubSha, stubLines.size(),
-                diffLines, extraFat, extraStub,
-                fatRidesCsv.toAbsolutePath(),
-                stubRidesCsv.toAbsolutePath()));
+                "Stop-based/HyperPool output regressed vs frozen golden.%n"
+                + "  golden SHA: %s (%d lines)%n"
+                + "  actual SHA: %s (%d lines)%n"
+                + "  differing common lines: %d, +%d golden-only, +%d actual-only%n"
+                + "  actual CSV: %s",
+                sha256(golden), goldenLines.size(),
+                sha256(actual), actualLines.size(),
+                diffLines, Math.max(0, goldenLines.size() - minLen), Math.max(0, actualLines.size() - minLen),
+                ridesCsv.toAbsolutePath()));
         }
-        assertEquals(fatSha, stubSha, "exmas_rides.csv must be byte-identical between fat and stub HyperPool paths");
+        assertEquals(sha256(golden), sha256(actual),
+                "exmas_rides.csv must be byte-identical to the frozen stop-based/HyperPool golden");
     }
 
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
-    /**
-     * Run the dvrp-grid HyperPool scenario and return the path to the generated
-     * {@code exmas_rides.csv}.
-     *
-     * @param outputDir      output directory for this run
-     * @param stubModeEnabled true = stub path (Plan A2); false = fat/master path
-     */
-    private static Path runHyperPool(Path outputDir, boolean stubModeEnabled) throws IOException {
+    /** Run the dvrp-grid HyperPool scenario and return the path to the generated exmas_rides.csv. */
+    private static Path runHyperPool(Path outputDir) throws IOException {
         Files.createDirectories(outputDir);
 
         URL scenarioUrl = ExamplesUtils.getTestScenarioURL("dvrp-grid");
@@ -127,7 +118,7 @@ class HyperPoolStubParityTest {
                 OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists);
 
         configureMonetaryConstants(config);
-        configureExMasWithHyperPool(config, stubModeEnabled);
+        configureExMasWithHyperPool(config);
 
         Scenario scenario = DrtControlerCreator.createScenarioWithDrtRouteFactory(config);
         ScenarioUtils.loadScenario(scenario);
@@ -148,7 +139,7 @@ class HyperPoolStubParityTest {
         // (no explicit car factory here), which draws an independent sigma=3.0 perturbation per
         // router instance — and ModeRoutingCache builds a fresh TripRouter per thread. Different
         // per-thread perturbations pick different equal-time paths, so req.directDistance flips
-        // run-to-run (1220<->1230), breaking fat-vs-stub byte parity. The DeterministicTravelDisutility
+        // run-to-run (1220<->1230), breaking byte parity. The DeterministicTravelDisutility
         // eps tie-break cannot fix this: eps (~1e-6 x min gradient) is dwarfed by the sigma draws.
         // Turning routing randomness off removes the draw at the source; the car distance-rate term
         // below then orders different-length paths uniquely. (Served distances are already stable —
@@ -169,7 +160,7 @@ class HyperPoolStubParityTest {
         walkParams.setMonetaryDistanceRate(0.0);
     }
 
-    private static void configureExMasWithHyperPool(Config config, boolean stubModeEnabled) {
+    private static void configureExMasWithHyperPool(Config config) {
         ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 
         exMasConfig.setDrtMode("drt");
@@ -198,12 +189,6 @@ class HyperPoolStubParityTest {
         exMasConfig.setAlgorithmProcessCount(1);
         exMasConfig.setHeuristicsProcessCount(1);
 
-        // Deterministic network routing is now UNCONDITIONAL: the routing-determinism
-        // plan deleted the useDeterministicNetworkRouting toggle because
-        // DeterministicTravelDisutility always wraps the mode disutility (unique
-        // least-cost path across engine/thread/JVM), so the DRT direct-distance for
-        // each OD is identical across runs without an explicit enable.
-
         // HyperPool Stage 1: stop-based pooling.
         exMasConfig.setEnableStopBased(true);
         exMasConfig.setMaxWalkDistanceMeters(500.0);
@@ -215,9 +200,6 @@ class HyperPoolStubParityTest {
         exMasConfig.setHyperPoolMinOccupancy(2);
         exMasConfig.setHyperPoolTimeWindowSeconds(900.0);
         exMasConfig.setHyperPoolStopProximityMeters(100.0);
-
-        // The parity knob: fat vs stub path.
-        exMasConfig.setStubModeEnabled(stubModeEnabled);
     }
 
     private static void enhancePopulationWithAttributes(Population population) {
@@ -238,10 +220,18 @@ class HyperPoolStubParityTest {
         }
     }
 
-    private static String sha256(Path path) throws IOException, NoSuchAlgorithmException {
+    private static byte[] readGoldenResource() throws IOException {
+        try (InputStream in = HyperPoolStubParityTest.class.getResourceAsStream(GOLDEN_RESOURCE)) {
+            if (in == null) {
+                throw new IOException("Golden resource not found on classpath: " + GOLDEN_RESOURCE);
+            }
+            return in.readAllBytes();
+        }
+    }
+
+    private static String sha256(byte[] bytes) throws NoSuchAlgorithmException {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        byte[] bytes = Files.readAllBytes(path);
-        byte[] hash  = digest.digest(bytes);
+        byte[] hash = digest.digest(bytes);
         StringBuilder sb = new StringBuilder(64);
         for (byte b : hash) {
             sb.append(String.format("%02x", b));
