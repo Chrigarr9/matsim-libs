@@ -355,8 +355,14 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 			@Override
 			public void install() {
 				addTravelTimeBinding(TransportMode.car).toInstance(offlineTravelTime);
+				// Wrap the time-only base so TripRouter-based Phase-1 routing (directDistance)
+				// breaks equal-time path ties deterministically, matching MatsimNetworkCache.
+				// Swapping the base for a toll/monetary-aware factory later propagates here AND
+				// to the cache (it wraps the same @Named(car); wrap is idempotent).
 				addTravelDisutilityFactoryBinding(TransportMode.car).toInstance(
-						new org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutilityFactory());
+						new org.matsim.contrib.demand_extraction.algorithm.network.DeterministicTravelDisutilityFactory(
+								new org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutilityFactory(),
+								controler.getScenario().getNetwork()));
 			}
 		});
 

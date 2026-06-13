@@ -111,7 +111,11 @@ public final class Phase2Module extends AbstractModule {
 
 		// 4. Disutility: matches Lyon fixture. MatsimNetworkCache resolves its own
 		//    SpeedyALTFactory internally — no LeastCostPathCalculatorFactory binding needed here.
-		TravelDisutilityFactory tdf = new OnlyTimeDependentTravelDisutilityFactory();
+		// Wrap the time-only base so TripRouter-based Phase-1 routing (directDistance) breaks
+		// equal-time path ties deterministically, matching MatsimNetworkCache (idempotent wrap).
+		TravelDisutilityFactory tdf =
+				new org.matsim.contrib.demand_extraction.algorithm.network.DeterministicTravelDisutilityFactory(
+						new OnlyTimeDependentTravelDisutilityFactory(), scenario.getNetwork());
 		bind(TravelDisutilityFactory.class).annotatedWith(Names.named(TransportMode.car))
 				.toInstance(tdf);
 

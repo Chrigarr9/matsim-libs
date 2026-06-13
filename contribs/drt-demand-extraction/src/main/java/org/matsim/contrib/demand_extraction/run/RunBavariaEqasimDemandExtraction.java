@@ -228,8 +228,12 @@ public class RunBavariaEqasimDemandExtraction {
 			@Override
 			public void install() {
 				addTravelTimeBinding(TransportMode.car).toInstance(offlineTravelTime);
+				// Wrap the time-only base so TripRouter-based Phase-1 routing (directDistance)
+				// breaks equal-time path ties deterministically, matching MatsimNetworkCache.
 				addTravelDisutilityFactoryBinding(TransportMode.car)
-						.toInstance(new org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutilityFactory());
+						.toInstance(new org.matsim.contrib.demand_extraction.algorithm.network.DeterministicTravelDisutilityFactory(
+								new org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutilityFactory(),
+								controler.getScenario().getNetwork()));
 			}
 		});
 
