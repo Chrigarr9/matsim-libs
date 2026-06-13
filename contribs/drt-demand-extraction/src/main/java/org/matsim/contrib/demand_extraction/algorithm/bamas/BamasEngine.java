@@ -77,6 +77,16 @@ public final class BamasEngine {
 	// alongside the other run* fields so Phase 6 can access it without parameter threading.
 	private java.util.Map<Integer, DrtRequest> runRequestById;
 
+	// Cleanup — cross-phase locals promoted to fields so the run() phases (initRun, generateSingles,
+	// generatePairUniverse, …) can share them without threading every value through method
+	// signatures. These hold the SAME values the inline run() locals held, in the same order.
+	private long runAlgorithmStartTime;
+	private DrtRequest[] runReqArray;
+	private org.matsim.contrib.demand_extraction.algorithm.generation.PairGenerator runPairGen;
+	private boolean runStreamingD2D;
+	private boolean runPairStubPath;
+	private int runExtensionLayerStart;
+
 	// Plan A3 — optional routing-input file paths for the checkpoint fingerprint. When set,
 	// their content hashes enrich the (otherwise config-only) RunFingerprint so a resume refuses
 	// to continue against changed requests/travel-times/network even when the config is identical.
@@ -129,6 +139,30 @@ public final class BamasEngine {
 		this.fpNetworkPath = networkPath;
 	}
 
+	/**
+	 * Plan A3 — resume/checkpoint handles for one {@link #run} invocation, computed by
+	 * {@link #resumeStateOrFresh()}. Carries the live {@link CheckpointManager} (nullable when
+	 * checkpointing is off or unsupported on the active path), whether the run is RESUMING, the
+	 * matched {@link CheckpointManager.Manifest} (nullable; non-null iff {@code resuming}), and the
+	 * open connection-cache journal {@link ConnectionCacheJournal.Writer} (nullable).
+	 *
+	 * <p>Deliberately carries HANDLES, not eagerly-read layers: the actual {@code readBase()} /
+	 * {@code readDegree()} calls (and their phase-scoped log lines) stay at their original sites
+	 * inside {@code generatePairUniverse}/{@code extendDegrees}, so resume logs do not jump ahead of
+	 * their PHASE headers (HARD RULE 1: no reordered side effects). {@code hasBase()} mirrors
+	 * {@code resuming} — a resumed run loads the pair universe from the base checkpoint instead of
+	 * regenerating it.
+	 */
+	private record ResumeState(
+			CheckpointManager checkpointMgr,
+			boolean resuming,
+			CheckpointManager.Manifest resumeManifest,
+			ConnectionCacheJournal.Writer cacheJournal) {
+		boolean hasBase() {
+			return resuming;
+		}
+	}
+
     /**
      * Run ExMAS algorithm on DRT requests with budget validation.
      * 
@@ -140,19 +174,128 @@ public final class BamasEngine {
      *         {@link MaterializedRideStore} wrapping the fat, sorted, reindexed list.
      */
     public RideStore run(List<DrtRequest> drtRequests) {
+		initRun(drtRequests);
+
+		generateSingles(drtRequests);
+
+		// Check if we should stop before generating pairs
+		if (maxDegree < 2) {
+			return completeEarly(runAlgorithmStartTime, "maxDegree < 2, skipping pair generation");
+		}
+
+		// streamingD2D distinguishes "return after door-to-door" (stop-based OFF) from
+		// "continue into Phase 5/6 stop-based+hyperpool". When stop-based is ON, the degree-2
+		// pair stubs and degree-3+ extension stubs are fed directly into Phase 5
+		// (generateStopBasedRidesBatched) via on-demand materialization; allRides then holds
+		// only the fat singles. The 100% target run has stop_based=false.
+		this.runStreamingD2D = !exMasConfig.isEnableStopBased();
+		// Degree-2 pair stubs: the full pair universe is generated, graphed, and deduped as a
+		// compact StubColumns layer (never a fat List<Ride>), then carried as stubLayers[0] and
+		// extended. The stop-based path consumes the same pair-stub layer through Phase 5 (Pass 2
+		// of generateStopBasedRidesBatched materializes it first, before the degree-3+ layers).
+		// Only the maxDegree<=2 early exit keeps a fat pair flow (no extension cascade).
+		this.runPairStubPath = maxDegree > 2;
+		final boolean pairStubPath = runPairStubPath;
+
+		ResumeState resume = resumeStateOrFresh();
+		ConnectionCacheJournal.Writer cacheJournal = resume.cacheJournal();
+
+		// Plan A3 Task 5: release the connection-cache journal's FileChannel on ANY abnormal exit
+		// from generation, not only via the normal close before the streaming return below. In the
+		// production process-abort model the OS reclaims the FD and the per-barrier fsync keeps the
+		// on-disk journal durable regardless; this guard additionally stops a leaked channel from
+		// blocking journal reopen inside a long-lived (or Windows-locked) JVM. The success path
+		// still closes the writer at the streaming return, so this catch fires only when an
+		// exception propagates first. The body keeps its original indentation under the try.
+		try {
+        // Phase 2: Generate pair rides with budget validation
+		log.info("");
+		log.info("PHASE 2: Pair Ride Generation");
+		log.info("======================================================================");
+		this.runPairGen = new PairGenerator(network, budgetValidator, horizon,
+				exMasConfig.getAlgorithmProcessCount(),
+				exMasConfig.isEnableBudgetAwareConstraints());
+
+		if (!pairStubPath) {
+			// maxDegree == 2 (maxDegree < 2 already returned above): no extension cascade,
+			// so there is no stub layer to build — emit the fat pair universe and finish.
+			List<Ride> pairRides = runPairGen.generatePairs(runReqArray);
+			allRides.addAll(pairRides);
+			return completeEarly(runAlgorithmStartTime, "maxDegree <= 2");
+		}
+
+		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns allPairStubs =
+				generatePairUniverse(resume);
+		// Phase 3 (stub): build the shareability graph from ALL pair stubs (pre-dedup).
+		// Deterministic from allPairStubs on both fresh and resume — no routing.
+		log.info("");
+		log.info("PHASE 3: Building Shareability Graph");
+		log.info("======================================================================");
+		long graphStartTime = System.currentTimeMillis();
+		graph = buildGraph(allPairStubs);
+		long graphElapsed = System.currentTimeMillis() - graphStartTime;
+		log.info("Graph built: {} edges, {} nodes in {}s",
+				graph.getEdgeCount(), graph.getNodeCount(), String.format("%.1f", graphElapsed / 1000.0));
+
+		checkpointBaseIfFresh(allPairStubs, resume);
+
+		// Degree-2 survivors live in `pairSurvivorStubs` (added to stubLayers as the first layer).
+		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns pairSurvivorStubs =
+				prunePairUniverse(allPairStubs);
+
+		List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> stubLayers =
+				extendDegrees(pairSurvivorStubs, resume);
+
+		applyPostExtensionSelection(stubLayers);
+
+		RideStore d2dReturn = finishDoorToDoor(stubLayers, resume);
+		if (d2dReturn != null) {
+			return d2dReturn;
+		}
+		} catch (Throwable t) {
+			// Best-effort release on the failure path; the propagating exception is the real signal.
+			if (cacheJournal != null) {
+				try {
+					network.disableJournaling();
+					cacheJournal.close();
+				} catch (java.io.IOException ignored) {
+					// nothing actionable — the original throwable is rethrown below
+				}
+			}
+			throw t;
+		}
+
+		stopBasedLayers();
+
+		hyperPool();
+
+		// The HyperPoolStubRideStore performs the equivalent stable sort + sequential reindex on
+		// its row-reference array at construction (the fat in-place sort+reindex is gone with the
+		// fat path; allRides here holds only fat singles, never the S2S universe).
+
+		logSummary();
+
+		return store();
+	}
+
+	/**
+	 * initRun: build the index→request lookup, reset the run-scoped accumulators, snapshot the
+	 * generation-copy {@code reqArray}, start the wall-clock timer, and log the run header.
+	 */
+	private void initRun(List<DrtRequest> drtRequests) {
 		log.info("======================================================================");
 		log.info("Starting ExMAS algorithm");
 		log.info("  Requests: {}", drtRequests.size());
 		log.info("  Horizon: {}s", horizon);
 		log.info("  Max degree: {}", maxDegree);
 		log.info("======================================================================");
-		long algorithmStartTime = System.currentTimeMillis();
+		this.runAlgorithmStartTime = System.currentTimeMillis();
 
         this.requests = drtRequests;
         this.allRides = new ArrayList<>();
         this.hyperPooledRides = new ArrayList<>();
-        
-        DrtRequest[] reqArray = drtRequests.toArray(new DrtRequest[0]);
+
+        this.runReqArray = drtRequests.toArray(new DrtRequest[0]);
 
         // Global-index → request lookup, built identically to BamasRideExtender.requestMap
         // (same iteration order ⇒ same last-write-wins winner on a shared index). Required
@@ -165,7 +308,13 @@ public final class BamasEngine {
         java.util.Map<Integer, DrtRequest> requestById = new java.util.HashMap<>();
         for (DrtRequest r : drtRequests) requestById.put(r.index, r);
         runRequestById = requestById; // Plan A2 Task 5: needed by generateHyperPooledRidesFromStubs
+	}
 
+	/**
+	 * generateSingles: Phase 1 — generate single rides with budget validation and append them
+	 * to {@code allRides}.
+	 */
+	private void generateSingles(List<DrtRequest> drtRequests) {
 		int algorithmProcessCount = exMasConfig.getAlgorithmProcessCount();
 
 		// Phase 1: Generate single rides with budget validation
@@ -175,24 +324,17 @@ public final class BamasEngine {
 		BamasSingleRideGenerator singleGen = new BamasSingleRideGenerator(network, budgetValidator, algorithmProcessCount);
         List<Ride> singleRides = singleGen.generate(drtRequests);
 		allRides.addAll(singleRides);
+	}
 
-		// Check if we should stop before generating pairs
-		if (maxDegree < 2) {
-			return completeEarly(algorithmStartTime, "maxDegree < 2, skipping pair generation");
-		}
-
-		// streamingD2D distinguishes "return after door-to-door" (stop-based OFF) from
-		// "continue into Phase 5/6 stop-based+hyperpool". When stop-based is ON, the degree-2
-		// pair stubs and degree-3+ extension stubs are fed directly into Phase 5
-		// (generateStopBasedRidesBatched) via on-demand materialization; allRides then holds
-		// only the fat singles. The 100% target run has stop_based=false.
-		final boolean streamingD2D = !exMasConfig.isEnableStopBased();
-		// Degree-2 pair stubs: the full pair universe is generated, graphed, and deduped as a
-		// compact StubColumns layer (never a fat List<Ride>), then carried as stubLayers[0] and
-		// extended. The stop-based path consumes the same pair-stub layer through Phase 5 (Pass 2
-		// of generateStopBasedRidesBatched materializes it first, before the degree-3+ layers).
-		// Only the maxDegree<=2 early exit keeps a fat pair flow (no extension cascade).
-		final boolean pairStubPath = maxDegree > 2;
+	/**
+	 * resumeStateOrFresh: the resume/checkpoint setup block. Computes the checkpoint manager,
+	 * resume flag + manifest, and opens the connection-cache journal — exactly as the inline block
+	 * did. Carries HANDLES only: the {@code readBase()}/{@code readDegree()} loads (and their
+	 * phase-scoped logs) stay at their original sites in {@code generatePairUniverse}/
+	 * {@code extendDegrees}, so resume logs are not reordered ahead of their PHASE headers.
+	 */
+	private ResumeState resumeStateOrFresh() {
+		final boolean pairStubPath = runPairStubPath;
 
 		// Plan A3 — per-degree checkpoint/resume (off unless checkpointDir is set). Only the
 		// streaming pair-stub D2D path is supported: that IS the week-long exact 100% run the
@@ -272,84 +414,93 @@ public final class BamasEngine {
 						+ "Running WITHOUT checkpoints.");
 			}
 		}
+		return new ResumeState(checkpointMgr, resuming, resumeManifest, cacheJournal);
+	}
 
-		// Plan A3 Task 5: release the connection-cache journal's FileChannel on ANY abnormal exit
-		// from generation, not only via the normal close before the streaming return below. In the
-		// production process-abort model the OS reclaims the FD and the per-barrier fsync keeps the
-		// on-disk journal durable regardless; this guard additionally stops a leaked channel from
-		// blocking journal reopen inside a long-lived (or Windows-locked) JVM. The success path
-		// still closes the writer at the streaming return, so this catch fires only when an
-		// exception propagates first. The body keeps its original indentation under the try.
-		try {
-        // Phase 2: Generate pair rides with budget validation
-		log.info("");
-		log.info("PHASE 2: Pair Ride Generation");
-		log.info("======================================================================");
-		PairGenerator pairGen = new PairGenerator(network, budgetValidator, horizon, algorithmProcessCount,
-				exMasConfig.isEnableBudgetAwareConstraints());
-
-		// Degree-2 survivors live in `pairSurvivorStubs` (added to stubLayers as the first layer).
-		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns pairSurvivorStubs = null;
-
-		if (pairStubPath) {
-			// Phase 2 (stub): the full pair universe as a degree-2 StubColumns. On resume it is
-			// LOADED from the base checkpoint (review addendum F6) instead of re-generated —
-			// generatePairStubs is the routing-heavy phase the checkpoint exists to skip. The
-			// loaded universe carries the positionsFlat copy-identity column (F1), so the graph
-			// build + survivor prune below reproduce the original run bit-for-bit.
-			org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns allPairStubs;
-			if (resuming) {
-				allPairStubs = checkpointMgr.readBase();
-				log.info("");
-				log.info("PHASE 2 (resume): loaded pre-prune pair universe ({} rows) from checkpoint",
-						allPairStubs.size());
-			} else {
-				allPairStubs = pairGen.generatePairStubs(reqArray);
-			}
-
-			// Phase 3 (stub): build the shareability graph from ALL pair stubs (pre-dedup).
-			// Deterministic from allPairStubs on both fresh and resume — no routing.
+	/**
+	 * generatePairUniverse: Phase 2 (stub) — the full pair universe as a degree-2 StubColumns.
+	 * On resume it is LOADED from the base checkpoint instead of re-generated. Branches internally
+	 * on {@code resume.hasBase()} so the resume log stays under the PHASE 2 header (printed by the
+	 * caller before this method runs).
+	 */
+	private org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns generatePairUniverse(
+			ResumeState resume) {
+		// Phase 2 (stub): the full pair universe as a degree-2 StubColumns. On resume it is
+		// LOADED from the base checkpoint (review addendum F6) instead of re-generated —
+		// generatePairStubs is the routing-heavy phase the checkpoint exists to skip. The
+		// loaded universe carries the positionsFlat copy-identity column (F1), so the graph
+		// build + survivor prune below reproduce the original run bit-for-bit.
+		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns allPairStubs;
+		if (resume.resuming()) {
+			allPairStubs = resume.checkpointMgr().readBase();
 			log.info("");
-			log.info("PHASE 3: Building Shareability Graph");
-			log.info("======================================================================");
-			long graphStartTime = System.currentTimeMillis();
-			graph = buildGraph(allPairStubs);
-			long graphElapsed = System.currentTimeMillis() - graphStartTime;
-			log.info("Graph built: {} edges, {} nodes in {}s",
-					graph.getEdgeCount(), graph.getNodeCount(), String.format("%.1f", graphElapsed / 1000.0));
-
-			// Plan A3: persist the PRE-PRUNE pair universe before it is dropped (review addendum
-			// F6) — on resume the shareability graph rebuilds via buildGraph(allPairStubs) and the
-			// degree-2 survivors via maybePrunePairStubsAfterGraph, both deterministic, so no
-			// separate graph/edge-list serializer is needed. Written before the prune so the
-			// persisted universe matches what the graph was built from. Skipped on resume (the
-			// base checkpoint is already on disk and was just read back from it).
-			if (checkpointMgr != null && !resuming) {
-				// Journal the pair-gen SSSP entries durably BEFORE the manifest records base done,
-				// so a crash after the manifest still finds those entries on resume.
-				drainJournalBarrier(cacheJournal);
-				checkpointMgr.writeBase(allPairStubs);
-				// Plan A3 Task 7: test-only crash injection at the pre-loop base barrier
-				// (degrees 1+2 committed). No-op unless -Dbamas.checkpoint.killAfterDegree=2.
-				CheckpointKillSwitch.maybeHaltAfterDegree(2);
-			}
-
-			// Best-per-set dedup + distance gate + top-fraction over the stub universe. The
-			// full pair universe is dropped here (only the survivor layer is retained), so
-			// the full pair universe never coexists with the extension cascade.
-			pairSurvivorStubs = maybePrunePairStubsAfterGraph(allPairStubs, reqArray);
-			// Cache-memory tiers (Task 7 Step 5): pair generation is complete and its feasible
-			// chain segments were promoted at acceptance (PairGenerator.promotePairChainSegments).
-			// Compact the retained overlay into a frozen snapshot at this single-threaded barrier,
-			// before the extension cascade begins.
-			network.compactRetained();
+			log.info("PHASE 2 (resume): loaded pre-prune pair universe ({} rows) from checkpoint",
+					allPairStubs.size());
 		} else {
-			// maxDegree == 2 (maxDegree < 2 already returned above): no extension cascade,
-			// so there is no stub layer to build — emit the fat pair universe and finish.
-			List<Ride> pairRides = pairGen.generatePairs(reqArray);
-			allRides.addAll(pairRides);
-			return completeEarly(algorithmStartTime, "maxDegree <= 2");
+			allPairStubs = runPairGen.generatePairStubs(runReqArray);
 		}
+		return allPairStubs;
+	}
+
+	/**
+	 * checkpointBaseIfFresh: persist the PRE-PRUNE pair universe before it is dropped (skipped on
+	 * resume — the base checkpoint is already on disk and was just read back).
+	 */
+	private void checkpointBaseIfFresh(
+			org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns allPairStubs,
+			ResumeState resume) {
+		CheckpointManager checkpointMgr = resume.checkpointMgr();
+		// Plan A3: persist the PRE-PRUNE pair universe before it is dropped (review addendum
+		// F6) — on resume the shareability graph rebuilds via buildGraph(allPairStubs) and the
+		// degree-2 survivors via maybePrunePairStubsAfterGraph, both deterministic, so no
+		// separate graph/edge-list serializer is needed. Written before the prune so the
+		// persisted universe matches what the graph was built from. Skipped on resume (the
+		// base checkpoint is already on disk and was just read back from it).
+		if (checkpointMgr != null && !resume.resuming()) {
+			// Journal the pair-gen SSSP entries durably BEFORE the manifest records base done,
+			// so a crash after the manifest still finds those entries on resume.
+			drainJournalBarrier(resume.cacheJournal());
+			checkpointMgr.writeBase(allPairStubs);
+			// Plan A3 Task 7: test-only crash injection at the pre-loop base barrier
+			// (degrees 1+2 committed). No-op unless -Dbamas.checkpoint.killAfterDegree=2.
+			CheckpointKillSwitch.maybeHaltAfterDegree(2);
+		}
+	}
+
+	/**
+	 * prunePairUniverse: best-per-set dedup + distance gate + top-fraction over the stub universe,
+	 * then compact the retained overlay. The full pair universe is dropped here (only the survivor
+	 * layer is retained), so the full pair universe never coexists with the extension cascade.
+	 */
+	private org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns prunePairUniverse(
+			org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns allPairStubs) {
+		// Best-per-set dedup + distance gate + top-fraction over the stub universe. The
+		// full pair universe is dropped here (only the survivor layer is retained), so
+		// the full pair universe never coexists with the extension cascade.
+		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns pairSurvivorStubs =
+				maybePrunePairStubsAfterGraph(allPairStubs, runReqArray);
+		// Cache-memory tiers (Task 7 Step 5): pair generation is complete and its feasible
+		// chain segments were promoted at acceptance (PairGenerator.promotePairChainSegments).
+		// Compact the retained overlay into a frozen snapshot at this single-threaded barrier,
+		// before the extension cascade begins.
+		network.compactRetained();
+		return pairSurvivorStubs;
+	}
+
+	/**
+	 * extendDegrees: Phase 4 — the iterative ride-extension loop. Accumulates per-degree stub
+	 * layers (with the degree-2 pair survivor layer first), restores completed degrees on resume,
+	 * applies in-loop RATIO pruning, promotes survivor legs, drains checkpoint barriers, and
+	 * returns the per-degree stub layers ({@code runStubLayers}).
+	 */
+	private List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> extendDegrees(
+			org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns pairSurvivorStubs,
+			ResumeState resume) {
+		final boolean pairStubPath = runPairStubPath;
+		CheckpointManager checkpointMgr = resume.checkpointMgr();
+		boolean resuming = resume.resuming();
+		CheckpointManager.Manifest resumeManifest = resume.resumeManifest();
+		java.util.Map<Integer, DrtRequest> requestById = runRequestById;
 
         // Phase 4: Iteratively extend rides with budget validation
 		// The ordering-based BamasRideExtender enumerates valid orderings directly from
@@ -379,6 +530,7 @@ public final class BamasEngine {
 			stubLayers.add(pairSurvivorStubs);
 			extensionLayerStart = 1;
 		}
+		this.runExtensionLayerStart = extensionLayerStart; // consumed by applyPostExtensionSelection
 		// Previous degree's captured (and possibly RATIO-pruned) stub layer, fed as the
 		// next degree's parents. On the pairStubPath this is the degree-2 survivor layer
 		// (degree 2→3 extends stubs); on the fat path it is null (degree 2→3 uses fat pairs).
@@ -434,7 +586,7 @@ public final class BamasEngine {
 					&& prevStubLayer.degree() >= 3) {
 				extensionParents = filterExtensionParents(prevStubLayer, requestById);
 			}
-			List<Ride> extended = extender.extendRides(extensionParents, reqArray, nextRideIndex);
+			List<Ride> extended = extender.extendRides(extensionParents, runReqArray, nextRideIndex);
 			long graphBuildStart = System.currentTimeMillis();
 			prevDegreeGraph = extender.buildDegreeGraph(degree + 1);
 			long graphBuildMs = System.currentTimeMillis() - graphBuildStart;
@@ -485,7 +637,7 @@ public final class BamasEngine {
 			if (checkpointMgr != null) {
 				// Journal this degree's new SSSP entries durably before the manifest records
 				// the degree complete (same crash-consistency ordering as the base barrier).
-				drainJournalBarrier(cacheJournal);
+				drainJournalBarrier(resume.cacheJournal());
 				checkpointMgr.writeDegree(degree + 1, layer, generatedCount);
 				// Plan A3 Task 7: test-only crash injection at the in-loop barrier, right
 				// after the degree-(degree+1) manifest is durable. No-op unless
@@ -495,6 +647,17 @@ public final class BamasEngine {
 
 			nextRideIndex += generatedCount; // index space reserved for all generated rides
 		}
+		return stubLayers;
+	}
+
+	/**
+	 * applyPostExtensionSelection: post-extension COVERAGE_TOPK pruning, applied once to all
+	 * extension rides after the cascade terminates (skips the degree-2 pair layer).
+	 */
+	private void applyPostExtensionSelection(
+			List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> stubLayers) {
+		java.util.Map<Integer, DrtRequest> requestById = runRequestById;
+		int extensionLayerStart = runExtensionLayerStart;
 
 		// Post-extension COVERAGE_TOPK pruning: applied once to all extension rides after the
 		// cascade terminates, so the full cascade runs unimpeded and K compression is a final step.
@@ -510,6 +673,21 @@ public final class BamasEngine {
 				}
 			}
 		}
+	}
+
+	/**
+	 * finishDoorToDoor: build the D2D materializer, log the door-to-door completion summary, and —
+	 * on the streamingD2D path (stop-based OFF) — close the journal and return a streaming
+	 * {@link StubRideStore}. Returns {@code null} when the run must continue into Phase 5/6
+	 * (stop-based ON), leaving the terminal return to the caller after the try/catch.
+	 */
+	private RideStore finishDoorToDoor(
+			List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> stubLayers,
+			ResumeState resume) {
+		final boolean streamingD2D = runStreamingD2D;
+		final boolean pairStubPath = runPairStubPath;
+		java.util.Map<Integer, DrtRequest> requestById = runRequestById;
+		ConnectionCacheJournal.Writer cacheJournal = resume.cacheJournal();
 
 		// Plan A2 Task 3 — stub mode WITH stop-based: Phase 5 consumes D2D rides via batched
 		// on-demand materialization instead of bulk-materializing all stubs into allRides first.
@@ -526,7 +704,7 @@ public final class BamasEngine {
 		// per-row materializer is built later, at the StubRideStore export return.
 		this.runD2DMaterializer = !streamingD2D
 				? new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
-						network, budgetValidator, pairGen, reqArray)
+						network, budgetValidator, runPairGen, runReqArray)
 				: null;
 
 		// Seam (c): remainingBudgets is populated inline by RideMaterializer.validateAndPopulateBudgets
@@ -544,7 +722,7 @@ public final class BamasEngine {
 			}
 		}
 		int totalD2D = allRides.size() + stubLayerRows;
-		long totalElapsed = System.currentTimeMillis() - algorithmStartTime;
+		long totalElapsed = System.currentTimeMillis() - runAlgorithmStartTime;
 		double totalSeconds = totalElapsed / 1000.0;
 		int[] rideCounts = summarizeRideCounts(allRides);
 		// On the pairStubPath, pairs live in stubLayers[0] (degree 2), not allRides — split
@@ -582,7 +760,7 @@ public final class BamasEngine {
 			// exact generation copy) instead of the index-collision-prone requestById.
 			org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer materializer =
 					new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
-							network, budgetValidator, pairGen, reqArray);
+							network, budgetValidator, runPairGen, runReqArray);
 			log.info("Stub mode (streaming): exporting {} D2D rides ({} fat singles+pairs + {} stub rows) "
 					+ "via StubRideStore — no batch-materialize, no fat sort/reindex",
 					totalD2D, allRides.size(), stubLayerRows);
@@ -600,19 +778,14 @@ public final class BamasEngine {
 			}
 			return new StubRideStore(allRides, stubLayers, materializer, requestById);
 		}
-		} catch (Throwable t) {
-			// Best-effort release on the failure path; the propagating exception is the real signal.
-			if (cacheJournal != null) {
-				try {
-					network.disableJournaling();
-					cacheJournal.close();
-				} catch (java.io.IOException ignored) {
-					// nothing actionable — the original throwable is rethrown below
-				}
-			}
-			throw t;
-		}
+		return null;
+	}
 
+	/**
+	 * stopBasedLayers: Phase 5 — stop-based ride generation (HyperPool Stage 1). No-op (empty list)
+	 * when stop-based is disabled.
+	 */
+	private List<Ride> stopBasedLayers() {
 		// Phase 5: Stop-Based Ride Generation (HyperPool Stage 1)
 		// Only runs if enableStopBased = true
 		List<Ride> stopBasedRides = new ArrayList<>();
@@ -627,11 +800,18 @@ public final class BamasEngine {
 			// entire S2S universe. runD2DMaterializer is always non-null here (stop-based ON ⇒
 			// !streamingD2D); the streamingD2D path returned earlier via StubRideStore.
 			stopBasedRides = generateStopBasedRidesBatched(
-					allRides, runStubLayers, runD2DMaterializer, requestById);
+					allRides, runStubLayers, runD2DMaterializer, runRequestById);
 			log.info("Generated {} stop-to-stop rides (stored as stubs, not in allRides)",
 					stopBasedRides.size());
 		}
+		return stopBasedRides;
+	}
 
+	/**
+	 * hyperPool: Phase 6 — hyper-pooling (HyperPool Stage 2). No-op when hyper-pooling is disabled
+	 * (or stop-based is off). Stores the result into {@code hyperPooledRides}.
+	 */
+	private void hyperPool() {
 		// Phase 6: Hyper-Pooling (HyperPool Stage 2)
 		// Only runs if enableHyperPooling = true (and enableStopBased = true)
 		if (exMasConfig.isEnableHyperPooling()) {
@@ -648,11 +828,12 @@ public final class BamasEngine {
 				log.info("Generated {} hyper-pooled rides", hyperPooledRides.size());
 			}
 		}
+	}
 
-		// The HyperPoolStubRideStore performs the equivalent stable sort + sequential reindex on
-		// its row-reference array at construction (the fat in-place sort+reindex is gone with the
-		// fat path; allRides here holds only fat singles, never the S2S universe).
-
+	/**
+	 * logSummary: final summary for the stop-based path (counts D2D + S2S from stubs).
+	 */
+	private void logSummary() {
 		// Final summary
 		if (exMasConfig.isEnableStopBased()) {
 			log.info("");
@@ -676,6 +857,14 @@ public final class BamasEngine {
 			}
 			log.info("======================================================================");
 		}
+	}
+
+	/**
+	 * store: build the terminal {@link HyperPoolStubRideStore} for the stop-based path (D2D stubs +
+	 * S2S stubs), streaming instead of materialising all rides into allRides.
+	 */
+	private RideStore store() {
+		java.util.Map<Integer, DrtRequest> requestById = runRequestById;
 
 		// Stop-based path → stream via HyperPoolStubRideStore (D2D stubs + S2S stubs) instead of
 		// materialising all rides into allRides. Reaching here means enableStopBased was ON
