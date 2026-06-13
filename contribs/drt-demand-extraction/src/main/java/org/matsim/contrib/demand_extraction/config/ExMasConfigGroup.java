@@ -78,6 +78,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     private String metropolePolygonPath = null;
 
 	// Scoring adapter selection: "auto" (default), "planCalcScore", "dmc", "eqasim"
+
+	// ===========================================
+	// Demand extraction — scoring adapter, modes, DRT service quality & flexibility
+	// ===========================================
 	private String scoringAdapter = "auto";
 
 	// Stage-1 algorithm (BAMAS = current; EXMAS = reference ported from main).
@@ -165,6 +169,9 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private String negativeFlexibilityAbsoluteMap = null; // Map "value:seconds,value:seconds"
 	private String negativeFlexibilityRelativeMap = null; // Map "value:factor,value:factor"
 
+	// ===========================================
+	// Routing & connection-cache bucketing
+	// ===========================================
 	private int networkTimeBinSize = 60 * 60; // Network cache time bin size in seconds (1 hour)
 
 	// ── cache eviction watermark (design 2026-06-12-connection-cache-memory-design §3).
@@ -184,6 +191,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private boolean deferExtensionBudgetValidation = false;
 
 	// ExMAS algorithm parameters
+
+	// ===========================================
+	// Ride generation & enumeration
+	// ===========================================
 	private double searchHorizon = 600.0; // Time horizon for pairing requests (seconds, 10 minutes)
 	private int maxPoolingDegree = Integer.MAX_VALUE; // Maximum number of passengers per ride
 
@@ -252,6 +263,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private int heuristicsProcessCount = -1;
 
 	// Heuristic pruning (to control combinatorial growth during ride extension)
+
+	// ===========================================
+	// Pruning & selection — distance gate + post-extension / extension-parent selection
+	// ===========================================
 	private boolean pruningEnabled = true;
 	// Degree-aware distance savings pruning (applied vs serving requests separately)
 	// requiredSaving(d) = min(maxSaving, max(0, pruningDistanceSavingsLogScale * log2(d)))
@@ -332,9 +347,17 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// cache entries from the skipped pair-gen phase are not bit-reproducible by re-routing, so
 	// a checkpoint dir without a journal can only support inspection, never bit-parity resume.
 	// One knob, one contract: checkpointDir set ⇒ stubs + pair universe + journal all written.
+
+	// ===========================================
+	// Checkpoint & resume
+	// ===========================================
 	private String checkpointDir = "";
 
 	// Calculate Shapley values for rides (distance contribution per passenger)
+
+	// ===========================================
+	// Post-processing & export — Shapley, predecessors/successors, connection-cache export
+	// ===========================================
 	private boolean calcShapleyValues = true;
 
 	// Calculate predecessor/successor relationships between rides
