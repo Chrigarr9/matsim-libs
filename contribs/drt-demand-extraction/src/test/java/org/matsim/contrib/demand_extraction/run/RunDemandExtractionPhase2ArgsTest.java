@@ -95,25 +95,6 @@ class RunDemandExtractionPhase2ArgsTest {
 				() -> RunDemandExtractionPhase2.parseArgs(args));
 	}
 
-	@org.junit.jupiter.api.Test
-	void copiesPhase1RequestsCsvIntoCanonicalSlot(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp) throws Exception {
-		java.nio.file.Path phase1Dir = tmp.resolve("phase1_dump");
-		java.nio.file.Files.createDirectories(phase1Dir);
-		java.nio.file.Path src = phase1Dir.resolve(
-				org.matsim.contrib.demand_extraction.io.lowmem.PhaseOneDumpLayout.REQUESTS_CSV);
-		java.nio.file.Files.writeString(src, "index,directDistance\n0,1234.5\n");
-
-		java.nio.file.Path outputDir = tmp.resolve("out");
-		java.nio.file.Path demandDir = outputDir.resolve("drt_demand");
-		java.nio.file.Files.createDirectories(demandDir);
-		String runId = "lyon-drt-1pct-eqasim-exmas";
-
-		// Under test: a small static helper we will add to Phase 2.
-		java.nio.file.Path dst = RunDemandExtractionPhase2.publishCanonicalRequestsCsv(
-				phase1Dir, demandDir, runId);
-
-		assertEquals(demandDir.resolve(runId + ".drt_requests.csv"), dst);
-		assertTrue(java.nio.file.Files.exists(dst));
-		assertEquals(java.nio.file.Files.readString(src), java.nio.file.Files.readString(dst));
-	}
+	// Canonical-requests publishing moved to ExtractionDataManager.publishCanonicalRequests;
+	// its behavior is covered by ExtractionDataManagerTest.
 }

@@ -2,6 +2,7 @@ package org.matsim.contrib.demand_extraction.demand;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -12,15 +13,12 @@ import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Population;
 import org.matsim.contrib.demand_extraction.algorithm.AlgorithmResult;
 import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithm;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.MaterializedRideStore;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.engine.RidePostProcessor;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
-import org.matsim.contrib.demand_extraction.io.ConnectionCacheWriter;
-import org.matsim.contrib.demand_extraction.io.ExMasCsvWriter;
-import org.matsim.contrib.demand_extraction.io.PersonAttributesWriter;
+import org.matsim.contrib.demand_extraction.io.ExtractionDataManager;
 import org.matsim.core.config.Config;
 import org.matsim.core.controler.OutputDirectoryHierarchy;
 import org.matsim.core.controler.events.ShutdownEvent;
@@ -139,21 +137,16 @@ public class DemandExtractionListener implements ShutdownListener {
 		requests = requestSampler.sampleRequests(requests);
 
 		// Write population-dependent outputs (Phase-1 owns these because Phase 2 has no Population).
-		String demandOutputDir = ensureDemandOutputDir();
-		String personAttributesFilename = demandOutputDir + "/" + config.controller().getRunId()
-				+ ".person_attributes.csv";
-		PersonAttributesWriter.writePersonAttributes(personAttributesFilename, population, requests);
-		log.info("Wrote person attributes to: {}", personAttributesFilename);
+		ExtractionDataManager dataManager = dataManager();
+		Path personAttributesFile = dataManager.writePersonAttributes(population, requests);
+		log.info("Wrote person attributes to: {}", personAttributesFile);
 
-		String modeCacheFilename = demandOutputDir + "/" + config.controller().getRunId()
-				+ ".mode_cache.csv";
-		ExMasCsvWriter.writeModeCache(modeCacheFilename, modeRoutingCache.getAllModeAttributes());
-		log.info("Wrote mode cache to: {}", modeCacheFilename);
+		Path modeCacheFile = dataManager.writeModeCache(modeRoutingCache.getAllModeAttributes());
+		log.info("Wrote mode cache to: {}", modeCacheFile);
 
 		// Paper-2 Ext-2: per-(commuter, hub) detour diagnostic from virtual-trip
 		// expansion (drop reasons + hub-introduced detour vs traveller slack).
-		writeConnectingDetourDiag(demandOutputDir + "/" + config.controller().getRunId()
-				+ ".connecting_detour_diag.csv");
+		writeConnectingDetourDiag(dataManager.path("connecting_detour_diag.csv").toString());
 
 		return requests;
 	}
@@ -216,39 +209,25 @@ public class DemandExtractionListener implements ShutdownListener {
 		log.info("STEP 5: Writing output files");
 		log.info("----------------------------------------------------------------------");
 
-		String demandOutputDir = ensureDemandOutputDir();
+		ExtractionDataManager dataManager = dataManager();
 
-		String requestsFilename = demandOutputDir + "/" + config.controller().getRunId()
-				+ ".drt_requests.csv";
-		ExMasCsvWriter.writeRequests(requestsFilename, requests);
-		log.info("Wrote {} requests to: {}", requests.size(), requestsFilename);
+		Path requestsFile = dataManager.writeRequests(requests);
+		log.info("Wrote {} requests to: {}", requests.size(), requestsFile);
 
-		String ridesFilename = demandOutputDir + "/" + config.controller().getRunId() + ".exmas_rides.csv";
-		ExMasCsvWriter.writeRides(ridesFilename, new MaterializedRideStore(rides));
-		log.info("Wrote {} rides to: {}", rides.size(), ridesFilename);
+		Path ridesFile = dataManager.writeRides(rides);
+		log.info("Wrote {} rides to: {}", rides.size(), ridesFile);
 
 		// HyperPool Stage-2 outputs use a distinct schema (multi-stop sequences,
 		// per-pax boarding/alighting indices) and land in their own CSV.
-		if (!algorithmResult.hyperPooledRides().isEmpty()) {
-			String hyperPoolFilename = demandOutputDir + "/" + config.controller().getRunId()
-					+ ".hyperpool_rides.csv";
-			ExMasCsvWriter.writeHyperPooledRides(hyperPoolFilename, algorithmResult.hyperPooledRides());
+		Path hyperPoolFile = dataManager.writeHyperPooledRides(algorithmResult.hyperPooledRides());
+		if (hyperPoolFile != null) {
 			log.info("Wrote {} hyper-pooled rides to: {}",
-					algorithmResult.hyperPooledRides().size(), hyperPoolFilename);
+					algorithmResult.hyperPooledRides().size(), hyperPoolFile);
 		}
 
-		// Write Connection Cache (includes depot connections routed in step 5)
-		if (exMasConfig.isCalcPredecessors()) {
-			String connectionCacheFilename = demandOutputDir + "/" + config.controller().getRunId()
-					+ ".connection_cache.csv";
-			try {
-				ConnectionCacheWriter.writeConnectionCache(connectionCacheFilename, rides, networkCache,
-						exMasConfig.getNetworkTimeBinSize(), exMasConfig.getConnectionCacheExportMode(),
-						postProcessor.getWindowKeys());
-			} catch (IOException e) {
-				log.error("Failed to write connection cache", e);
-			}
-		}
+		// Write Connection Cache (includes depot connections routed in step 5); no-op when
+		// isCalcPredecessors() is off.
+		dataManager.writeConnectionCache(rides, networkCache, postProcessor.getWindowKeys());
 
 		// Network cache statistics (cache hit rate, SSSP vs SpeedyALT breakdown)
 		networkCache.logRoutingStatistics();
@@ -261,15 +240,17 @@ public class DemandExtractionListener implements ShutdownListener {
 		return System.currentTimeMillis() - phase1StartTimeMs;
 	}
 
-	/** Resolves {@code <outputDir>/drt_demand} and ensures it exists. */
-	protected String ensureDemandOutputDir() {
-		String demandOutputDir = outputDirectory.getOutputPath() + "/drt_demand";
+	/**
+	 * Build the output-file manager for {@code <outputDir>/drt_demand} under this run's id. Owns the
+	 * filename convention and writer wiring previously inlined here and in {@code RunDemandExtractionPhase2}.
+	 */
+	protected ExtractionDataManager dataManager() {
 		try {
-			Files.createDirectories(Paths.get(demandOutputDir));
+			return ExtractionDataManager.forOutputDir(
+					Paths.get(outputDirectory.getOutputPath()), config.controller().getRunId(), exMasConfig);
 		} catch (IOException e) {
 			throw new RuntimeException("Failed to create drt_demand output directory", e);
 		}
-		return demandOutputDir;
 	}
 
 	protected void logCompletionBanner(int numRequests, int numRides, double overallSeconds) {

@@ -11,14 +11,12 @@ import org.apache.logging.log4j.Logger;
 import org.matsim.contrib.demand_extraction.algorithm.AlgorithmResult;
 import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithm;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasAlgorithm;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.MaterializedRideStore;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.engine.RidePostProcessor;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
-import org.matsim.contrib.demand_extraction.io.ConnectionCacheWriter;
-import org.matsim.contrib.demand_extraction.io.ExMasCsvWriter;
+import org.matsim.contrib.demand_extraction.io.ExtractionDataManager;
 import org.matsim.contrib.demand_extraction.io.lowmem.PhaseOneDumpLayout;
 import org.matsim.contrib.demand_extraction.io.lowmem.PhaseOneDumpReader;
 
@@ -99,29 +97,6 @@ public final class RunDemandExtractionPhase2 {
 					+ "Re-run Phase 1 with a v2 build (current build) to obtain a v2 dump, "
 					+ "then re-run Phase 2.");
 		}
-	}
-
-	/** Publish the Phase-1 request dump under the canonical
-	 *  {@code <demandDir>/<runId>.drt_requests.csv} name expected by downstream
-	 *  Python tooling. Uses a hard link when the FS supports it (NTFS does
-	 *  within a single volume), falling back to a byte copy. Idempotent —
-	 *  overwrites an existing canonical file. */
-	public static java.nio.file.Path publishCanonicalRequestsCsv(
-			java.nio.file.Path phase1Dir, java.nio.file.Path demandDir, String runId) throws IOException {
-		java.nio.file.Path src = phase1Dir.resolve(
-				org.matsim.contrib.demand_extraction.io.lowmem.PhaseOneDumpLayout.REQUESTS_CSV);
-		java.nio.file.Path dst = demandDir.resolve(runId + ".drt_requests.csv");
-		if (!java.nio.file.Files.exists(src)) {
-			throw new IOException("Phase-1 requests CSV missing at " + src
-					+ "; Phase 1 did not complete normally");
-		}
-		java.nio.file.Files.deleteIfExists(dst);
-		try {
-			java.nio.file.Files.createLink(dst, src);
-		} catch (UnsupportedOperationException | java.nio.file.FileSystemException ex) {
-			java.nio.file.Files.copy(src, dst);
-		}
-		return dst;
 	}
 
 	/** Optional Phase-2 overrides for the extension_parents_top_k knob, so a smoke
@@ -218,27 +193,21 @@ public final class RunDemandExtractionPhase2 {
 		List<Ride> rides = postProcessor.process(result.rides());
 
 		log.info("PHASE 2 STEP 5: writing outputs");
-		Path demandDir = a.outputDir.resolve("drt_demand");
-		Files.createDirectories(demandDir);
 		String runId = dump.meta().runId();
-		Path ridesCsv = demandDir.resolve(runId + ".exmas_rides.csv");
-		ExMasCsvWriter.writeRides(ridesCsv.toString(), new MaterializedRideStore(rides));
+		ExtractionDataManager dataManager = ExtractionDataManager.forOutputDir(a.outputDir, runId, exMasCfg);
+
+		Path ridesCsv = dataManager.writeRides(rides);
 		log.info("PHASE 2 STEP 5: wrote {} rides to {}", rides.size(), ridesCsv);
 
-		java.nio.file.Path publishedRequests = publishCanonicalRequestsCsv(
-				a.phase1Dir, demandDir, runId);
+		Path publishedRequests = dataManager.publishCanonicalRequests(a.phase1Dir);
 		log.info("PHASE 2 STEP 5: published canonical requests CSV to {}", publishedRequests);
 
 		if (exMasCfg.isCalcPredecessors()) {
-			Path connectionCacheCsv = demandDir.resolve(runId + ".connection_cache.csv");
 			MatsimNetworkCache networkCache = injector.getInstance(MatsimNetworkCache.class);
-			try {
-				ConnectionCacheWriter.writeConnectionCache(connectionCacheCsv.toString(), rides,
-						networkCache, exMasCfg.getNetworkTimeBinSize(), exMasCfg.getConnectionCacheExportMode(),
-						postProcessor.getWindowKeys());
+			Path connectionCacheCsv = dataManager.writeConnectionCache(
+					rides, networkCache, postProcessor.getWindowKeys());
+			if (connectionCacheCsv != null) {
 				log.info("PHASE 2 STEP 5: wrote connection cache to {}", connectionCacheCsv);
-			} catch (IOException e) {
-				log.error("Failed to write connection cache", e);
 			}
 			networkCache.logRoutingStatistics();
 		}
