@@ -254,13 +254,11 @@ public final class BamasRideExtender {
 					if (bestRide != null) {
 						resultBySetHash.put(task.newSetHash, bestRide);
 						resultsFound.incrementAndGet();
-						if (exMasConfig.isStubModeEnabled()) {
-							RideStub s = RideStub.fromRide(bestRide);
-							stubBuffers.computeIfAbsent(Thread.currentThread().getId(),
-									id -> new StubColumns(targetDegree))
-									.addRow(s.sortedSet, s.originPacked, s.destPacked,
-											s.distDm, s.ttDs, s.flags);
-						}
+						RideStub s = RideStub.fromRide(bestRide);
+						stubBuffers.computeIfAbsent(Thread.currentThread().getId(),
+								id -> new StubColumns(targetDegree))
+								.addRow(s.sortedSet, s.originPacked, s.destPacked,
+										s.distDm, s.ttDs, s.flags);
 					}
 
 					// Progress log every 30 seconds
@@ -368,13 +366,12 @@ public final class BamasRideExtender {
 		// Store results for graph building (accessed by buildDegreeGraph)
 		this.lastResultBySetHash = resultBySetHash;
 
-		// Stub-mode shadow: merge per-worker buffers into one sorted StubColumns.
-		// Guarded so the fat path (flag off) is byte-identical to before this task.
-		if (exMasConfig.isStubModeEnabled()) {
-			this.lastDegreeStubs = stubBuffers.isEmpty()
-					? new StubColumns(targetDegree > 0 ? targetDegree : 1)
-					: StubColumns.mergeSorted(stubBuffers.values());
-		}
+		// Merge per-worker stub buffers into one sorted StubColumns — the degree-(D+1)
+		// layer the engine carries forward (BamasEngine.getLastDegreeStubs). Fat-overload
+		// callers (the MissingTriple regression tests) simply ignore it.
+		this.lastDegreeStubs = stubBuffers.isEmpty()
+				? new StubColumns(targetDegree > 0 ? targetDegree : 1)
+				: StubColumns.mergeSorted(stubBuffers.values());
 
 		// Deterministic output order: sort by sorted-request-indices lex.
 		// Required because resultBySetHash.values() iteration is not deterministic

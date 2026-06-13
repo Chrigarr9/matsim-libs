@@ -107,8 +107,7 @@ class BamasAlgorithmFingerprintWiringTest {
 	private ExMasConfigGroup config(Path checkpointDir) {
 		ExMasConfigGroup c = new ExMasConfigGroup();
 		c.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
-		c.setStubModeEnabled(true);          // streaming pair-stub path
-		c.setEnableStopBased(false);
+		c.setEnableStopBased(false);         // streaming pair-stub D2D path
 		c.setHeuristicPruningEnabled(false);
 		c.setPruningDistanceSavingsLogScale(-1.0);
 		c.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);

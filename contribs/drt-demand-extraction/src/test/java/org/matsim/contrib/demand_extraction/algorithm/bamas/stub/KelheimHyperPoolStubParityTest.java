@@ -36,76 +36,72 @@ import org.matsim.core.scenario.ScenarioUtils;
 import org.matsim.examples.ExamplesUtils;
 
 /**
- * Plan A2 Task 7 parity gate — non-vacuous variant.
+ * Kelheim stop-based + HyperPool regression gate — the non-vacuous S2S/HyperPool golden.
  *
- * <p>Verifies that stub mode ({@code stubModeEnabled=true}) produces byte-identical output
- * to fat mode ({@code stubModeEnabled=false}) on the Kelheim scenario, which actually
- * generates S2S and HyperPooled rides (unlike the dvrp-grid scenario used by
- * {@link HyperPoolStubParityTest}, which produces only DOOR_TO_DOOR rows).
+ * <p>Verifies that the (now single-path) BAMAS engine produces byte-identical
+ * {@code exmas_rides.csv} AND {@code hyperpool_rides.csv} to frozen goldens on the Kelheim
+ * scenario, which actually generates STOP_TO_STOP and HyperPooled rides — unlike the
+ * dvrp-grid scenario in {@link HyperPoolStubParityTest}, whose golden contains only
+ * DOOR_TO_DOOR rows. This is therefore the only gate that pins the S2S + HyperPool byte
+ * output of the engine.
  *
- * <p>Files compared:
- * <ul>
- *   <li>{@code kelheim-mini.exmas_rides.csv} — Phase 1-5 output (D2D + S2S rows)</li>
- *   <li>{@code kelheim-mini.hyperpool_rides.csv} — Phase 6 output (HyperPooled bundles)</li>
- * </ul>
+ * <h3>History</h3>
+ * Originally a fat-vs-stub parity gate (Plan A2 Task 7): it ran the engine twice
+ * ({@code stubModeEnabled} false then true) and asserted the two output sets were SHA-256
+ * equal. The BAMAS cleanup deleted the fat path, so the fat comparand no longer exists.
+ * Before deleting it, the fat output (== the then-passing stub output) was frozen as the
+ * committed goldens below, so the original fat-vs-stub guarantee survives the deletion: a
+ * regression that changed the stop-based/hyperpool output would change a SHA here.
  *
- * <p>The test exercises the core Task 4-6 changes:
- * <ul>
- *   <li>Task 4: S2S ride stubs (deferred materialisation) vs fat List&lt;Ride&gt;</li>
- *   <li>Task 5: stub-column materialisation replay bit-exactness</li>
- *   <li>Task 6: per-cluster {@code buildClusterRideCache} — each wrapper materialised once</li>
- * </ul>
+ * <p>Single-threaded and deterministic network routing for byte reproducibility (documented
+ * in plan A2). The population is duplicated 2x to create spatial overlap for hyper-pooling.
  *
- * <p>Both runs are single-threaded and use deterministic network routing to avoid the
- * known connection-cache non-determinism under parallel execution (documented in plan A2).
- * Separate output directories avoid the Windows file-lock race condition.
+ * <h3>Golden strategy</h3>
+ * The {@code exmas_rides.csv} is ~10 MB (13 k rows incl. ~1 k S2S), so rather than commit the
+ * blob we pin its SHA-256 — and the 139 KB {@code hyperpool_rides.csv}'s — as constants below.
+ * Both are byte-deterministic under the single-threaded + deterministic-routing config. If an
+ * intentional output change flips a SHA, re-capture it from the {@code actual CSV} path the
+ * failure prints (e.g. {@code sha256sum <path>}).
  *
  * <h3>Acceptance criterion</h3>
- * SHA-256({@code exmas_rides.csv} fat) == SHA-256({@code exmas_rides.csv} stub) AND
- * SHA-256({@code hyperpool_rides.csv} fat) == SHA-256({@code hyperpool_rides.csv} stub).
+ * SHA-256({@code exmas_rides.csv}) == {@link #RIDES_GOLDEN_SHA} AND
+ * SHA-256({@code hyperpool_rides.csv}) == {@link #HYPERPOOL_GOLDEN_SHA}.
  */
 class KelheimHyperPoolStubParityTest {
 
     private static final String RUN_ID = "kelheim-mini";
+    /** SHA-256 of the frozen kelheim-mini exmas_rides.csv (D2D + S2S rows), single-threaded. */
+    private static final String RIDES_GOLDEN_SHA =
+            "d04ff09246be85ded90752c15771660899eae57c2bfc1e01995a266ee6d58ae6";
+    /** SHA-256 of the frozen kelheim-mini hyperpool_rides.csv (Phase-6 bundles), single-threaded. */
+    private static final String HYPERPOOL_GOLDEN_SHA =
+            "0f071fd09b7103bdaa06ee206ad5a9b773874107021ab818156e64199b3e1e14";
 
     @Test
-    void kelheimStubModeProducesIdenticalOutputToFatMode() throws IOException, NoSuchAlgorithmException {
+    void kelheimHyperPoolOutputMatchesFrozenGoldens() throws IOException, NoSuchAlgorithmException {
         Path baseDir = Path.of("test/output/kelheim-hyperpool-stub-parity-test");
         Files.createDirectories(baseDir);
 
-        // Run 1: fat mode (stubModeEnabled=false) — reference path.
-        Path fatDir = baseDir.resolve("fat");
-        RunOutput fat = runKelheimHyperPool(fatDir, false);
+        RunOutput out = runKelheimHyperPool(baseDir.resolve("run"));
 
-        // Run 2: stub mode (stubModeEnabled=true) — Plan A2 new path.
-        Path stubDir = baseDir.resolve("stub");
-        RunOutput stub = runKelheimHyperPool(stubDir, true);
+        assertTrue(Files.exists(out.hyperPoolRidesCsv),
+                "Run must produce hyperpool_rides.csv at: " + out.hyperPoolRidesCsv);
 
-        // Assert both runs produced the Phase 6 output file (guards against silent vacuity).
-        assertTrue(Files.exists(fat.hyperPoolRidesCsv),
-                "Fat mode must produce hyperpool_rides.csv at: " + fat.hyperPoolRidesCsv);
-        assertTrue(Files.exists(stub.hyperPoolRidesCsv),
-                "Stub mode must produce hyperpool_rides.csv at: " + stub.hyperPoolRidesCsv);
+        assertShaMatch("exmas_rides.csv", out.ridesCsv, RIDES_GOLDEN_SHA);
+        assertShaMatch("hyperpool_rides.csv", out.hyperPoolRidesCsv, HYPERPOOL_GOLDEN_SHA);
+    }
 
-        // SHA-256 gate on exmas_rides.csv (Phase 1-5: D2D + S2S rows).
-        String fatRidesSha  = sha256(fat.ridesCsv);
-        String stubRidesSha = sha256(stub.ridesCsv);
-        if (!fatRidesSha.equals(stubRidesSha)) {
-            throwParityError("exmas_rides.csv", fatRidesSha, stubRidesSha,
-                    fat.ridesCsv, stub.ridesCsv);
-        }
-        assertEquals(fatRidesSha, stubRidesSha,
-                "exmas_rides.csv must be byte-identical between fat and stub paths");
-
-        // SHA-256 gate on hyperpool_rides.csv (Phase 6: HyperPooled bundles).
-        String fatHpSha  = sha256(fat.hyperPoolRidesCsv);
-        String stubHpSha = sha256(stub.hyperPoolRidesCsv);
-        if (!fatHpSha.equals(stubHpSha)) {
-            throwParityError("hyperpool_rides.csv", fatHpSha, stubHpSha,
-                    fat.hyperPoolRidesCsv, stub.hyperPoolRidesCsv);
-        }
-        assertEquals(fatHpSha, stubHpSha,
-                "hyperpool_rides.csv must be byte-identical between fat and stub paths");
+    private static void assertShaMatch(String label, Path actualCsv, String goldenSha)
+            throws IOException, NoSuchAlgorithmException {
+        String actualSha = sha256(Files.readAllBytes(actualCsv));
+        assertEquals(goldenSha, actualSha, String.format(
+                "Kelheim stop-based/HyperPool %s regressed vs frozen golden SHA.%n"
+                + "  expected SHA: %s%n"
+                + "  actual SHA:   %s%n"
+                + "  actual CSV:   %s%n"
+                + "  (single-threaded deterministic output; if this change is intentional, "
+                + "re-capture the SHA from the actual CSV.)",
+                label, goldenSha, actualSha, actualCsv.toAbsolutePath()));
     }
 
     // -----------------------------------------------------------------------
@@ -114,14 +110,8 @@ class KelheimHyperPoolStubParityTest {
 
     private record RunOutput(Path ridesCsv, Path hyperPoolRidesCsv) {}
 
-    /**
-     * Run the Kelheim HyperPool scenario and return paths to the generated output files.
-     *
-     * @param outputDir       output directory for this run
-     * @param stubModeEnabled true = stub path (Plan A2); false = fat/master path
-     */
-    private static RunOutput runKelheimHyperPool(Path outputDir, boolean stubModeEnabled)
-            throws IOException {
+    /** Run the Kelheim HyperPool scenario and return paths to the generated output files. */
+    private static RunOutput runKelheimHyperPool(Path outputDir) throws IOException {
         Files.createDirectories(outputDir);
 
         URL scenarioUrl = ExamplesUtils.getTestScenarioURL("kelheim");
@@ -135,7 +125,7 @@ class KelheimHyperPoolStubParityTest {
         config.controller().setLastIteration(0);
 
         configureScoring(config);
-        configureExMasWithHyperPool(config, stubModeEnabled);
+        configureExMasWithHyperPool(config);
 
         DemandExtractionConfigValidator.prepareConfigForDemandExtraction(config);
 
@@ -203,7 +193,7 @@ class KelheimHyperPoolStubParityTest {
         org.matsim.dsim.Activities.addScoringParams(config);
     }
 
-    private static void configureExMasWithHyperPool(Config config, boolean stubModeEnabled) {
+    private static void configureExMasWithHyperPool(Config config) {
         ExMasConfigGroup exMasConfig = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 
         exMasConfig.setDrtMode("drt");
@@ -253,9 +243,6 @@ class KelheimHyperPoolStubParityTest {
         exMasConfig.setHyperPoolMaxStops(-1);
         exMasConfig.setHyperPoolEnableDirectionalFilter(false);
         exMasConfig.setHyperPoolEnableSpatialFilter(false);
-
-        // The parity knob: fat vs stub path.
-        exMasConfig.setStubModeEnabled(stubModeEnabled);
     }
 
     // -----------------------------------------------------------------------
@@ -303,44 +290,14 @@ class KelheimHyperPoolStubParityTest {
     }
 
     // -----------------------------------------------------------------------
-    // SHA-256 + error formatting
+    // Golden + SHA-256 helpers
     // -----------------------------------------------------------------------
 
-    private static String sha256(Path path) throws IOException, NoSuchAlgorithmException {
+    private static String sha256(byte[] bytes) throws NoSuchAlgorithmException {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        byte[] hash = digest.digest(Files.readAllBytes(path));
+        byte[] hash = digest.digest(bytes);
         StringBuilder sb = new StringBuilder(64);
         for (byte b : hash) sb.append(String.format("%02x", b));
         return sb.toString();
-    }
-
-    private static void throwParityError(
-            String fileName,
-            String fatSha,
-            String stubSha,
-            Path fatPath,
-            Path stubPath) throws IOException {
-        List<String> fatLines  = Files.readAllLines(fatPath);
-        List<String> stubLines = Files.readAllLines(stubPath);
-        int diffLines = 0;
-        int minLen = Math.min(fatLines.size(), stubLines.size());
-        for (int i = 0; i < minLen; i++) {
-            if (!fatLines.get(i).equals(stubLines.get(i))) diffLines++;
-        }
-        int extraFat  = fatLines.size()  - minLen;
-        int extraStub = stubLines.size() - minLen;
-        throw new AssertionError(String.format(
-                "Plan A2 Task 7 parity FAILED: %s SHA-256 mismatch.%n"
-                + "  fat  SHA: %s (%d lines)%n"
-                + "  stub SHA: %s (%d lines)%n"
-                + "  Differing lines: %d common, +%d fat-only, +%d stub-only%n"
-                + "  fat  CSV: %s%n"
-                + "  stub CSV: %s",
-                fileName,
-                fatSha,  fatLines.size(),
-                stubSha, stubLines.size(),
-                diffLines, extraFat, extraStub,
-                fatPath.toAbsolutePath(),
-                stubPath.toAbsolutePath()));
     }
 }

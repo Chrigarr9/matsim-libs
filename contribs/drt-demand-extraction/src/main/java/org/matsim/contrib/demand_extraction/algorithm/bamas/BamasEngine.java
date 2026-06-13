@@ -53,26 +53,6 @@ import org.matsim.facilities.ActivityFacilities;
 public final class BamasEngine {
 	private static final Logger log = LogManager.getLogger(BamasEngine.class);
 
-	/**
-	 * Final export ordering of the fat ride list: variant (D2D before S2S), then degree
-	 * ascending, then first request index ascending. Used both for the post-Phase-6
-	 * sort+reindex of {@code allRides} AND (Plan A2 hyperpool fix) for the pre-Phase-6
-	 * stamping of S2S rides with their final, mode-independent index. Sharing the one
-	 * comparator is what guarantees the pre-Phase-6 index equals the export index.
-	 */
-	private static final java.util.Comparator<Ride> EXPORT_RIDE_COMPARATOR =
-			java.util.Comparator.comparing(Ride::getVariant)
-					.thenComparingInt(Ride::getDegree)
-					// Total tie-break: the full pickup-order request-index sequence (lexicographic).
-					// Exactly one ride is retained per request set, so this sequence is a unique ride
-					// identity — making the export order (and the index stamped from it) independent of
-					// the order in which the rides were generated. The fat and stub Phase-5 paths thread
-					// that generation order differently, so without a total key tied rows (same variant,
-					// degree, first-pickup) come out permuted between the two paths. This extends the
-					// former first-pickup-only key (indices[0]) to the whole array: the primary ordering
-					// is unchanged and only formerly-tied rows are canonicalized.
-					.thenComparing(Ride::getRequestIndices, java.util.Arrays::compare);
-
 	private final MatsimNetworkCache network;
 	private final BudgetValidator budgetValidator;
 	private final double horizon;
@@ -201,20 +181,18 @@ public final class BamasEngine {
 			return completeEarly(algorithmStartTime, "maxDegree < 2, skipping pair generation");
 		}
 
-		final boolean stubMode = exMasConfig.isStubModeEnabled();
 		// streamingD2D distinguishes "return after door-to-door" (stop-based OFF) from
-		// "continue into Phase 5/6 stop-based+hyperpool" — NOT a fat/stub distinction. When
-		// stop-based is ON, the degree-2 pair stubs and degree-3+ extension stubs are fed
-		// directly into Phase 5 (generateStopBasedRidesBatched) via on-demand materialization;
-		// allRides then holds only the fat singles. The 100% target run has stop_based=false.
-		final boolean streamingD2D = stubMode && !exMasConfig.isEnableStopBased();
+		// "continue into Phase 5/6 stop-based+hyperpool". When stop-based is ON, the degree-2
+		// pair stubs and degree-3+ extension stubs are fed directly into Phase 5
+		// (generateStopBasedRidesBatched) via on-demand materialization; allRides then holds
+		// only the fat singles. The 100% target run has stop_based=false.
+		final boolean streamingD2D = !exMasConfig.isEnableStopBased();
 		// Degree-2 pair stubs: the full pair universe is generated, graphed, and deduped as a
 		// compact StubColumns layer (never a fat List<Ride>), then carried as stubLayers[0] and
-		// extended. This is now independent of stop-based — the stop-based path consumes the same
-		// pair-stub layer through Phase 5 (Pass 2 of generateStopBasedRidesBatched materializes it
-		// first, before the degree-3+ layers, reproducing the old fat-pairs-then-extension order).
-		// Only the maxDegree<=2 early exits keep the fat pair flow.
-		final boolean pairStubPath = stubMode && maxDegree > 2;
+		// extended. The stop-based path consumes the same pair-stub layer through Phase 5 (Pass 2
+		// of generateStopBasedRidesBatched materializes it first, before the degree-3+ layers).
+		// Only the maxDegree<=2 early exit keeps a fat pair flow (no extension cascade).
+		final boolean pairStubPath = maxDegree > 2;
 
 		// Plan A3 — per-degree checkpoint/resume (off unless checkpointDir is set). Only the
 		// streaming pair-stub D2D path is supported: that IS the week-long exact 100% run the
@@ -310,9 +288,7 @@ public final class BamasEngine {
 		PairGenerator pairGen = new PairGenerator(network, budgetValidator, horizon, algorithmProcessCount,
 				exMasConfig.isEnableBudgetAwareConstraints());
 
-		// On the fat path these hold the pruned degree-2 survivors as fat rides; on the
-		// pairStubPath the survivors live in `pairSurvivorStubs` instead (added to stubLayers).
-		List<Ride> currentDegreeRides = null;
+		// Degree-2 survivors live in `pairSurvivorStubs` (added to stubLayers as the first layer).
 		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns pairSurvivorStubs = null;
 
 		if (pairStubPath) {
@@ -368,29 +344,11 @@ public final class BamasEngine {
 			// before the extension cascade begins.
 			network.compactRetained();
 		} else {
+			// maxDegree == 2 (maxDegree < 2 already returned above): no extension cascade,
+			// so there is no stub layer to build — emit the fat pair universe and finish.
 			List<Ride> pairRides = pairGen.generatePairs(reqArray);
-
-			if (maxDegree <= 2) {
-				allRides.addAll(pairRides);
-				return completeEarly(algorithmStartTime, "maxDegree <= 2");
-			}
-
-			// Phase 3: Build shareability graph from ALL pairs (before pruning)
-			log.info("");
-			log.info("PHASE 3: Building Shareability Graph");
-			log.info("======================================================================");
-			long graphStartTime = System.currentTimeMillis();
-			graph = buildGraph(pairRides);
-			long graphElapsed = System.currentTimeMillis() - graphStartTime;
-			log.info("Graph built: {} edges, {} nodes in {}s",
-					graph.getEdgeCount(), graph.getNodeCount(), String.format("%.1f", graphElapsed / 1000.0));
-
-			// Prune pair rides AFTER graph construction. Graph stays complete (built from
-			// all pairs). Pruned pairs are removed from both the output AND the extension
-			// base set — the MIP only needs one ride per request set, and the extension
-			// re-enumerates orderings independently of the base ride's FIFO/LIFO variant.
-			currentDegreeRides = maybePrunePairRidesAfterGraph(pairRides);
-			allRides.addAll(currentDegreeRides);
+			allRides.addAll(pairRides);
+			return completeEarly(algorithmStartTime, "maxDegree <= 2");
 		}
 
         // Phase 4: Iteratively extend rides with budget validation
@@ -402,7 +360,6 @@ public final class BamasEngine {
 		log.info("PHASE 4: Iterative Ride Extension");
 		log.info("======================================================================");
 		int nextRideIndex = allRides.size();
-		int extensionStartIdx = nextRideIndex; // first index of extension rides in allRides
 		// Stub mode (Task 11): degree-3+ extension rides are held as per-degree StubColumns,
 		// NOT appended to allRides as fat Ride objects. We accumulate the per-degree layers
 		// here and batch-materialize them once at the end, concatenating with the still-fat
@@ -410,7 +367,7 @@ public final class BamasEngine {
 		// is still produced (Task 10 is additive) but used only for control flow + degree-graph;
 		// it is not retained past each iteration. Task 12 makes export streaming.
 		List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> stubLayers =
-				stubMode ? new ArrayList<>() : null;
+				new ArrayList<>();
 		this.runStubLayers = stubLayers; // Plan A2: expose to Phase 5 outside the try block
 		// Task 13: on the pairStubPath the degree-2 survivor layer is the FIRST stub layer, so
 		// the StubRideStore concatenation is fat-singles → pair-layer → degree-3 → … (contract
@@ -467,22 +424,17 @@ public final class BamasEngine {
 			BamasRideExtender extender = new BamasRideExtender(network, graph, budgetValidator,
 													 requests, exMasConfig, prevDegreeGraph);
 
-			// Seam (a): STUB parents whenever a stub layer is available — the previous
-			// iteration's captured layer (degree 3→4+), or, on the Task-13 pairStubPath,
-			// the degree-2 survivor layer at the first iteration (degree 2→3). prevStubLayer
-			// is null only on the fat pair path's first iteration, where the fat overload runs.
-			List<Ride> extended;
-			if (stubMode && prevStubLayer != null) {
-				org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns extensionParents = prevStubLayer;
-				if (exMasConfig.getExtensionParentsTopK() > 0
-						&& (degree + 1) >= exMasConfig.getExtensionParentsTopKMinDegree()
-						&& prevStubLayer.degree() >= 3) {
-					extensionParents = filterExtensionParents(prevStubLayer, requestById);
-				}
-				extended = extender.extendRides(extensionParents, reqArray, nextRideIndex);
-			} else {
-				extended = extender.extendRides(currentDegreeRides, nextRideIndex);
+			// Seam (a): STUB parents — the previous iteration's captured layer (degree 3→4+),
+			// or the degree-2 survivor layer at the first iteration (degree 2→3). The loop only
+			// runs for maxDegree>2 (pairStubPath), so prevStubLayer is always the pair-survivor
+			// layer at first entry and a captured stub layer thereafter — never null.
+			org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns extensionParents = prevStubLayer;
+			if (exMasConfig.getExtensionParentsTopK() > 0
+					&& (degree + 1) >= exMasConfig.getExtensionParentsTopKMinDegree()
+					&& prevStubLayer.degree() >= 3) {
+				extensionParents = filterExtensionParents(prevStubLayer, requestById);
 			}
+			List<Ride> extended = extender.extendRides(extensionParents, reqArray, nextRideIndex);
 			long graphBuildStart = System.currentTimeMillis();
 			prevDegreeGraph = extender.buildDegreeGraph(degree + 1);
 			long graphBuildMs = System.currentTimeMillis() - graphBuildStart;
@@ -495,63 +447,50 @@ public final class BamasEngine {
 			}
 
 			int generatedCount = extended.size();
-			if (stubMode) {
-				// Capture this degree's compact layer (sorted lex, same total order as the
-				// fat `extended` list). RATIO_THRESHOLD inter-degree pruning, when active,
-				// runs over the stub layer (seam b); COVERAGE_TOPK runs once post-loop.
-				org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer =
-						extender.getLastDegreeStubs();
-				if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.RATIO_THRESHOLD) {
-					PostExtensionPruner pruner = buildPruner(exMasConfig);
-					if (pruner != null) {
-						layer = pruner.pruneStubLayer(layer, requestById);
-					}
+			// Capture this degree's compact layer (sorted lex, same total order as the
+			// fat `extended` list). RATIO_THRESHOLD inter-degree pruning, when active,
+			// runs over the stub layer (seam b); COVERAGE_TOPK runs once post-loop.
+			org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer =
+					extender.getLastDegreeStubs();
+			if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.RATIO_THRESHOLD) {
+				PostExtensionPruner pruner = buildPruner(exMasConfig);
+				if (pruner != null) {
+					layer = pruner.pruneStubLayer(layer, requestById);
 				}
-				stubLayers.add(layer);
-				prevStubLayer = layer; // next degree extends this (pruned) layer
+			}
+			stubLayers.add(layer);
+			prevStubLayer = layer; // next degree extends this (pruned) layer
 
-				// Cache-memory tiers (Task 7 Step 3): promote each surviving row's leg segments into
-				// the never-evicted retained tier so a later watermark eviction cannot drop them
-				// before export re-reads them. forEachLegSegment walks the SAME cumulative-time leg
-				// sequence the materializer routes at export, so promotion adds no new cache key (the
-				// legs are already cached from enumeration) and promotion-keys == export-keys by
-				// construction. Then compact the retained overlay into a frozen snapshot (single-
-				// threaded barrier). degree+1 >= 3 here, so every row is a valid forEachLegSegment input.
-				for (int row = 0; row < layer.size(); row++) {
-					org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer
-							.forEachLegSegment(network, layer, row, requestById,
-									network::promoteSegment);
-				}
-				network.compactRetained();
-				// Degree barrier: sample heap and rotate the speculative tier under pressure.
-				// Output-invariant (cross-engine value identity); survivor legs were just promoted
-				// to the retained tier above, so eviction here cannot drop a segment export re-reads.
-				network.checkWatermark();
+			// Cache-memory tiers (Task 7 Step 3): promote each surviving row's leg segments into
+			// the never-evicted retained tier so a later watermark eviction cannot drop them
+			// before export re-reads them. forEachLegSegment walks the SAME cumulative-time leg
+			// sequence the materializer routes at export, so promotion adds no new cache key (the
+			// legs are already cached from enumeration) and promotion-keys == export-keys by
+			// construction. Then compact the retained overlay into a frozen snapshot (single-
+			// threaded barrier). degree+1 >= 3 here, so every row is a valid forEachLegSegment input.
+			for (int row = 0; row < layer.size(); row++) {
+				org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer
+						.forEachLegSegment(network, layer, row, requestById,
+								network::promoteSegment);
+			}
+			network.compactRetained();
+			// Degree barrier: sample heap and rotate the speculative tier under pressure.
+			// Output-invariant (cross-engine value identity); survivor legs were just promoted
+			// to the retained tier above, so eviction here cannot drop a segment export re-reads.
+			network.checkWatermark();
 
-				// Plan A3 barrier: the degree-(degree+1) layer is now finalized (post in-loop
-				// RATIO prune; post-loop COVERAGE_TOPK re-applies uniformly on resume too).
-				// generatedCount (pre-prune) restores nextRideIndex exactly. Manifest written last.
-				if (checkpointMgr != null) {
-					// Journal this degree's new SSSP entries durably before the manifest records
-					// the degree complete (same crash-consistency ordering as the base barrier).
-					drainJournalBarrier(cacheJournal);
-					checkpointMgr.writeDegree(degree + 1, layer, generatedCount);
-					// Plan A3 Task 7: test-only crash injection at the in-loop barrier, right
-					// after the degree-(degree+1) manifest is durable. No-op unless
-					// -Dbamas.checkpoint.killAfterDegree=(degree+1).
-					CheckpointKillSwitch.maybeHaltAfterDegree(degree + 1);
-				}
-			} else {
-				// RATIO_THRESHOLD inter-degree pruning only (legacy keep-fraction gate).
-				// COVERAGE_TOPK is applied once after the full cascade — see post-loop block below.
-				if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.RATIO_THRESHOLD) {
-					PostExtensionPruner pruner = buildPruner(exMasConfig);
-					if (pruner != null) {
-						extended = pruner.prune(extended);
-					}
-				}
-				allRides.addAll(extended);
-				currentDegreeRides = extended;
+			// Plan A3 barrier: the degree-(degree+1) layer is now finalized (post in-loop
+			// RATIO prune; post-loop COVERAGE_TOPK re-applies uniformly on resume too).
+			// generatedCount (pre-prune) restores nextRideIndex exactly. Manifest written last.
+			if (checkpointMgr != null) {
+				// Journal this degree's new SSSP entries durably before the manifest records
+				// the degree complete (same crash-consistency ordering as the base barrier).
+				drainJournalBarrier(cacheJournal);
+				checkpointMgr.writeDegree(degree + 1, layer, generatedCount);
+				// Plan A3 Task 7: test-only crash injection at the in-loop barrier, right
+				// after the degree-(degree+1) manifest is durable. No-op unless
+				// -Dbamas.checkpoint.killAfterDegree=(degree+1).
+				CheckpointKillSwitch.maybeHaltAfterDegree(degree + 1);
 			}
 
 			nextRideIndex += generatedCount; // index space reserved for all generated rides
@@ -562,19 +501,12 @@ public final class BamasEngine {
 		if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.COVERAGE_TOPK) {
 			PostExtensionPruner pruner = buildPruner(exMasConfig);
 			if (pruner != null) {
-				if (stubMode) {
-					// Prune each per-degree stub layer in place (each layer is one degree,
-					// so per-degree COVERAGE_TOPK == per-layer pruning). On the pairStubPath
-					// the degree-2 pair layer is stubLayers[0] and is skipped: master never
-					// applies COVERAGE_TOPK to pairs (they have a separate distance gate).
-					for (int i = extensionLayerStart; i < stubLayers.size(); i++) {
-						stubLayers.set(i, pruner.pruneStubLayer(stubLayers.get(i), requestById));
-					}
-				} else {
-					List<Ride> extensionRides = new java.util.ArrayList<>(allRides.subList(extensionStartIdx, allRides.size()));
-					extensionRides = pruner.prune(extensionRides);
-					allRides = new java.util.ArrayList<>(allRides.subList(0, extensionStartIdx));
-					allRides.addAll(extensionRides);
+				// Prune each per-degree stub layer in place (each layer is one degree,
+				// so per-degree COVERAGE_TOPK == per-layer pruning). On the pairStubPath
+				// the degree-2 pair layer is stubLayers[0] and is skipped: master never
+				// applies COVERAGE_TOPK to pairs (they have a separate distance gate).
+				for (int i = extensionLayerStart; i < stubLayers.size(); i++) {
+					stubLayers.set(i, pruner.pruneStubLayer(stubLayers.get(i), requestById));
 				}
 			}
 		}
@@ -589,34 +521,19 @@ public final class BamasEngine {
 		// (buildRideFromOrdering's cumulative clock misses unwarmed time bins for pairs) and the
 		// generation-copy reqArray (positional resolution, avoiding index-collision via requestById).
 		// NON-DEFERRED contract is preserved: RideMaterializer always populates remainingBudgets.
-		this.runD2DMaterializer = (stubMode && !streamingD2D)
+		// Non-streaming (stop-based ON) path: Phase 5 consumes D2D rides via on-demand
+		// materialization, so build the materializer here. On the streamingD2D path the
+		// per-row materializer is built later, at the StubRideStore export return.
+		this.runD2DMaterializer = !streamingD2D
 				? new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
 						network, budgetValidator, pairGen, reqArray)
 				: null;
 
-		// Seam (c) — deferred budgets relocated to the export pass.
-		// stub mode (either branch): remainingBudgets is populated inline by
-		// RideMaterializer.validateAndPopulateBudgets — the streaming path does it lazily
-		// during forEachMaterialized, the stop-based stub path (Plan A2) does it per-batch
-		// inside generateStopBasedRidesBatched. Either way the stub layers themselves carry
-		// NO budgets, so populateBudgetsBatch must NOT also run in stub mode (it would
-		// double-populate / run on stub-less rows).
-		// Only the non-stub deferred path needs the batch. NOTE: the parity gate scenario is
-		// NON-DEFERRED (deferExtensionBudgetValidation=false), so it does NOT exercise this
-		// branch — the correctness of the stub-mode skip is reasoned, not gate-verified.
-		// Safe on scenarios where budget never rejects (e.g. Bavaria); see BudgetValidator docs.
-		if (!stubMode && exMasConfig.isDeferExtensionBudgetValidation()) {
-			log.info("");
-			log.info("Populating deferred budgets for {} rides...", allRides.size());
-			org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler
-					.snapshot("before-deferred-budget-population");
-			long budgetStart = System.currentTimeMillis();
-			allRides = budgetValidator.populateBudgetsBatch(allRides);
-			log.info("  Deferred budget population took {}s",
-					String.format("%.1f", (System.currentTimeMillis() - budgetStart) / 1000.0));
-			org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler
-					.snapshotAtEndOfDegree(-1, allRides.size());
-		}
+		// Seam (c): remainingBudgets is populated inline by RideMaterializer.validateAndPopulateBudgets
+		// — the streaming path does it lazily during forEachMaterialized, the stop-based path (Plan A2)
+		// does it per-batch inside generateStopBasedRidesBatched. Either way the stub layers carry NO
+		// budgets, so there is no separate deferred-budget batch pass (the old fat populateBudgetsBatch
+		// is gone with the fat path).
 
 		// True D2D total: fat singles+pairs already in allRides, plus stub-layer rows (which
 		// in the streaming path have NOT been added to allRides). Log-only — for traceability.
@@ -704,24 +621,15 @@ public final class BamasEngine {
 			log.info("PHASE 5: Stop-Based Ride Generation (HyperPool Stage 1)");
 			log.info("======================================================================");
 
-			// Plan A2 Task 4: stub mode uses batched materialization + S2S stubbification.
-			// The returned list is used ONLY for Phase 6 (intermediate, full-rides path).
-			// S2S rides are NOT added to allRides in stub mode — the HyperPoolStubRideStore
-			// handles them from runS2SStubs without materialising the entire S2S universe.
-			// Fat path (non-stub) uses the original single-pass approach.
-			if (runD2DMaterializer != null) {
-				stopBasedRides = generateStopBasedRidesBatched(
-						allRides, runStubLayers, runD2DMaterializer, requestById);
-				// Stub mode: do NOT add to allRides — HyperPoolStubRideStore streams them.
-				log.info("Generated {} stop-to-stop rides (stub mode: stored as stubs, not in allRides)",
-						stopBasedRides.size());
-			} else {
-				stopBasedRides = generateStopBasedRides(allRides);
-				if (!stopBasedRides.isEmpty()) {
-					allRides.addAll(stopBasedRides);
-					log.info("Added {} stop-to-stop ride variants", stopBasedRides.size());
-				}
-			}
+			// Batched materialization + S2S stubbification. The returned list is used ONLY for
+			// Phase 6 (intermediate, full-rides path). S2S rides are NOT added to allRides — the
+			// HyperPoolStubRideStore handles them from runS2SStubs without materialising the
+			// entire S2S universe. runD2DMaterializer is always non-null here (stop-based ON ⇒
+			// !streamingD2D); the streamingD2D path returned earlier via StubRideStore.
+			stopBasedRides = generateStopBasedRidesBatched(
+					allRides, runStubLayers, runD2DMaterializer, requestById);
+			log.info("Generated {} stop-to-stop rides (stored as stubs, not in allRides)",
+					stopBasedRides.size());
 		}
 
 		// Phase 6: Hyper-Pooling (HyperPool Stage 2)
@@ -734,102 +642,56 @@ public final class BamasEngine {
 				log.info("PHASE 6: Hyper-Pooling (HyperPool Stage 2)");
 				log.info("======================================================================");
 
-				if (runS2SStubs != null) {
-					// Plan A2 Task 5: stub mode — S2S universe stays compact; full rides are
-					// materialized lazily per cluster during bundling only.
-					hyperPooledRides = generateHyperPooledRidesFromStubs();
-				} else {
-					// Plan A2 (hyperpool index canonicalization): stamp S2S rides with their final
-					// export index BEFORE bundling, so clustering + sourceRideIndices consume
-					// mode-independent indices identical to the stub path.
-					stampFinalS2SIndicesForHyperPool();
-					hyperPooledRides = generateHyperPooledRides(stopBasedRides);
-				}
+				// S2S universe stays compact; full rides are materialized lazily per cluster
+				// during bundling only. runS2SStubs is always non-null here (Phase 5 ran).
+				hyperPooledRides = generateHyperPooledRidesFromStubs();
 				log.info("Generated {} hyper-pooled rides", hyperPooledRides.size());
 			}
 		}
 
-		// Plan A2 Task 4: stub mode bypasses the fat sort+reindex — HyperPoolStubRideStore
-		// performs an equivalent stable sort on its row-reference array at construction.
-		// For the fat path (non-stub), run the original sort+reindex.
-		if (runS2SStubs == null) {
-			// Fat path: sort + reindex allRides (which includes S2S rides).
-			// Sort by: variant (D2D first), then degree (ascending), then by first request index (ascending)
-			allRides.sort(EXPORT_RIDE_COMPARATOR);
-
-			// Re-assign indices sequentially after sorting
-			for (int i = 0; i < allRides.size(); i++) {
-				Ride oldRide = allRides.get(i);
-				Ride newRide = oldRide.toBuilder()
-						.index(i)  // New sequential index
-						.build();
-				allRides.set(i, newRide);
-			}
-		}
+		// The HyperPoolStubRideStore performs the equivalent stable sort + sequential reindex on
+		// its row-reference array at construction (the fat in-place sort+reindex is gone with the
+		// fat path; allRides here holds only fat singles, never the S2S universe).
 
 		// Final summary
 		if (exMasConfig.isEnableStopBased()) {
 			log.info("");
 			log.info("======================================================================");
-			if (runS2SStubs != null) {
-				// Stub mode: count from stubs.
-				int d2dTotal = allRides.size() + (runStubLayers == null ? 0
-						: runStubLayers.stream().mapToInt(
-								org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns::size
-						).sum());
-				int s2sTotal = runS2SStubs.stream().mapToInt(S2SStubColumns::size).sum();
-				if (exMasConfig.isEnableHyperPooling()) {
-					log.info("Final Summary (with Stop-Based Pooling and Hyper-Pooling, stub mode)");
-					log.info("  Door-to-Door rides: {}", d2dTotal);
-					log.info("  Stop-to-Stop rides (stubs): {}", s2sTotal);
-					log.info("  Hyper-Pooled rides: {}", hyperPooledRides.size());
-				} else {
-					log.info("Final Summary (with Stop-Based Pooling, stub mode)");
-					log.info("  Door-to-Door rides: {}", d2dTotal);
-					log.info("  Stop-to-Stop rides (stubs): {}", s2sTotal);
-					log.info("  Total rides: {}", d2dTotal + s2sTotal);
-				}
+			// Count from stubs (runS2SStubs is always non-null here — Phase 5 ran).
+			int d2dTotal = allRides.size() + (runStubLayers == null ? 0
+					: runStubLayers.stream().mapToInt(
+							org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns::size
+					).sum());
+			int s2sTotal = runS2SStubs.stream().mapToInt(S2SStubColumns::size).sum();
+			if (exMasConfig.isEnableHyperPooling()) {
+				log.info("Final Summary (with Stop-Based Pooling and Hyper-Pooling)");
+				log.info("  Door-to-Door rides: {}", d2dTotal);
+				log.info("  Stop-to-Stop rides (stubs): {}", s2sTotal);
+				log.info("  Hyper-Pooled rides: {}", hyperPooledRides.size());
 			} else {
-				long d2dCount = allRides.stream().filter(r -> r.getVariant() == RideVariant.DOOR_TO_DOOR).count();
-				long s2sCount = allRides.stream().filter(r -> r.getVariant() == RideVariant.STOP_TO_STOP).count();
-				if (exMasConfig.isEnableHyperPooling()) {
-					log.info("Final Summary (with Stop-Based Pooling and Hyper-Pooling)");
-					log.info("  Door-to-Door rides: {}", d2dCount);
-					log.info("  Stop-to-Stop rides: {}", s2sCount);
-					log.info("  Hyper-Pooled rides: {}", hyperPooledRides.size());
-					log.info("  Total Ride objects: {}", allRides.size());
-					log.info("  Total HyperPooledRide objects: {}", hyperPooledRides.size());
-				} else {
-					log.info("Final Summary (with Stop-Based Pooling)");
-					log.info("  Door-to-Door rides: {}", d2dCount);
-					log.info("  Stop-to-Stop rides: {}", s2sCount);
-					log.info("  Total rides: {}", allRides.size());
-				}
+				log.info("Final Summary (with Stop-Based Pooling)");
+				log.info("  Door-to-Door rides: {}", d2dTotal);
+				log.info("  Stop-to-Stop rides (stubs): {}", s2sTotal);
+				log.info("  Total rides: {}", d2dTotal + s2sTotal);
 			}
 			log.info("======================================================================");
 		}
 
-		// Plan A2 Task 4: stub mode with stop-based enabled → stream via HyperPoolStubRideStore
-		// (D2D stubs + S2S stubs) instead of materialising all rides into allRides.
-		// runS2SStubs is non-null iff generateStopBasedRidesBatched ran (stubMode && enableStopBased).
-		if (runS2SStubs != null) {
-			S2SRideMaterializer s2sMat = new S2SRideMaterializer(
-					network, budgetValidator, runStopDictionary, exMasConfig);
-			log.info("Stub mode (HyperPool streaming): exporting via HyperPoolStubRideStore — "
-					+ "{} fat D2D + {} D2D stub rows + {} S2S stub rows",
-					allRides.size(),
-					runStubLayers == null ? 0 : runStubLayers.stream().mapToInt(
-						org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns::size
-					).sum(),
-					runS2SStubs.stream().mapToInt(S2SStubColumns::size).sum());
-			return new HyperPoolStubRideStore(
-					allRides, runStubLayers != null ? runStubLayers : new ArrayList<>(),
-					runD2DMaterializer, runS2SStubs, s2sMat, requestById);
-		}
-
-		// Fat path (non-stub path, or stub mode WITHOUT stop-based — the latter returns earlier
-		// via StubRideStore): allRides is the sorted + reindexed full list.
-		return new MaterializedRideStore(allRides);
+		// Stop-based path → stream via HyperPoolStubRideStore (D2D stubs + S2S stubs) instead of
+		// materialising all rides into allRides. Reaching here means enableStopBased was ON
+		// (stop-based OFF returned earlier via StubRideStore), so runS2SStubs is always non-null.
+		S2SRideMaterializer s2sMat = new S2SRideMaterializer(
+				network, budgetValidator, runStopDictionary, exMasConfig);
+		log.info("HyperPool streaming: exporting via HyperPoolStubRideStore — "
+				+ "{} fat D2D + {} D2D stub rows + {} S2S stub rows",
+				allRides.size(),
+				runStubLayers == null ? 0 : runStubLayers.stream().mapToInt(
+					org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns::size
+				).sum(),
+				runS2SStubs.stream().mapToInt(S2SStubColumns::size).sum());
+		return new HyperPoolStubRideStore(
+				allRides, runStubLayers != null ? runStubLayers : new ArrayList<>(),
+				runD2DMaterializer, runS2SStubs, s2sMat, requestById);
 	}
 
 	/**
@@ -921,42 +783,6 @@ public final class BamasEngine {
 		}
 
 		return builder.build();
-	}
-
-	/**
-	 * Generate stop-based ride variants from door-to-door rides.
-	 * Only converts rides with degree >= 2.
-	 */
-	private List<Ride> generateStopBasedRides(List<Ride> doorToDoorRides) {
-		// Filter to D2D rides only
-		List<Ride> d2dRides = doorToDoorRides.stream()
-				.filter(r -> r.getVariant() == RideVariant.DOOR_TO_DOOR)
-				.collect(Collectors.toList());
-
-		if (d2dRides.isEmpty()) {
-			return new ArrayList<>();
-		}
-
-		// Create stop finder based on configuration
-		Network matsimNetwork = network.getNetwork();
-		StopFinderFactory factory = new StopFinderFactory(matsimNetwork, facilities, exMasConfig);
-		StopFinder stopFinder = factory.create();
-		WalkingDistanceCalculator walkCalculator = factory.createWalkingDistanceCalculator();
-
-		// Create generator
-		int algorithmProcessCount = exMasConfig.getAlgorithmProcessCount();
-		// Wrap BudgetToConstraintsCalculator as WalkBudgetProvider (null-safe: null passes through)
-		org.matsim.contrib.demand_extraction.algorithm.generation.WalkBudgetProvider walkBudgetProvider =
-				budgetToConstraints == null ? null :
-				(budget, req, tt, dist, delay) ->
-						budgetToConstraints.budgetToMaxWalkDistance(budget, null, req, tt, dist, delay);
-		StopBasedRideGenerator generator = new StopBasedRideGenerator(
-				network, stopFinder, walkCalculator, budgetValidator, exMasConfig, algorithmProcessCount,
-				walkBudgetProvider);
-
-		// Generate stop-based rides (indices will be assigned after the main algorithm)
-		int startIndex = doorToDoorRides.size();
-		return generator.generateStopBasedRides(d2dRides, startIndex);
 	}
 
 	/**
@@ -1163,98 +989,6 @@ public final class BamasEngine {
 	}
 
 	/**
-	 * Plan A2 (hyperpool index canonicalization) — fat path. Stamp every S2S ride in
-	 * {@code allRides} with its FINAL post-export-sort index <em>before</em> Phase 6.
-	 *
-	 * <p>Phase 6 runs before the export sort+reindex (see {@code generateRides}), so without
-	 * this the HyperPool clustering tie-break (which keys on {@link Ride#getIndex()} via
-	 * {@code StopToStopRideWrapper}) and the emitted {@code sourceRideIndices} would consume
-	 * the PRE-FINAL Phase-5 generation index. That pre-final index is threaded differently in
-	 * the fat vs stub Phase-5 paths, so it diverges between modes even though the final export
-	 * order is identical. Stamping the final index here makes the fat Phase-6 input bit-identical
-	 * to the stub path's (which feeds the same final index via {@code computeSortPermutation}).
-	 *
-	 * <p>Sorts a COPY — {@code allRides}' own order is left untouched, so the later in-place
-	 * export sort+reindex reassigns the identical values (S2S rows land at the same positions)
-	 * and {@code exmas_rides.csv} byte-parity is preserved. The comparator ignores the ride's
-	 * own index, so re-stamping does not perturb the sort.
-	 */
-	private void stampFinalS2SIndicesForHyperPool() {
-		List<Ride> exportOrder = new ArrayList<>(allRides);
-		exportOrder.sort(EXPORT_RIDE_COMPARATOR);
-		for (int i = 0; i < exportOrder.size(); i++) {
-			Ride r = exportOrder.get(i);
-			if (r.getVariant() == RideVariant.STOP_TO_STOP) {
-				r.assignIndex(i);
-			}
-		}
-	}
-
-	/**
-	 * Generate hyper-pooled rides from stop-to-stop rides using HyperPool Stage 2.
-	 *
-	 * <p>Bundles multiple stop-to-stop rides together where passengers walk to/from
-	 * designated stop locations. Creates higher-occupancy rides by allowing nearby
-	 * stops to be served by the same vehicle.
-	 *
-	 * @param stopBasedRides the stop-to-stop rides from Phase 5 (Stage 1)
-	 * @return list of hyper-pooled rides
-	 */
-	private List<HyperPooledRide> generateHyperPooledRides(List<Ride> stopBasedRides) {
-		if (stopBasedRides == null || stopBasedRides.isEmpty()) {
-			log.info("No stop-to-stop rides available for hyper-pooling");
-			return Collections.emptyList();
-		}
-
-		// Filter to S2S rides only
-		List<Ride> s2sRides = stopBasedRides.stream()
-				.filter(r -> r.getVariant() == RideVariant.STOP_TO_STOP)
-				.collect(Collectors.toList());
-
-		if (s2sRides.isEmpty()) {
-			log.info("No STOP_TO_STOP rides found for hyper-pooling");
-			return Collections.emptyList();
-		}
-
-		log.info("Processing {} stop-to-stop rides for hyper-pooling", s2sRides.size());
-
-		// Create StopCompatibilityChecker adapter that implements HyperPoolGenerator.StopCompatibilityChecker
-		StopCompatibilityChecker externalChecker = new StopCompatibilityChecker(exMasConfig);
-		HyperPoolGenerator.StopCompatibilityChecker compatibilityChecker =
-				(r1, r2) -> externalChecker.areCompatible(r1, r2);
-
-		// Create StopRelocator adapter (conditionally) based on config
-		HyperPoolGenerator.StopRelocator stopRelocator = null;
-		if (exMasConfig.getHyperPoolEnableStopRelocation()) {
-			log.info("HyperPool: Stop relocation enabled (optimization, not in original ExMAS/HyperPool)");
-			stopRelocator = createHyperPoolStopRelocator();
-		} else {
-			log.info("HyperPool: Stop relocation disabled (matches original ExMAS/HyperPool)");
-		}
-
-		// Build WalkBudgetProvider (same lambda as Stage 1; null-safe)
-		org.matsim.contrib.demand_extraction.algorithm.generation.WalkBudgetProvider hyperPoolWalkBudgetProvider =
-				budgetToConstraints == null ? null :
-				(budget, req, tt, dist, delay) ->
-						budgetToConstraints.budgetToMaxWalkDistance(budget, null, req, tt, dist, delay);
-
-		// Create HyperPoolGenerator
-		HyperPoolGenerator generator = new HyperPoolGenerator(
-				network, stopRelocator, compatibilityChecker, exMasConfig, budgetValidator,
-				hyperPoolWalkBudgetProvider);
-
-		// Generate hyper-pooled rides
-		// Start index is based on total rides (will be used for HyperPooledRide indexing)
-		int startIndex = allRides.size();
-		List<HyperPooledRide> result = generator.generate(s2sRides, network, startIndex);
-
-		// Log statistics
-		generator.logStatistics();
-
-		return result;
-	}
-
-	/**
 	 * Plan A2 Task 5 — Phase 6 stub path: generate hyper-pooled rides from the S2S stub layers
 	 * accumulated during Phase 5 ({@code runS2SStubs}).
 	 *
@@ -1305,7 +1039,7 @@ public final class BamasEngine {
 				new org.matsim.contrib.demand_extraction.algorithm.bamas.stub.S2SRideMaterializer(
 						network, budgetValidator, runStopDictionary, exMasConfig);
 
-		// Create adapters for HyperPoolGenerator (same as fat-path generateHyperPooledRides)
+		// Create adapters for HyperPoolGenerator
 		StopCompatibilityChecker externalChecker = new StopCompatibilityChecker(exMasConfig);
 		HyperPoolGenerator.StopCompatibilityChecker compatibilityChecker =
 				(r1, r2) -> externalChecker.areCompatible(r1, r2);
@@ -1336,8 +1070,8 @@ public final class BamasEngine {
 	}
 
 	/**
-	 * Creates the {@link HyperPoolGenerator.StopRelocator} used by both the fat-path
-	 * {@link #generateHyperPooledRides} and the stub-path {@link #generateHyperPooledRidesFromStubs}.
+	 * Creates the {@link HyperPoolGenerator.StopRelocator} used by the stub-path
+	 * {@link #generateHyperPooledRidesFromStubs}.
 	 * Returns a Euclidean-distance-based relocator with budget-aware merge rejection.
 	 */
 	private HyperPoolGenerator.StopRelocator createHyperPoolStopRelocator() {
@@ -1386,117 +1120,13 @@ public final class BamasEngine {
 	}
 
 	/**
-	 * Prune pair rides after graph construction. Three sequential passes:
+	 * Degree-2 pair-stub dedup + distance-savings gate over a degree-2 {@link StubColumns}.
+	 * Produces the deduped + gated degree-2 survivor layer that (a) feeds the extender as the
+	 * degree-2 parents and (b) slots into {@link StubRideStore} between the fat singles and the
+	 * degree-3 layer. (Task 13 introduced this as the stub mirror of the former fat
+	 * pair-ride prune; the fat path has since been removed.)
 	 *
-	 * <ol>
-	 *   <li><b>Best-per-set dedup</b> (always on): For each request-set (same two passengers),
-	 *       keep only the variant with shortest rideDistance. Collapses FIFO/LIFO duplicates.
-	 *       Lossless for the MIP (picks one per set) and effectively lossless for extension
-	 *       (re-enumerates orderings anyway).</li>
-	 *   <li><b>Distance-savings gate</b>: Drop pairs below the degree-2 savings threshold
-	 *       (only if pruningDistanceSavingsMinDegree &le; 2). Existing behavior.</li>
-	 *   <li><b>Top-fraction filter</b>: Keep only the top X% of remaining pairs by distance
-	 *       savings (controlled by pairKeepTopFraction, default 1.0 = disabled).</li>
-	 * </ol>
-	 *
-	 * All passes run AFTER the shareability graph is built, preserving graph completeness.
-	 */
-	private List<Ride> maybePrunePairRidesAfterGraph(List<Ride> pairRides) {
-		if (pairRides.isEmpty()) {
-			return pairRides;
-		}
-		int initial = pairRides.size();
-
-		// --- Pass 1: Best-per-set dedup (always on) ---
-		java.util.Map<String, Ride> bestPerSet = new java.util.HashMap<>();
-		for (Ride r : pairRides) {
-			int[] indices = r.getRequestIndices().clone();
-			Arrays.sort(indices);
-			String key = Arrays.toString(indices);
-			Ride existing = bestPerSet.get(key);
-			if (existing == null || r.getRideDistance() < existing.getRideDistance()) {
-				bestPerSet.put(key, r);
-			}
-		}
-		List<Ride> result = new ArrayList<>(bestPerSet.values());
-		int afterDedup = result.size();
-		int dedupRemoved = initial - afterDedup;
-		if (dedupRemoved > 0) {
-			log.info("Pair-ride best-per-set dedup (after graph): kept {}/{} (removed {} FIFO/LIFO duplicates)",
-					afterDedup, initial, dedupRemoved);
-		}
-
-		// --- Pass 2: Distance-savings gate (linear or log) ---
-		double scale = exMasConfig.getPruningDistanceSavingsLogScale();
-		int minDegree = Math.max(2, exMasConfig.getPruningDistanceSavingsMinDegree());
-		boolean linearGateActive = exMasConfig.hasLinearGate();
-		boolean logGateAppliesAtD2 = scale >= 0 && minDegree <= 2;
-		if (linearGateActive || logGateAppliesAtD2) {
-			int beforeGate = result.size();
-			final int degree = 2;
-			result = result.stream().filter(r -> {
-				double sumDistances = Arrays.stream(r.getRequests()).mapToDouble(DrtRequest::getDistance).sum();
-				if (!(sumDistances > 0)) return true;
-				double maxRideDist = org.matsim.contrib.demand_extraction.algorithm.bamas.extension.BamasRideExtender
-						.computeMaxAllowedRideDistance(degree, sumDistances, exMasConfig);
-				return r.getRideDistance() <= maxRideDist;
-			}).collect(Collectors.toList());
-			double diagSum = result.isEmpty() ? 0
-					: Arrays.stream(result.get(0).getRequests()).mapToDouble(DrtRequest::getDistance).sum();
-			double diagGate = diagSum > 0
-					? org.matsim.contrib.demand_extraction.algorithm.bamas.extension.BamasRideExtender
-							.computeMaxAllowedRideDistance(degree, diagSum, exMasConfig) / diagSum
-					: Double.NaN;
-			log.info("Pair-ride distance-savings gate (after graph, shape={}): kept {}/{} (removed {}); gate(d=2) ratio threshold ~ {}",
-					linearGateActive ? "linear" : "log",
-					result.size(), beforeGate, beforeGate - result.size(),
-					Double.isNaN(diagGate) ? "n/a" : String.format(java.util.Locale.ROOT, "%.3f", diagGate));
-		}
-
-		// --- Pass 3: Top-fraction filter by distance savings ---
-		double pairKeepTop = exMasConfig.getPairKeepTopFraction();
-		if (pairKeepTop < 1.0 && !result.isEmpty()) {
-			int beforeFrac = result.size();
-			// Compute fractional savings for each pair
-			double[] savings = new double[result.size()];
-			for (int i = 0; i < result.size(); i++) {
-				Ride r = result.get(i);
-				double sumDist = Arrays.stream(r.getRequests()).mapToDouble(DrtRequest::getDistance).sum();
-				savings[i] = sumDist > 0 ? 1.0 - r.getRideDistance() / sumDist : 0;
-			}
-			// Find threshold at (1 - keepFraction) percentile
-			double[] sorted = savings.clone();
-			Arrays.sort(sorted);
-			int threshIdx = (int) Math.floor(sorted.length * (1.0 - pairKeepTop));
-			threshIdx = Math.min(threshIdx, sorted.length - 1);
-			double threshold = sorted[threshIdx];
-
-			List<Ride> filtered = new ArrayList<>();
-			for (int i = 0; i < result.size(); i++) {
-				if (savings[i] >= threshold) {
-					filtered.add(result.get(i));
-				}
-			}
-			result = filtered;
-			log.info("Pair-ride top-fraction filter (after graph): kept {}/{} (removed {}, threshold={}, keepFraction={})",
-					result.size(), beforeFrac, beforeFrac - result.size(),
-					String.format(java.util.Locale.ROOT, "%.4f", threshold),
-					String.format(java.util.Locale.ROOT, "%.2f", pairKeepTop));
-		}
-
-		log.info("Pair-ride base pruning (after graph): {} -> {} total ({} removed, {} reduction)",
-				initial, result.size(), initial - result.size(),
-				String.format(java.util.Locale.ROOT, "%.1f%%", (1.0 - (double) result.size() / initial) * 100));
-		return result;
-	}
-
-	/**
-	 * Stub-path (Task 13) mirror of {@link #maybePrunePairRidesAfterGraph(List)} over a
-	 * degree-2 {@link StubColumns}. Produces the deduped + gated degree-2 survivor layer
-	 * that (a) feeds the extender as the degree-2 parents and (b) slots into
-	 * {@link StubRideStore} between the fat singles and the degree-3 layer.
-	 *
-	 * <h3>Parity contracts (must match the fat path bit-for-bit)</h3>
+	 * <h3>Internal parity contracts (dedup/gate determinism)</h3>
 	 * <ul>
 	 *   <li><b>Pass-1 dedup iteration order (contract #1):</b> same {@link java.util.HashMap}
 	 *       type, same key {@code Arrays.toString(sortedIndices)}, same insertion sequence
