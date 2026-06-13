@@ -355,6 +355,11 @@ public final class BamasEngine {
 			// full pair universe is dropped here (only the survivor layer is retained), so
 			// the full pair universe never coexists with the extension cascade.
 			pairSurvivorStubs = maybePrunePairStubsAfterGraph(allPairStubs, reqArray);
+			// Cache-memory tiers (Task 7 Step 5): pair generation is complete and its feasible
+			// chain segments were promoted at acceptance (PairGenerator.promotePairChainSegments).
+			// Compact the retained overlay into a frozen snapshot at this single-threaded barrier,
+			// before the extension cascade begins.
+			network.compactRetained();
 		} else {
 			List<Ride> pairRides = pairGen.generatePairs(reqArray);
 
@@ -497,6 +502,24 @@ public final class BamasEngine {
 				}
 				stubLayers.add(layer);
 				prevStubLayer = layer; // next degree extends this (pruned) layer
+
+				// Cache-memory tiers (Task 7 Step 3): promote each surviving row's leg segments into
+				// the never-evicted retained tier so a later watermark eviction cannot drop them
+				// before export re-reads them. forEachLegSegment walks the SAME cumulative-time leg
+				// sequence the materializer routes at export, so promotion adds no new cache key (the
+				// legs are already cached from enumeration) and promotion-keys == export-keys by
+				// construction. Then compact the retained overlay into a frozen snapshot (single-
+				// threaded barrier). degree+1 >= 3 here, so every row is a valid forEachLegSegment input.
+				for (int row = 0; row < layer.size(); row++) {
+					org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer
+							.forEachLegSegment(network, layer, row, requestById,
+									network::promoteSegment);
+				}
+				network.compactRetained();
+				// Degree barrier: sample heap and rotate the speculative tier under pressure.
+				// Output-invariant (cross-engine value identity); survivor legs were just promoted
+				// to the retained tier above, so eviction here cannot drop a segment export re-reads.
+				network.checkWatermark();
 
 				// Plan A3 barrier: the degree-(degree+1) layer is now finalized (post in-loop
 				// RATIO prune; post-loop COVERAGE_TOPK re-applies uniformly on resume too).

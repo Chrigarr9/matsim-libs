@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
@@ -27,8 +28,11 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.network.TravelSegmentLookup;
+import org.matsim.contrib.demand_extraction.algorithm.util.PackedKeyCodec;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
+
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
 /**
  * Post-process ExMAS rides to enrich them with:
@@ -52,6 +56,17 @@ public final class RidePostProcessor {
     private final ExMasConfigGroup config;
     private final TravelSegmentLookup networkCache;
     private final MaxCostResolver maxCostResolver;
+
+    /**
+     * Packed OD/bin keys ({@link PackedKeyCodec#segmentKey}) of every handoff segment the
+     * predecessor/successor pass evaluated — accepted AND rejected. This is the Task-9 "window"
+     * export domain (= the lookup set of Python's {@code compute_dynamic_successors}). Populated
+     * in the parallel evaluation loop, so a {@link ConcurrentLinkedQueue} is used (mirrors
+     * {@code MatsimNetworkCache.pendingSegmentKeys}); {@link #getWindowKeys()} dedups it into a
+     * {@link LongOpenHashSet} after the pass joins. Duplicates and order are irrelevant — the
+     * export sorts deterministically.
+     */
+    private final ConcurrentLinkedQueue<Long> windowKeys = new ConcurrentLinkedQueue<>();
 
     /**
      * Production constructor — wires a full {@link MatsimNetworkCache}.
@@ -348,6 +363,18 @@ public final class RidePostProcessor {
 
                 // Network routing
                 TravelSegment connection = networkCache.getSegment(from, to, endTime);
+                // Cache-memory tiers (Task 7 Step 4): promote every evaluated handoff segment
+                // (accepted OR rejected below) into the never-evicted retained tier. This window
+                // domain — the lookup set of Python's compute_dynamic_successors — must survive
+                // watermark eviction so the connection_cache export is stable. Promotion is purely
+                // additive: getSegment already cached the value, promote only pins it.
+                networkCache.promoteSegment(from, to, endTime);
+                // Task 9: record this evaluated handoff in the "window" export domain — accepted
+                // AND rejected. If it was looked up, it is in the window (the rejection reasons
+                // below do not matter). Pack with the same time-bin convention promoteSegment /
+                // getSegment use, so the export's cache.get(key) resolves the pinned value.
+                windowKeys.add(PackedKeyCodec.segmentKey(
+                        from.index(), to.index(), (int) (endTime / config.getNetworkTimeBinSize())));
                 if (!connection.isReachable()) continue;
 
                 double arrivalTime = endTime + connection.getTravelTime();
@@ -424,6 +451,20 @@ public final class RidePostProcessor {
 		log.info("    Found {} predecessor connections", totalPreds);
 
         return new PredSucc(predArrays, succArrays, reposTimeMeans);
+    }
+
+    /**
+     * Packed OD/bin keys of the handoff segments evaluated by the predecessor/successor pass
+     * (accepted AND rejected) — the Task-9 {@code "window"} connection-cache export domain.
+     * Valid after {@link #process(RideStore)} has run; deduplicates the concurrent collection
+     * queue into a {@link LongOpenHashSet}. Empty when predecessor computation is disabled.
+     */
+    public LongOpenHashSet getWindowKeys() {
+        LongOpenHashSet keys = new LongOpenHashSet(windowKeys.size());
+        for (Long k : windowKeys) {
+            keys.add(k.longValue());
+        }
+        return keys;
     }
 
     private record ConnectionCandidate(int rideId, Id<Link> toLink, double distance, double idlingTime, double travelTime) {

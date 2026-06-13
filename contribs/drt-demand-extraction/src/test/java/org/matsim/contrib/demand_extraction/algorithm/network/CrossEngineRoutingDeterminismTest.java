@@ -139,4 +139,169 @@ class CrossEngineRoutingDeterminismTest {
 		assertTrue(-viaMiss.getNetworkUtility() > viaMiss.getTravelTime() + 1e-9,
 				"wrapped cost must exceed pure travel time by the eps*length tie-breaker (miss fill)");
 	}
+
+	/**
+	 * Eviction-safety contract: a non-adjacent OD routed by cache-miss point-to-point fill
+	 * must be bit-identical to the same OD routed by batchPrecompute (SSSP tree).
+	 *
+	 * <p>Uses the diamond-chain fixture: entry→exit is a multi-hop non-adjacent pair.
+	 * Two fresh caches — one batch-prefilled (tree), one empty (forces cache-miss fill via
+	 * the SpeedyALT {@code computeSegment} path). After Task 5 was reverted, {@code computeSegment}
+	 * routes every non-same-link OD via SpeedyALT; this test (and {@link #treeEqualsAltAcrossManyODs()})
+	 * is the load-bearing guard that SpeedyALT point-to-point == batchPrecompute tree on this fixture.
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	void pointToPointFillEqualsBatchPrecomputeFill() {
+		Net net = diamondChain();
+		TravelTime tt = new FreeSpeedTravelTime();
+		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
+
+		// batchCache: OD is pre-filled by SSSP tree via batchPrecompute.
+		MatsimNetworkCache batchCache = MatsimNetworkCacheTestFixture
+				.createWithRouting(net.network(), tt, td, 900);
+		// pointCache: fresh cache — first getSegment call triggers computeSegment (cache-miss).
+		MatsimNetworkCache pointCache = MatsimNetworkCacheTestFixture
+				.createWithRouting(net.network(), tt, td, 900);
+
+		// entry→exit: multi-hop, definitely non-adjacent (K diamonds between them).
+		Id<Link> from = net.entryLink();
+		Id<Link> to = net.exitLink();
+		double depTime = 8 * 3600;
+
+		batchCache.batchPrecompute(from, depTime, new Id[] { to }, 1e9);
+
+		TravelSegment viaTree = batchCache.getSegment(from, to, depTime);
+		TravelSegment viaPoint = pointCache.getSegment(from, to, depTime);
+
+		assertTrue(viaTree.isReachable(), "batch-filled segment must be reachable");
+		assertTrue(viaPoint.isReachable(), "point-to-point-filled segment must be reachable");
+
+		assertEquals(viaTree.getTravelTime(), viaPoint.getTravelTime(), 0.0,
+				"travel time must be bit-identical: tree fill vs point-to-point fill");
+		assertEquals(viaTree.getDistance(), viaPoint.getDistance(), 0.0,
+				"distance must be bit-identical: tree fill vs point-to-point fill");
+		assertEquals(viaTree.getNetworkUtility(), viaPoint.getNetworkUtility(), 0.0,
+				"network utility must be bit-identical: tree fill vs point-to-point fill");
+	}
+
+	/**
+	 * Strengthened eviction-safety guard: sweep many random (origin, dest, time-bin) pairs and
+	 * assert SpeedyALT point-to-point fill == batchPrecompute SSSP-tree fill on every pair that is
+	 * REACHABLE and NON-ADJACENT (the only class that actually exercises tree-vs-ALT). This is the
+	 * many-OD generalisation of {@link #pointToPointFillEqualsBatchPrecomputeFill()}: if any reachable
+	 * OD disagreed between the two engines, this test goes red.
+	 *
+	 * <p>Determinism: fixed-seed {@link java.util.Random}, so the swept ODs are identical run-to-run.
+	 *
+	 * <p>The sweep varies the time-bin too (FreeSpeedTravelTime is time-independent, so the bin
+	 * cannot change routing, but exercising multiple bins matches the production key shape exactly
+	 * and proves the (origin,dest,bin) key plumbing routes identically across engines per bin).
+	 *
+	 * <p>Non-vacuity safeguards (see in-line comments):
+	 * <ul>
+	 *   <li>Tree fills are issued one {@code batchPrecompute} per {@code (origin, timeBin)} over ALL
+	 *       of that key's sampled dests. {@code batchPrecompute} skips on {@code (origin, timeBin)}
+	 *       once an SSSP was run, so a second call for the same key would NOT tree-fill its new dests
+	 *       — they would silently fall through to SpeedyALT and the "tree vs ALT" check would degrade
+	 *       to "ALT vs ALT". One call per (origin,bin) with all dests avoids that.</li>
+	 *   <li>We count only comparisons that are both reachable and non-adjacent (the genuine
+	 *       cross-engine checks) and assert that count clears a floor, so the test cannot pass
+	 *       green while checking nothing real.</li>
+	 *   <li>We skip a pair only when BOTH engines report unreachable. If exactly one engine reaches
+	 *       it, that is a real disagreement and the assertion fires.</li>
+	 * </ul>
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	void treeEqualsAltAcrossManyODs() {
+		Net net = diamondChain();
+		TravelTime tt = new FreeSpeedTravelTime();
+		TravelDisutility td = new OnlyTimeDependentTravelDisutility(tt);
+
+		final int binSize = 900;
+		// One tree cache (batch-filled) and one point cache (SpeedyALT cache-miss) shared across
+		// the whole sweep. The point cache only ever sees getSegment -> always point-to-point, so
+		// reuse is safe. The tree cache is filled per (origin,bin) below.
+		MatsimNetworkCache treeCache = MatsimNetworkCacheTestFixture
+				.createWithRouting(net.network(), tt, td, binSize);
+		MatsimNetworkCache pointCache = MatsimNetworkCacheTestFixture
+				.createWithRouting(net.network(), tt, td, binSize);
+
+		java.util.List<Id<Link>> linkIds = new java.util.ArrayList<>(net.network().getLinks().keySet());
+		linkIds.sort(java.util.Comparator.comparing(Id::toString)); // deterministic iteration order
+
+		final int SAMPLES = 400;
+		final int BINS = 4; // sweep a handful of distinct time bins (departure = bin * binSize + offset)
+		java.util.Random rng = new java.util.Random(20260612L);
+
+		// Key the grouping on (origin, timeBin) so each gets exactly one batchPrecompute over ALL
+		// its sampled dests (see ssspCompleted-skip note above). depTime is bin*binSize so it maps
+		// to that bin; getSegment recomputes the same bin from the same depTime.
+		record OBKey(Id<Link> origin, int bin) {}
+		java.util.LinkedHashMap<OBKey, java.util.LinkedHashSet<Id<Link>>> destsByOriginBin =
+				new java.util.LinkedHashMap<>();
+		for (int s = 0; s < SAMPLES; s++) {
+			Id<Link> o = linkIds.get(rng.nextInt(linkIds.size()));
+			Id<Link> d = linkIds.get(rng.nextInt(linkIds.size()));
+			int bin = 30 + rng.nextInt(BINS); // bins 30..33
+			destsByOriginBin.computeIfAbsent(new OBKey(o, bin), k -> new java.util.LinkedHashSet<>()).add(d);
+		}
+
+		// Tree-fill: one SSSP per (origin,bin) covering all its sampled dests. Large bound (1e9) so the
+		// tree reaches every forward node on this small net — guarantees genuinely tree-derived values.
+		for (java.util.Map.Entry<OBKey, java.util.LinkedHashSet<Id<Link>>> e : destsByOriginBin.entrySet()) {
+			double depTime = e.getKey().bin() * binSize;
+			Id<Link>[] dests = e.getValue().toArray(new Id[0]);
+			treeCache.batchPrecompute(e.getKey().origin(), depTime, dests, 1e9);
+		}
+
+		int crossEngineChecks = 0; // reachable AND non-adjacent: the genuine tree-vs-ALT comparisons
+		for (java.util.Map.Entry<OBKey, java.util.LinkedHashSet<Id<Link>>> e : destsByOriginBin.entrySet()) {
+			Id<Link> o = e.getKey().origin();
+			double depTime = e.getKey().bin() * binSize;
+			Link oLink = net.network().getLinks().get(o);
+			for (Id<Link> d : e.getValue()) {
+				Link dLink = net.network().getLinks().get(d);
+
+				TravelSegment viaTree = treeCache.getSegment(o, d, depTime);
+				TravelSegment viaPoint = pointCache.getSegment(o, d, depTime);
+
+				// Skip ONLY when both engines agree the OD is unreachable (a shared unreachable is
+				// not a value disagreement). If exactly one is reachable, fall through and let the
+				// reachability/value assertions fire.
+				if (!viaTree.isReachable() && !viaPoint.isReachable()) {
+					continue;
+				}
+				assertEquals(viaTree.isReachable(), viaPoint.isReachable(),
+						"reachability must agree across engines for " + o + " -> " + d);
+
+				// Same-link and adjacent (originLink.toNode == destLink.fromNode) ODs are routed by
+				// SpeedyALT in BOTH caches (batchPrecompute defers them to computeSegment too), so
+				// they are not cross-engine checks — exclude them from the floor count, but still
+				// assert value identity (they must agree trivially).
+				boolean sameLink = o.equals(d);
+				boolean adjacent = !sameLink
+						&& oLink.getToNode().getId().equals(dLink.getFromNode().getId());
+
+				assertEquals(viaTree.getTravelTime(), viaPoint.getTravelTime(), 1e-9,
+						"travel time must match (tree vs ALT) for " + o + " -> " + d);
+				assertEquals(viaTree.getDistance(), viaPoint.getDistance(), 1e-9,
+						"distance must match (tree vs ALT) for " + o + " -> " + d);
+				assertEquals(viaTree.getNetworkUtility(), viaPoint.getNetworkUtility(), 1e-9,
+						"network utility must match (tree vs ALT) for " + o + " -> " + d);
+
+				if (!sameLink && !adjacent) {
+					crossEngineChecks++;
+				}
+			}
+		}
+
+		// Non-vacuity floor: the sweep must actually exercise the tree-vs-ALT path on a meaningful
+		// number of reachable, non-adjacent ODs — otherwise it could pass while checking nothing.
+		System.out.println("[treeEqualsAltAcrossManyODs] reachable non-adjacent cross-engine checks: "
+				+ crossEngineChecks);
+		assertTrue(crossEngineChecks >= 50,
+				"expected >= 50 reachable non-adjacent cross-engine comparisons, got " + crossEngineChecks);
+	}
 }
