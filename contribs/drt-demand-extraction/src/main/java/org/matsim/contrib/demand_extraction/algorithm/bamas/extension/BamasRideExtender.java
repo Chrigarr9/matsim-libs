@@ -54,6 +54,8 @@ public final class BamasRideExtender {
 	private final BudgetValidator budgetValidator;
 	private final Map<Integer, DrtRequest> requestMap;
 	private final ExMasConfigGroup exMasConfig;
+	// Single owner of the distance-savings gate formula, built once from config.
+	private final DistanceSlopeGate distanceGate;
 	private static final double EPSILON = 1e-9;
 	private static final double TIME_FEASIBILITY_EPSILON = 1.0;
 
@@ -84,6 +86,7 @@ public final class BamasRideExtender {
 		// identical last-write-wins map the materializer and pruning also use — see RequestResolver.
 		this.requestMap = resolver.indexMap();
 		this.exMasConfig = exMasConfig;
+		this.distanceGate = DistanceSlopeGate.fromConfig(exMasConfig);
 		this.prevDegreeGraph = prevDegreeGraph;
 	}
 
@@ -882,40 +885,20 @@ public final class BamasRideExtender {
 	 * @return max ride distance in meters, or Double.MAX_VALUE if pruning disabled
 	 */
 	double computeMaxAllowedRideDistance(DrtRequest[] setRequests) {
-		if (exMasConfig == null) return Double.MAX_VALUE;
 		double sumDirectDistances = 0;
 		for (DrtRequest r : setRequests) sumDirectDistances += r.directDistance;
-		if (!(sumDirectDistances > 0)) return Double.MAX_VALUE;
-		return computeMaxAllowedRideDistance(setRequests.length, sumDirectDistances, exMasConfig);
+		return distanceGate.maxAllowedRideDistance(setRequests.length, sumDirectDistances);
 	}
 
 	/**
-	 * Branch on gate shape: linear (intercept + slope*d) when configured, else
-	 * the log gate. Returns the maximum allowed ride distance for a pool at the
-	 * given degree, or {@link Double#MAX_VALUE} when the gate is disabled.
+	 * Maximum allowed ride distance for a pool at the given degree, or
+	 * {@link Double#MAX_VALUE} when the gate is disabled. Thin delegate to
+	 * {@link DistanceSlopeGate} (the single owner of the gate formula); retained as a
+	 * static entry point for {@code BamasEngine}'s degree-2 pair gate.
 	 */
 	public static double computeMaxAllowedRideDistance(int degree, double sumDistances,
 			org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg) {
-		if (cfg == null || !(sumDistances > 0)) return Double.MAX_VALUE;
-		double maxSaving = cfg.getPruningDistanceSavingsMax();
-		if (!(maxSaving >= 0)) maxSaving = 0.0;
-		maxSaving = Math.min(0.99, maxSaving);
-
-		if (cfg.hasLinearGate()) {
-			double gate = cfg.getPruningGateLinearIntercept() + cfg.getPruningGateLinearSlope() * degree;
-			// Floor at (1 - maxSaving) to bound how aggressive the gate can get at
-			// high degree. Gate > 1.0 is permitted (loose at low degree).
-			gate = Math.max(1.0 - maxSaving, gate);
-			return gate * sumDistances;
-		}
-
-		double scale = cfg.getPruningDistanceSavingsLogScale();
-		if (scale < 0) return Double.MAX_VALUE;
-		int minDegree = Math.max(2, cfg.getPruningDistanceSavingsMinDegree());
-		if (degree < minDegree) return Double.MAX_VALUE;
-		double requiredSaving = scale * (Math.log(degree) / Math.log(2.0));
-		requiredSaving = Math.max(0.0, Math.min(Math.min(0.99, maxSaving), requiredSaving));
-		return (1.0 - requiredSaving) * sumDistances;
+		return DistanceSlopeGate.fromConfig(cfg).maxAllowedRideDistance(degree, sumDistances);
 	}
 
 	private double sumRequestDistances(Ride r) {
