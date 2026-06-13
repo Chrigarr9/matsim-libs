@@ -337,7 +337,7 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	public enum ExtensionParentsSelectionRule { TOP_K, MMR }
 	private ExtensionParentsSelectionRule extensionParentsSelectionRule = ExtensionParentsSelectionRule.TOP_K;
 	private double extensionParentsMmrLambda = 0.0;           // diversity penalty; 0 == plain TOP_K
-	private long extensionParentsTier2NodeCap = 0L;          // 0 = hard filter; >0 = total DFS node cap for unmarked parents
+	private long extensionParentsTier2NodeCap = 0L;          // 0 = hard filter; >0 = PER-unmarked-parent nodes-to-first-valid cap (per-parent ⇒ deterministic, no shared budget)
 
 	// ── checkpoint/resume (Plan A3). Directory for per-degree stub checkpoints + the
 	// connection-cache journal. Empty string ("") = checkpointing OFF (no code path active).
