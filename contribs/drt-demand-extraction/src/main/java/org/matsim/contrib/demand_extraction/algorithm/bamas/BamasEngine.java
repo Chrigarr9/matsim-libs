@@ -92,10 +92,11 @@ public final class BamasEngine {
 	// Plan A3 — optional routing-input file paths for the checkpoint fingerprint. When set,
 	// their content hashes enrich the (otherwise config-only) RunFingerprint so a resume refuses
 	// to continue against changed requests/travel-times/network even when the config is identical.
-	// Left null by the DI adapter (BamasAlgorithm) today — the engine only sees in-memory requests
-	// and an in-memory network, not their source files; the runner that owns those paths calls
-	// setFingerprintInputs() once a checkpoint CLI surface exists. Null ⇒ config-only fingerprint
-	// (exactly what Task 3 wrote), so write/resume stay symmetric and existing checkpoints remain
+	// Two-phase resume (RunDemandExtractionPhase2) sets these via
+	// BamasAlgorithm.setFingerprintInputs(), so the fingerprint pins the routing-input file
+	// contents. The single-process DI path leaves them null (the engine sees only in-memory
+	// requests/network, not source files), yielding a config-only fingerprint; checkpoint/resume
+	// is therefore two-phase-only. Write/resume stay symmetric and existing checkpoints remain
 	// compatible. See Plan A3 Task 4 review note.
 	private java.nio.file.Path fpRequestsPath;
 	private java.nio.file.Path fpTravelTimesPath;

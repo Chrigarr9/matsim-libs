@@ -17,8 +17,9 @@ import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
  * Fingerprint compatibility refusal for checkpoint/resume (Plan A3 Task 2).
  *
  * <p>A resume must refuse a run whose config/requests/routing inputs differ (silent stub or
- * cache corruption otherwise) but MUST allow a different thread count (Plan A made output
- * scheduling-independent).
+ * cache corruption otherwise) but MUST allow a different thread count — routing is deterministic
+ * via {@code DeterministicTravelDisutility} (verified by {@code CrossEngineRoutingDeterminismTest}),
+ * so core count does not change stub/cache identity.
  */
 class RunFingerprintTest {
 
@@ -69,6 +70,19 @@ class RunFingerprintTest {
 		assertEquals(
 				RunFingerprint.compute(config(), null, null, null, "bamas-v1"),
 				RunFingerprint.compute(c2, null, null, null, "bamas-v1"));
+	}
+
+	/**
+	 * Guard: the excluded-param set is EXACTLY {@code {algorithmProcessCount, checkpointDir}}. Both
+	 * exclusions are sound only on stated grounds (deterministic routing; location-not-identity).
+	 * Pinning the set means adding a new exclusion fails here, forcing a deliberate review of
+	 * whether that param truly cannot change stub/cache identity — an unreviewed addition is a
+	 * silent under-refusal that corrupts a resume.
+	 */
+	@Test
+	void excludedParamsAreExactlyTheTwoSoundExclusions() {
+		assertEquals(java.util.Set.of("algorithmProcessCount", "checkpointDir"),
+				RunFingerprint.EXCLUDED_PARAMS);
 	}
 
 	/** The checkpoint dir path itself must not fingerprint (resume into a moved dir is legitimate). */

@@ -35,19 +35,33 @@ import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
  * that <i>could</i> have continued) is safe; under-refusal silently corrupts. The only params
  * excluded are those that provably do not change stub/cache identity.
  *
- * <p><b>{@code algorithmProcessCount} is excluded</b> on purpose: Plan A made the output
- * scheduling-independent, so a crash on one box may resume on another with a different core
- * count. <b>{@code checkpointDir} is excluded</b> because the checkpoint location is not part
- * of the algorithm identity (resuming a moved checkpoint dir is legitimate).
+ * <p><b>{@code algorithmProcessCount} is excluded</b> on purpose: routing is wrapped in
+ * {@link org.matsim.contrib.demand_extraction.algorithm.network.DeterministicTravelDisutility},
+ * which makes the routed output engine-, thread-, and batch-order-independent (verified by
+ * {@code CrossEngineRoutingDeterminismTest}), so a crash on one box may resume on another with a
+ * different core count without changing stub/cache identity. <b>This exclusion is sound only while
+ * that deterministic decorator is active on the fingerprint-bearing routing path</b>;
+ * {@code RunFingerprintTest} pins {@link #EXCLUDED_PARAMS} to exactly the two keys below, so any
+ * new exclusion must be a deliberate, reviewed edit rather than a silent under-refusal.
+ * <p>(The earlier "Plan A made the output scheduling-independent" rationale was refuted by
+ * {@code outputs/a3-killresume-gate-1pct/GATE_RESULTS.md}: BAMAS is NOT scheduling-independent in
+ * general; determinism comes specifically from the disutility decorator above.)
+ * <b>{@code checkpointDir} is excluded</b> because the checkpoint location is not part of the
+ * algorithm identity (resuming a moved checkpoint dir is legitimate).
  */
 public final class RunFingerprint {
 
 	/** Bump to force all existing checkpoints to be treated as incompatible. */
 	public static final int CHECKPOINT_VERSION = 1;
 
-	/** Config params that do NOT affect stub/cache identity and are excluded from the hash. */
-	private static final Set<String> EXCLUDED_PARAMS = Set.of(
-			"algorithmProcessCount",  // thread count — output is scheduling-independent (Plan A)
+	/**
+	 * Config params that do NOT affect stub/cache identity and are excluded from the hash.
+	 * Package-private so {@code RunFingerprintTest} can pin this set exactly — adding a key is a
+	 * silent under-refusal risk and must be a deliberate, reviewed edit (see the class javadoc on
+	 * why {@code algorithmProcessCount} is excludable only while routing stays deterministic).
+	 */
+	static final Set<String> EXCLUDED_PARAMS = Set.of(
+			"algorithmProcessCount",  // thread count — routing is deterministic via DeterministicTravelDisutility (CrossEngineRoutingDeterminismTest)
 			"checkpointDir");         // the checkpoint location itself
 
 	private RunFingerprint() {}
