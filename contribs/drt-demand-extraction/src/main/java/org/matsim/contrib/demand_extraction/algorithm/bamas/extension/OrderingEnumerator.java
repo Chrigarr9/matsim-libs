@@ -228,6 +228,31 @@ public final class OrderingEnumerator {
 			int[] seedParentOrigin, int[] seedParentDest, int seedNewRequest,
 			boolean budgetAwareConstraints,
 			Consumer<Ordering> evaluator) {
+		enumerateAndEvaluateSeeded(requestIndices, graph, network, requests, bestValidDist,
+				seedParentOrigin, seedParentDest, seedNewRequest, budgetAwareConstraints,
+				0L, evaluator);
+	}
+
+	/**
+	 * Overload that also accepts a per-set first-valid node cap.
+	 *
+	 * <p>When {@code firstValidNodeCap > 0} and the DFS has expanded that many DFS
+	 * nodes without recording a first valid ordering
+	 * ({@code curSetNodesFirstValid == -1}), the set is abandoned immediately and
+	 * produces no ordering. When {@code firstValidNodeCap == 0} the cap is disabled
+	 * and behaviour is byte-identical to the zero-arg overload.
+	 *
+	 * @param firstValidNodeCap per-set node budget before the first valid ordering;
+	 *        {@code 0} disables the cap (no behaviour change)
+	 */
+	public static void enumerateAndEvaluateSeeded(
+			int[] requestIndices, ShareabilityGraph graph,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			double[] bestValidDist,
+			int[] seedParentOrigin, int[] seedParentDest, int seedNewRequest,
+			boolean budgetAwareConstraints,
+			long firstValidNodeCap,
+			Consumer<Ordering> evaluator) {
 
 		PairInfo[] constraints = extractConstraints(requestIndices, graph);
 		if (constraints == null) return;
@@ -265,6 +290,7 @@ public final class OrderingEnumerator {
 				seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
 				minIn, totalMinInInit,
 				budgetAwareConstraints,
+				firstValidNodeCap,
 				evaluator, connTT, connDist, connUtil);
 
 		EnumerationStats.get().probeSetEnd(n);
@@ -332,6 +358,7 @@ public final class OrderingEnumerator {
 			int[] seedLocalOrigin, int[] seedLocalDest, int seedLocalNewRequest,
 			double[] minIn, double totalMinInRemaining,
 			boolean budgetAwareConstraints,
+			long firstValidNodeCap,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
@@ -341,6 +368,11 @@ public final class OrderingEnumerator {
 		// abort this subtree. bestRide is already held by the evaluator; the monotone
 		// predicate makes every further node entry return immediately, unwinding the set.
 		if (probeStats.orderingBudgetExhausted()) return;
+		// Per-set first-valid node cap (Task A2): if the cap is enabled and the node
+		// budget before the first valid ordering is exhausted, abandon the set.
+		// Strictly gated on cap > 0 so the OFF path is byte-identical.
+		if (firstValidNodeCap > 0 && probeStats.curSetNodesFirstValid < 0
+				&& probeStats.curSetNodes >= firstValidNodeCap) return;
 
 		if (depth == n) {
 			// All origins placed — enumerate destination orderings with parent-consistent seed.
@@ -350,6 +382,7 @@ public final class OrderingEnumerator {
 					seedLocalDest, seedLocalNewRequest,
 					minIn, totalMinInRemaining,
 					budgetAwareConstraints,
+					firstValidNodeCap,
 					evaluator, connTT, connDist, connUtil);
 			return;
 		}
@@ -430,6 +463,7 @@ public final class OrderingEnumerator {
 						seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
 						minIn, newTotalMinInRemaining0,
 						budgetAwareConstraints,
+						firstValidNodeCap,
 						evaluator,
 						connTT, connDist, connUtil);
 				used[c] = false;
@@ -512,6 +546,7 @@ public final class OrderingEnumerator {
 						seedLocalOrigin, seedLocalDest, seedLocalNewRequest,
 						minIn, newTotalMinInRemaining,
 						budgetAwareConstraints,
+						firstValidNodeCap,
 						evaluator,
 						connTT, connDist, connUtil);
 				used[c] = false;
@@ -854,6 +889,7 @@ public final class OrderingEnumerator {
 			int[] seedLocalDest, int seedLocalNewRequest,
 			double[] minIn, double totalMinInRemaining,
 			boolean budgetAwareConstraints,
+			long firstValidNodeCap,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
@@ -892,6 +928,7 @@ public final class OrderingEnumerator {
 				seedLocalDest, seedLocalNewRequest,
 				minIn, totalMinInRemaining,
 				budgetAwareConstraints,
+				firstValidNodeCap,
 				evaluator, connTT, connDist, connUtil);
 	}
 
@@ -923,6 +960,7 @@ public final class OrderingEnumerator {
 			int[] seedLocalDest, int seedLocalNewRequest,
 			double[] minIn, double totalMinInRemaining,
 			boolean budgetAwareConstraints,
+			long firstValidNodeCap,
 			Consumer<Ordering> evaluator,
 			double[] connTT, double[] connDist, double[] connUtil) {
 
@@ -930,6 +968,9 @@ public final class OrderingEnumerator {
 		stats.probeNode();
 		// Per-set node budget (Design A): abort once the post-first-valid tail is spent.
 		if (stats.orderingBudgetExhausted()) return;
+		// Per-set first-valid node cap (Task A2): abandon before first valid if cap hit.
+		if (firstValidNodeCap > 0 && stats.curSetNodesFirstValid < 0
+				&& stats.curSetNodes >= firstValidNodeCap) return;
 
 		if (depth == n) {
 			// Complete ordering — call evaluator inline with pre-routed segment data.
@@ -1077,6 +1118,7 @@ public final class OrderingEnumerator {
 						seedLocalDest, seedLocalNewRequest,
 						minIn, newTotalMinInRemainingDest,
 						budgetAwareConstraints,
+						firstValidNodeCap,
 						evaluator, connTT, connDist, connUtil);
 				used[c] = false;
 			}
