@@ -49,7 +49,7 @@ import org.matsim.core.trafficmonitoring.FreeSpeedTravelTime;
  *
  * <p>Self-contained (no Lyon env): a short corridor network plus a handful of mutually-shareable
  * requests that pool up to degree 4 under a pass-through budget validator. The engine takes the
- * {@code pairStubPath} (stub mode default-on, stop-based off, maxDegree&gt;2), so checkpoints are
+ * {@code pairLayerPath} (stub mode default-on, stop-based off, maxDegree&gt;2), so checkpoints are
  * written and resume is exercised end-to-end.
  *
  * <h3>What this asserts</h3>

@@ -12,11 +12,11 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
 /**
  * Stub-backed {@link RideStore} that streams D2D and S2S output for the HyperPool path
- * ({@code stubModeEnabled && enableStopBased}) without ever holding the full fat ride list
+ * ({@code enableStopBased}) without ever holding the full fat ride list
  * in memory.
  *
  * <h3>Relationship to {@link ColumnarRideStore}</h3>
- * {@link ColumnarRideStore} covers only the D2D path ({@code stubModeEnabled && !enableStopBased}).
+ * {@link ColumnarRideStore} covers only the D2D path ({@code !enableStopBased}).
  * This store extends that design to include S2S stubs: it holds fat D2D singles+pairs,
  * D2D degree-3+ stub layers (materialized on demand via {@link RideMaterializer}), and
  * S2S stub layers (materialized on demand via {@link StopRideMaterializer}).
@@ -66,10 +66,10 @@ public final class HyperPoolRideStore implements RideStore {
 	 * <ul>
 	 *   <li>{@code sourceOf[r] == SRC_FAT_D2D}: fat D2D, local row = {@code localRowOf[r]}
 	 *       in {@code fatSingularPairs}.</li>
-	 *   <li>{@code 0 <= sourceOf[r] < d2dStubLayers.size()}: D2D stub layer at that index,
+	 *   <li>{@code 0 <= sourceOf[r] < d2dLayers.size()}: D2D stub layer at that index,
 	 *       local row in that layer.</li>
-	 *   <li>{@code sourceOf[r] >= d2dStubLayers.size()}: S2S stub layer at index
-	 *       {@code sourceOf[r] - d2dStubLayers.size()}, local row = {@code localRowOf[r]}.</li>
+	 *   <li>{@code sourceOf[r] >= d2dLayers.size()}: S2S stub layer at index
+	 *       {@code sourceOf[r] - d2dLayers.size()}, local row = {@code localRowOf[r]}.</li>
 	 * </ul>
 	 */
 	private final int[] sourceOf;
@@ -77,9 +77,9 @@ public final class HyperPoolRideStore implements RideStore {
 
 	/**
 	 * @param fatSingularPairs fat D2D singles + pairs (insertion order)
-	 * @param d2dStubLayers    D2D degree-3+ stub layers (degree order)
+	 * @param d2dLayers    D2D degree-3+ stub layers (degree order)
 	 * @param d2dMaterializer  D2D pinned-ordering replayer
-	 * @param s2sStubLayers    S2S stub layers (degree order, Phase-5 row order within degree)
+	 * @param s2sLayers    S2S stub layers (degree order, Phase-5 row order within degree)
 	 * @param s2sMaterializer  S2S pinned-stop replayer
 	 * @param requestById      global index → request map
 	 */
@@ -112,7 +112,7 @@ public final class HyperPoolRideStore implements RideStore {
 	 *
 	 * <p>Delegates to {@link #computeSortPermutation} so the exact same ordering is
 	 * available <em>before</em> Phase 6 (the bundling step) — see
-	 * {@code BamasEngine.generateHyperPooledRidesFromStubs}. Phase 6 stamps each S2S
+	 * {@code BamasEngine.generateHyperPooledRidesFromLayers}. Phase 6 stamps each S2S
 	 * wrapper with its final post-sort index (its position {@code r} in this permutation)
 	 * so HyperPool clustering and {@code sourceRideIndices} consume the FINAL,
 	 * mode-independent index identical to what export assigns here (Plan A2 hyperpool fix).
@@ -135,7 +135,7 @@ public final class HyperPoolRideStore implements RideStore {
 	 * @return {@code int[2][total]}: {@code [0] = sourceOf}, {@code [1] = localRowOf}, with
 	 *         the same encoding documented on the {@link #sourceOf} field — {@code SRC_FAT_D2D}
 	 *         for fat rows, {@code [0, nD2D)} for D2D stub layers, {@code >= nD2D} for S2S stub
-	 *         layers (where {@code nD2D = d2dStubLayers.size()}).
+	 *         layers (where {@code nD2D = d2dLayers.size()}).
 	 */
 	public static int[][] computeSortPermutation(
 			List<Ride> fatSingularPairs,

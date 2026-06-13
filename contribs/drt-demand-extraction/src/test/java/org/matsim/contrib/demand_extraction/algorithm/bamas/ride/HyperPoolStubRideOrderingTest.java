@@ -14,7 +14,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
  * {@link HyperPoolRideStore#computeSortPermutation}.
  *
  * <p>This permutation is shared between the export ({@link HyperPoolRideStore}) and the
- * pre-bundling index stamping in {@code BamasEngine.generateHyperPooledRidesFromStubs}. The fix
+ * pre-bundling index stamping in {@code BamasEngine.generateHyperPooledRidesFromLayers}. The fix
  * rests on one property: the final S2S ride index is a pure function of
  * {@code (variant, degree, firstPickup) + insertion order} and is INDEPENDENT of the
  * mode-dependent pre-final {@code rideIndex} stamped on each stub row. These tests lock that

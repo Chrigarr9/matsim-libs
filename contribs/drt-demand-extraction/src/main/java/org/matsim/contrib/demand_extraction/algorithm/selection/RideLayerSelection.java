@@ -19,7 +19,7 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  * selector, and rebuilds a filtered {@link RideLayer} of the survivors.
  *
  * <p>This replaces the stub methods of the former {@code PostExtensionPruner}
- * ({@code pruneStubLayer}/{@code pruneStubCoverageTopK}/{@code pruneStubRatioThreshold}) and
+ * ({@code pruneLayer}/{@code pruneCoverageTopK}/{@code pruneRatioThreshold}) and
  * {@code ExtensionParentFilter}. The selection rule logic now lives once in
  * {@link RideSelector}; this class owns only the stub I/O and the per-site emission order.
  *
@@ -30,9 +30,9 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  * <ul>
  *   <li>{@link #prune} COVERAGE_TOPK — survivors in {@link SelectionTieBreak} order
  *       (quality descending, lex-smaller set, lower row); matches the former
- *       {@code pruneStubCoverageTopK} emission.</li>
+ *       {@code pruneCoverageTopK} emission.</li>
  *   <li>{@link #prune} RATIO_THRESHOLD and {@link #filterParents} — survivors in ascending
- *       row order; matches the former {@code pruneStubRatioThreshold} and
+ *       row order; matches the former {@code pruneRatioThreshold} and
  *       {@code ExtensionParentFilter}.</li>
  * </ul>
  */
@@ -40,7 +40,7 @@ public final class RideLayerSelection {
 
 	private RideLayerSelection() { /* non-instantiable */ }
 
-	// === post-extension / inter-degree pruning (replaces PostExtensionPruner.pruneStubLayer) ===
+	// === post-extension / inter-degree pruning (replaces PostExtensionPruner.pruneLayer) ===
 
 	/**
 	 * Prune one per-degree layer per {@code cfg}'s pruning mode, returning a new layer of
@@ -78,7 +78,7 @@ public final class RideLayerSelection {
 				SelectionRule.COVERAGE_TOPK, effectiveK, 0.0);
 
 		// Emit survivors in SelectionTieBreak order (quality desc, lex tie, row tie) — NOT
-		// stored row order. This mirrors the former pruneStubCoverageTopK, which emitted in
+		// stored row order. This mirrors the former pruneCoverageTopK, which emitted in
 		// `order` (quality descending). The stable final engine sort preserves this within a
 		// first-pickup-index tie group, so the emission order is byte-significant.
 		Integer[] order = new Integer[n];
@@ -104,7 +104,7 @@ public final class RideLayerSelection {
 		// RATIO_THRESHOLD always ranks by fractional savings (mirrors the old fat path, which
 		// hardcoded savingsRatio here regardless of the configured quality metric). Threshold by
 		// the floor index — kept iff savings >= sorted[floor(n*(1-frac))]; survivors emit in
-		// ascending row order, matching the former pruneStubRatioThreshold.
+		// ascending row order, matching the former pruneRatioThreshold.
 		double[] savings = new double[n];
 		for (int i = 0; i < n; i++) {
 			double sumDirect = sumDirectDistanceRow(layer, i, requestById);

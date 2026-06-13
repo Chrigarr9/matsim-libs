@@ -59,7 +59,7 @@ public final class RideMaterializer {
 	private final PairGenerator pairGenerator;
 	/**
 	 * Task 13: the raw generation request array (same instance whose positions
-	 * {@code PairGenerator.generatePairStubs} recorded into the pair layer). The degree-2
+	 * {@code PairGenerator.generatePairs} recorded into the pair layer). The degree-2
 	 * branch resolves a pair's requests by {@code reqArray[position]} — the exact generation
 	 * COPY — NOT by {@code requestById.get(index)}, because Paper-2 Extension-2 hub copies
 	 * collide on one {@code index} and the map's last-write-wins canonical copy can carry a
@@ -135,7 +135,7 @@ public final class RideMaterializer {
 			if (pairGenerator == null || reqArray == null) {
 				throw new IllegalStateException(
 						"Degree-2 stub layer encountered with no PairGenerator/reqArray wired into RideMaterializer "
-						+ "(row " + row + "); pair stubs can only be materialized on the streaming pairStubPath");
+						+ "(row " + row + "); pair stubs can only be materialized on the streaming pairLayerPath");
 			}
 			// Resolve by reqArray POSITION, not requestById — the pair layer stored the exact
 			// generation copy's position (Task 13). Under Ext-2 hub-index collision, resolving

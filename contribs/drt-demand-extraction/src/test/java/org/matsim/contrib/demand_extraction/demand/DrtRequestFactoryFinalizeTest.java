@@ -92,7 +92,7 @@ public class DrtRequestFactoryFinalizeTest {
      * Stub BudgetValidator: returns +1.0 for ACCESS_LEG, -0.5 for CONTINUATION_LEG.
      * Also returns a recognisable markerContext from computeScoringContext.
      */
-    private static BudgetValidator buildStubValidator() {
+    private static BudgetValidator buildLayerValidator() {
         ExMasConfigGroup exMas = new ExMasConfigGroup();
         exMas.setDrtMode("drt");
         exMas.setMinDrtAccessEgressDistance(100.0);
@@ -128,7 +128,7 @@ public class DrtRequestFactoryFinalizeTest {
         accessCopy.setScoringContext(dummyCtx);
         continuationCopy.setScoringContext(dummyCtx);
 
-        BudgetValidator stub = buildStubValidator();
+        BudgetValidator stub = buildLayerValidator();
 
         // FinalizeHarness: overrides budgetDerivedCaps to trivial fixed values so we
         // don't need a real BudgetToConstraintsCalculator wired to a full Config.

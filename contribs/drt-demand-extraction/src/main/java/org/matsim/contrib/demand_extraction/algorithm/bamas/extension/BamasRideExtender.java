@@ -65,7 +65,7 @@ public final class BamasRideExtender {
 	private ConcurrentHashMap<Long, Ride> lastResultBySetHash;
 	// Stub-mode shadow: compact SoA container for the last degree's winning rides,
 	// sorted in the same lex order as the fat results list. Null when stub mode is off.
-	// Task 11: the engine captures this via getLastDegreeStubs() and feeds it as the next
+	// Task 11: the engine captures this via getLastDegreeRows() and feeds it as the next
 	// degree's parents (degree 3→4+) and as the per-degree layer to materialize at the end.
 	// buildDegreeGraph still consumes the fat resultBySetHash (populated unconditionally and
 	// order-independent → identical graph); Task 12 migrates the graph build to stubs.
@@ -139,14 +139,14 @@ public final class BamasRideExtender {
 	/**
 	 * Stub-mode parent consumption (seam a): extend a degree-D layer held as a
 	 * {@link RideLayer} to degree D+1. Each parent row is wrapped in a
-	 * {@link StubParentView} that reconstructs {@code originsGlobal()} /
+	 * {@link RowParentView} that reconstructs {@code originsGlobal()} /
 	 * {@code destsGlobal()} / {@code requestIndices()} from the packed local
 	 * positions, and reports {@code rideDistance()} via {@link RideMetricScaling#fromDeci}
 	 * — bit-identical to the old {@code getRideDistance()} double (Task 4), so the
 	 * EPSILON comparison in {@link #compareParentCanonicalKey} reproduces the exact
 	 * canonical parent choice the fat path made.
 	 *
-	 * @param parentStubs  degree-D winning rides as a SoA container (sorted lex)
+	 * @param parentRows  degree-D winning rides as a SoA container (sorted lex)
 	 * @param requestTable global request array indexed by {@link DrtRequest#index}
 	 * @param nextRideIndex starting index for new rides
 	 * @return list of degree-(D+1) rides, one per feasible set
@@ -227,9 +227,9 @@ public final class BamasRideExtender {
 		final int parentsTotal = parents.size();
 		AtomicLong lastProgressLogTime = new AtomicLong(System.currentTimeMillis());
 		ConcurrentHashMap<Long, EnumerationStats> threadStatsMap = new ConcurrentHashMap<>();
-		// Per-thread stub buffers: keyed by Thread.currentThread().getId(). Only populated
-		// when stubModeEnabled; otherwise stays empty. Each thread only writes to its own
-		// key, so no locking is needed beyond computeIfAbsent's atomicity on the map.
+		// Per-thread row buffers: keyed by Thread.currentThread().getId(). Each thread only
+		// writes to its own key, so no locking is needed beyond computeIfAbsent's atomicity
+		// on the map; the buffers are merged into the degree's RideLayer after the join.
 		ConcurrentHashMap<Long, RideLayer> rowBuffers = new ConcurrentHashMap<>();
 
 		BlockingQueue<ExtensionTask> queue = new ArrayBlockingQueue<>(Math.max(16, parallelism * 4));
@@ -371,7 +371,7 @@ public final class BamasRideExtender {
 		this.lastResultBySetHash = resultBySetHash;
 
 		// Merge per-worker stub buffers into one sorted RideLayer — the degree-(D+1)
-		// layer the engine carries forward (BamasEngine.getLastDegreeStubs). Fat-overload
+		// layer the engine carries forward (BamasEngine.getLastDegreeRows). Fat-overload
 		// callers (the MissingTriple regression tests) simply ignore it.
 		this.lastDegreeRows = rowBuffers.isEmpty()
 				? new RideLayer(targetDegree > 0 ? targetDegree : 1)
@@ -457,7 +457,7 @@ public final class BamasRideExtender {
 	 * kinds the extender consumes (seam a):
 	 * <ul>
 	 *   <li>{@link RideParentView} — a fat {@link Ride} (degree 2→3, pairs stay fat).</li>
-	 *   <li>{@link StubParentView} — one row of a {@link RideLayer} layer (3→4+).</li>
+	 *   <li>{@link RowParentView} — one row of a {@link RideLayer} layer (3→4+).</li>
 	 * </ul>
 	 *
 	 * <p>Exposes exactly what the sort, the producer loop and {@link #processSet}

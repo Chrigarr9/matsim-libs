@@ -330,7 +330,7 @@ public final class RideLayer {
 	public static RideLayer mergeSorted(Collection<RideLayer> parts) {
 		if (parts.isEmpty()) {
 			throw new IllegalArgumentException(
-					"mergeSorted requires non-empty collection; use new StubColumns(degree) for the empty case");
+					"mergeSorted requires non-empty collection; use new RideLayer(degree) for the empty case");
 		}
 
 		// Validate all parts share one degree

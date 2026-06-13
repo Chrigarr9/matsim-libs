@@ -73,7 +73,7 @@ public final class BamasEngine {
 	// consumed when building HyperPoolRideStore for the stub-mode export path.
 	private List<org.matsim.contrib.demand_extraction.algorithm.bamas.ride.StopRideLayer> runS2SRows;
 	private org.matsim.contrib.demand_extraction.algorithm.bamas.ride.StopLocationDictionary runStopDictionary;
-	// Plan A2 Task 5 — requestById map needed by generateHyperPooledRidesFromStubs; set early in run()
+	// Plan A2 Task 5 — requestById map needed by generateHyperPooledRidesFromLayers; set early in run()
 	// alongside the other run* fields so Phase 6 can access it without parameter threading.
 	private java.util.Map<Integer, DrtRequest> runRequestById;
 
@@ -172,7 +172,7 @@ public final class BamasEngine {
      * @param drtRequests MATSim requests with budget constraints
      * @return a {@link RideStore} over all feasible rides (single, pairs, and extensions
      *         up to maxDegree). On the memory-critical D2D path
-     *         ({@code stubModeEnabled && !enableStopBased}) this is a streaming
+     *         ({@code !enableStopBased}) this is a streaming
      *         {@link ColumnarRideStore} that materializes rows lazily; otherwise a
      *         {@link MaterializedRideStore} wrapping the fat, sorted, reindexed list.
      */
@@ -193,7 +193,7 @@ public final class BamasEngine {
 		// only the fat singles. The 100% target run has stop_based=false.
 		this.runStreamingD2D = !exMasConfig.isEnableStopBased();
 		// Degree-2 pair stubs: the full pair universe is generated, graphed, and deduped as a
-		// compact RideLayer layer (never a fat List<Ride>), then carried as stubLayers[0] and
+		// compact RideLayer layer (never a fat List<Ride>), then carried as rideLayers[0] and
 		// extended. The stop-based path consumes the same pair-stub layer through Phase 5 (Pass 2
 		// of generateStopBasedRidesBatched materializes it first, before the degree-3+ layers).
 		// Only the maxDegree<=2 early exit keeps a fat pair flow (no extension cascade).
@@ -230,7 +230,7 @@ public final class BamasEngine {
 		org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer allPairs =
 				generatePairUniverse(resume);
 		// Phase 3 (stub): build the shareability graph from ALL pair stubs (pre-dedup).
-		// Deterministic from allPairStubs on both fresh and resume — no routing.
+		// Deterministic from allPairs on both fresh and resume — no routing.
 		log.info("");
 		log.info("PHASE 3: Building Shareability Graph");
 		log.info("======================================================================");
@@ -242,7 +242,7 @@ public final class BamasEngine {
 
 		checkpointBaseIfFresh(allPairs, resume);
 
-		// Degree-2 survivors live in `pairSurvivorStubs` (added to stubLayers as the first layer).
+		// Degree-2 survivors live in `pairSurvivors` (added to rideLayers as the first layer).
 		org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer pairSurvivors =
 				prunePairUniverse(allPairs);
 
@@ -425,7 +425,7 @@ public final class BamasEngine {
 			ResumeState resume) {
 		// Phase 2 (stub): the full pair universe as a degree-2 RideLayer. On resume it is
 		// LOADED from the base checkpoint (review addendum F6) instead of re-generated —
-		// generatePairStubs is the routing-heavy phase the checkpoint exists to skip. The
+		// generatePairs is the routing-heavy phase the checkpoint exists to skip. The
 		// loaded universe carries the positionsFlat copy-identity column (F1), so the graph
 		// build + survivor prune below reproduce the original run bit-for-bit.
 		org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer allPairs;
@@ -449,8 +449,8 @@ public final class BamasEngine {
 			ResumeState resume) {
 		CheckpointManager checkpointMgr = resume.checkpointMgr();
 		// Plan A3: persist the PRE-PRUNE pair universe before it is dropped (review addendum
-		// F6) — on resume the shareability graph rebuilds via buildGraph(allPairStubs) and the
-		// degree-2 survivors via maybePrunePairStubsAfterGraph, both deterministic, so no
+		// F6) — on resume the shareability graph rebuilds via buildGraph(allPairs) and the
+		// degree-2 survivors via maybePrunePairsAfterGraph, both deterministic, so no
 		// separate graph/edge-list serializer is needed. Written before the prune so the
 		// persisted universe matches what the graph was built from. Skipped on resume (the
 		// base checkpoint is already on disk and was just read back from it).
@@ -489,7 +489,7 @@ public final class BamasEngine {
 	 * extendDegrees: Phase 4 — the iterative ride-extension loop. Accumulates per-degree stub
 	 * layers (with the degree-2 pair survivor layer first), restores completed degrees on resume,
 	 * applies in-loop RATIO pruning, promotes survivor legs, drains checkpoint barriers, and
-	 * returns the per-degree stub layers ({@code runStubLayers}).
+	 * returns the per-degree stub layers ({@code runRideLayers}).
 	 */
 	private List<org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer> extendDegrees(
 			org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer pairSurvivors,
@@ -518,7 +518,7 @@ public final class BamasEngine {
 		List<org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer> rideLayers =
 				new ArrayList<>();
 		this.runRideLayers = rideLayers; // Plan A2: expose to Phase 5 outside the try block
-		// Task 13: on the pairStubPath the degree-2 survivor layer is the FIRST stub layer, so
+		// Task 13: on the pairLayerPath the degree-2 survivor layer is the FIRST stub layer, so
 		// the ColumnarRideStore concatenation is fat-singles → pair-layer → degree-3 → … (contract
 		// #3). extensionLayerStart marks where degree-3+ layers begin, so the post-loop
 		// COVERAGE_TOPK pass skips the pair layer (master applies COVERAGE_TOPK only to
@@ -530,13 +530,13 @@ public final class BamasEngine {
 		}
 		this.runExtensionLayerStart = extensionLayerStart; // consumed by applyPostExtensionSelection
 		// Previous degree's captured (and possibly RATIO-pruned) stub layer, fed as the
-		// next degree's parents. On the pairStubPath this is the degree-2 survivor layer
+		// next degree's parents. On the pairLayerPath this is the degree-2 survivor layer
 		// (degree 2→3 extends stubs); on the fat path it is null (degree 2→3 uses fat pairs).
 		org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer prevRideLayer = pairPath ? pairSurvivors : null;
 		DegreeGraph prevDegreeGraph = null;
 
 		// Plan A3 resume: replay the COMPLETED extension degrees from the checkpoint instead of
-		// re-extending them. Load degree layers 3..H into stubLayers, restore prevStubLayer (the
+		// re-extending them. Load degree layers 3..H into rideLayers, restore prevRideLayer (the
 		// parents for degree H+1), restore nextRideIndex from the manifest GENERATED counts (the
 		// reserved index space, not the surviving row count), and seed prevDegreeGraph — the
 		// degree-H DegreeGraph the next iteration's extender consumes — by rebuilding it from the
@@ -576,7 +576,7 @@ public final class BamasEngine {
 
 			// Seam (a): STUB parents — the previous iteration's captured layer (degree 3→4+),
 			// or the degree-2 survivor layer at the first iteration (degree 2→3). The loop only
-			// runs for maxDegree>2 (pairStubPath), so prevStubLayer is always the pair-survivor
+			// runs for maxDegree>2 (pairLayerPath), so prevRideLayer is always the pair-survivor
 			// layer at first entry and a captured stub layer thereafter — never null.
 			org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer extensionParents = prevRideLayer;
 			if (exMasConfig.getExtensionParentsTopK() > 0
@@ -659,8 +659,8 @@ public final class BamasEngine {
 		// cascade terminates, so the full cascade runs unimpeded and K compression is a final step.
 		if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.COVERAGE_TOPK) {
 			// Prune each per-degree stub layer in place (each layer is one degree,
-			// so per-degree COVERAGE_TOPK == per-layer pruning). On the pairStubPath
-			// the degree-2 pair layer is stubLayers[0] and is skipped: master never
+			// so per-degree COVERAGE_TOPK == per-layer pruning). On the pairLayerPath
+			// the degree-2 pair layer is rideLayers[0] and is skipped: master never
 			// applies COVERAGE_TOPK to pairs (they have a separate distance gate).
 			for (int i = extensionLayerStart; i < rideLayers.size(); i++) {
 				rideLayers.set(i, org.matsim.contrib.demand_extraction.algorithm.selection.RideLayerSelection
@@ -687,7 +687,7 @@ public final class BamasEngine {
 		// on-demand materialization instead of bulk-materializing all stubs into allRides first.
 		// The materializer is stored as an instance field so Phase 5 (outside this try block) can
 		// call generateStopBasedRidesBatched with it. allRides holds only the fat singles; the
-		// degree-2 pair layer (stubLayers[0]) and degree-3+ layers are fed to Phase 5 directly.
+		// degree-2 pair layer (rideLayers[0]) and degree-3+ layers are fed to Phase 5 directly.
 		// The 4-arg form (pairGen + reqArray) is REQUIRED: Phase 5 Pass 2 now materializes the
 		// degree-2 pair layer, and degree-2 rebuild needs pairGen's fixed-time routing
 		// (buildRideFromOrdering's cumulative clock misses unwarmed time bins for pairs) and the
@@ -719,7 +719,7 @@ public final class BamasEngine {
 		long totalElapsed = System.currentTimeMillis() - runAlgorithmStartTime;
 		double totalSeconds = totalElapsed / 1000.0;
 		int[] rideCounts = summarizeRideCounts(allRides);
-		// On the pairStubPath, pairs live in stubLayers[0] (degree 2), not allRides — split
+		// On the pairLayerPath, pairs live in rideLayers[0] (degree 2), not allRides — split
 		// the stub-row count into the pair layer and the degree-3+ layers for an accurate log.
 		int pairRows = pairPath && !rideLayers.isEmpty() ? rideLayers.get(0).size() : 0;
 		int higherRows = rideLayerRows - pairRows;
@@ -748,15 +748,15 @@ public final class BamasEngine {
 		if (streamingD2D) {
 			// Task 13: pass pairGen so RideMaterializer can rebuild degree-2 pair stubs via the
 			// generator's fixed-time routing (buildRideFromOrdering's cumulative clock would miss
-			// unwarmed time bins for pairs). On the pairStubPath stubLayers[0] is the pair layer.
-			// Task 13: wire the SAME reqArray instance whose positions generatePairStubs recorded,
+			// unwarmed time bins for pairs). On the pairLayerPath rideLayers[0] is the pair layer.
+			// Task 13: wire the SAME reqArray instance whose positions generatePairs recorded,
 			// so the degree-2 materialize resolves each pair request by reqArray[position] (the
 			// exact generation copy) instead of the index-collision-prone requestById.
 			org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer materializer =
 					new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
 							network, budgetValidator, runPairGen, runResolver);
 			log.info("Stub mode (streaming): exporting {} D2D rides ({} fat singles+pairs + {} stub rows) "
-					+ "via StubRideStore — no batch-materialize, no fat sort/reindex",
+					+ "via ColumnarRideStore — no batch-materialize, no fat sort/reindex",
 					totalD2D, allRides.size(), rideLayerRows);
 			// Plan A3 Task 5: all checkpoint barriers are drained. The lazy export below routes
 			// only the never-cached backstop class (point-to-point, reproduced identically on
@@ -790,7 +790,7 @@ public final class BamasEngine {
 
 			// Batched materialization + S2S stubbification. The returned list is used ONLY for
 			// Phase 6 (intermediate, full-rides path). S2S rides are NOT added to allRides — the
-			// HyperPoolRideStore handles them from runS2SStubs without materialising the
+			// HyperPoolRideStore handles them from runS2SLayers without materialising the
 			// entire S2S universe. runD2DMaterializer is always non-null here (stop-based ON ⇒
 			// !streamingD2D); the streamingD2D path returned earlier via ColumnarRideStore.
 			stopBasedRides = generateStopBasedRidesBatched(
@@ -817,7 +817,7 @@ public final class BamasEngine {
 				log.info("======================================================================");
 
 				// S2S universe stays compact; full rides are materialized lazily per cluster
-				// during bundling only. runS2SStubs is always non-null here (Phase 5 ran).
+				// during bundling only. runS2SLayers is always non-null here (Phase 5 ran).
 				hyperPooledRides = generateHyperPooledRidesFromRows();
 				log.info("Generated {} hyper-pooled rides", hyperPooledRides.size());
 			}
@@ -832,7 +832,7 @@ public final class BamasEngine {
 		if (exMasConfig.isEnableStopBased()) {
 			log.info("");
 			log.info("======================================================================");
-			// Count from stubs (runS2SStubs is always non-null here — Phase 5 ran).
+			// Count from stubs (runS2SLayers is always non-null here — Phase 5 ran).
 			int d2dTotal = allRides.size() + (runRideLayers == null ? 0
 					: runRideLayers.stream().mapToInt(
 							org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer::size
@@ -862,10 +862,10 @@ public final class BamasEngine {
 
 		// Stop-based path → stream via HyperPoolRideStore (D2D stubs + S2S stubs) instead of
 		// materialising all rides into allRides. Reaching here means enableStopBased was ON
-		// (stop-based OFF returned earlier via ColumnarRideStore), so runS2SStubs is always non-null.
+		// (stop-based OFF returned earlier via ColumnarRideStore), so runS2SLayers is always non-null.
 		StopRideMaterializer s2sMat = new StopRideMaterializer(
 				network, budgetValidator, runStopDictionary, exMasConfig);
-		log.info("HyperPool streaming: exporting via HyperPoolStubRideStore — "
+		log.info("HyperPool streaming: exporting via HyperPoolRideStore — "
 				+ "{} fat D2D + {} D2D stub rows + {} S2S stub rows",
 				allRides.size(),
 				runRideLayers == null ? 0 : runRideLayers.stream().mapToInt(
@@ -1165,15 +1165,15 @@ public final class BamasEngine {
 		runStopDictionary = stopDictionary;
 
 		// Return full S2S rides. In fat-mode Phase 6, these are consumed via generateHyperPooledRides.
-		// In stub-mode Phase 6 (Task 5+), generateHyperPooledRidesFromStubs reads runS2SStubs directly
+		// In stub-mode Phase 6 (Task 5+), generateHyperPooledRidesFromLayers reads runS2SLayers directly
 		// and never materialises the full S2S universe — but we still need this list as a no-op return
-		// value (the caller ignores it in stub mode: Phase 6 switches on runS2SStubs != null).
+		// value (the caller ignores it in stub mode: Phase 6 switches on runS2SLayers != null).
 		return allS2SRidesForPhase6;
 	}
 
 	/**
 	 * Plan A2 Task 5 — Phase 6 stub path: generate hyper-pooled rides from the S2S stub layers
-	 * accumulated during Phase 5 ({@code runS2SStubs}).
+	 * accumulated during Phase 5 ({@code runS2SLayers}).
 	 *
 	 * <p>Constructs {@link StopToStopRideWrapper} instances backed by stub scalars (no full
 	 * {@link Ride} allocation) and deferred materializers.  The wrapper getters suffice for the
@@ -1254,7 +1254,7 @@ public final class BamasEngine {
 
 	/**
 	 * Creates the {@link HyperPoolGenerator.StopRelocator} used by the stub-path
-	 * {@link #generateHyperPooledRidesFromStubs}.
+	 * {@link #generateHyperPooledRidesFromLayers}.
 	 * Returns a Euclidean-distance-based relocator with budget-aware merge rejection.
 	 */
 	private HyperPoolGenerator.StopRelocator createHyperPoolStopRelocator() {
@@ -1481,7 +1481,7 @@ public final class BamasEngine {
 	 * Plan B: select the EXTEND-marked subset of degree-D stub parents for top-K
 	 * extension pruning, returning a new RideLayer containing only the marked rows
 	 * in their original lex order. The full {@code parents} layer is unchanged (it is
-	 * already in stubLayers for output and encoded in the prior degree graph); only
+	 * already in rideLayers for output and encoded in the prior degree graph); only
 	 * the producer parents for the NEXT degree are restricted. K=0 never reaches here.
 	 */
 	private org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer filterExtensionParents(

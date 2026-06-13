@@ -14,7 +14,7 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  * without ever holding the full fat ride list in memory.
  *
  * <h3>When it is used</h3>
- * Only on the memory-critical D2D path: {@code stubModeEnabled && !enableStopBased}
+ * Only on the memory-critical D2D path: {@code !enableStopBased}
  * (the Lyon parity gate and the 100% target run). When stop-based pooling is enabled,
  * Phase 5 needs the materialized D2D rides as <em>input</em>, so the engine stays on the
  * existing fat path ({@link MaterializedRideStore}) — this store is never constructed
@@ -91,7 +91,7 @@ public final class ColumnarRideStore implements RideStore {
 
 	/**
 	 * @param fatSingularPairs singles + pairs (already in the engine's insertion order); D2D
-	 * @param stubLayers       degree-3+ stub layers in degree order (lex-sorted within layer)
+	 * @param rideLayers       degree-3+ stub layers in degree order (lex-sorted within layer)
 	 * @param materializer     stateless replayer (network + budget validator)
 	 * @param requestById      global index → request map (resolve by index, never array pos)
 	 */

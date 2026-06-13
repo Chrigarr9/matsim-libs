@@ -19,7 +19,7 @@ class RideSelectorTest {
         assertEquals(IntOpenHashSet.of(0, 1), kept);
     }
     @Test void coverageTopKEqualsPerRequestTopKAsKeptSet() {
-        // COVERAGE_TOPK (port of PostExtensionPruner.pruneStubCoverageTopK: keep a row iff
+        // COVERAGE_TOPK (port of PostExtensionPruner.pruneCoverageTopK: keep a row iff
         // some member request still has cov<K, then charge ALL members) yields the SAME
         // kept-set as PER_REQUEST_TOP_K (union of each request's independent top-K). Proof:
         // a row kept by coverage via member q implies every higher-quality row incident to q

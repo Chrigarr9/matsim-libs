@@ -92,19 +92,19 @@ public final class RideLayerIO {
 		int magic = d.readInt();
 		if (magic != MAGIC) {
 			throw new IOException(String.format(
-					"StubColumns checkpoint: bad magic 0x%08X (expected 0x%08X) — not a stub file or corrupt",
+					"RideLayer checkpoint: bad magic 0x%08X (expected 0x%08X) — not a stub file or corrupt",
 					magic, MAGIC));
 		}
 		int version = d.readInt();
 		if (version != VERSION) {
-			throw new IOException("StubColumns checkpoint: version " + version
+			throw new IOException("RideLayer checkpoint: version " + version
 					+ " != supported " + VERSION + " — incompatible checkpoint, rerun from scratch");
 		}
 		int degree = d.readInt();
 		int size = d.readInt();
 		boolean hasPositions = d.readBoolean();
 		if (degree < 1 || size < 0) {
-			throw new IOException("StubColumns checkpoint: invalid degree=" + degree + " size=" + size);
+			throw new IOException("RideLayer checkpoint: invalid degree=" + degree + " size=" + size);
 		}
 
 		int flat = size * degree;

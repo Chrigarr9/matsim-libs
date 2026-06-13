@@ -672,7 +672,7 @@ public class HyperPoolGenerator {
      * <p>Row order = insertion order across layers = Phase-5 output order, matching
      * the fat path's {@code wrapStopToStopRides(List&lt;Ride&gt;)} construction order.
      *
-     * @param s2sStubLayers  per-degree S2S stub layers (degree-ascending order from Phase 5)
+     * @param s2sLayers  per-degree S2S stub layers (degree-ascending order from Phase 5)
      * @param s2sMaterializer pinned-stop replay materializer
      * @param stopDictionary  the stop dictionary built during Phase 5
      * @param requestById     global request lookup
@@ -747,7 +747,7 @@ public class HyperPoolGenerator {
      * occupancy) without materializing any full ride.  Full rides are materialized
      * lazily per-cluster during bundling.
      *
-     * @param s2sStubLayers  per-degree S2S stub layers from Phase 5
+     * @param s2sLayers  per-degree S2S stub layers from Phase 5
      * @param s2sMaterializer pinned-stop replay materializer
      * @param stopDictionary  stop dictionary built during Phase 5
      * @param requestById     global request lookup
