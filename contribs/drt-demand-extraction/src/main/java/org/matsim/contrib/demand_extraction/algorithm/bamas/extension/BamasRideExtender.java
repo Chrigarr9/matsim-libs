@@ -160,19 +160,27 @@ public final class BamasRideExtender {
 		return extendParents(parentViews, targetDegree, nextRideIndex);
 	}
 
-	private List<Ride> extendParents(List<ParentView> ridesToExtend, int targetDegree, int nextRideIndex) {
+	List<Ride> extendParents(List<ParentView> ridesToExtend, int targetDegree, int nextRideIndex) {
 		log.info("Extending {} sets from degree {} to {} ...",
 				ridesToExtend.size(), targetDegree - 1, targetDegree);
 		long phaseStartTime = System.currentTimeMillis();
 
-		// Sort parents by (routedDistance ASC, sortedRequestIndices lex) so the
-		// streaming producer claims each child set with the tightest-seeding
-		// parent first. Ties on distance fall through to lex for determinism.
-		// See compareParentCanonicalKey for the full order definition.
+		// Sort parents so the streaming producer claims each child set with the
+		// canonical parent first. When any parent carries a finite first-valid cap
+		// (tier-2 second chance, Task A4), marked-ness (cap == 0) is the PRIMARY key:
+		// a marked parent must out-claim an unmarked one even when the unmarked one
+		// is distance-smaller, so any set reachable from a marked parent is searched
+		// unbounded (cap 0) exactly as it was under the old hard filter — preserving
+		// the invariant "second chance only ever ADDS rides". Within a marked-ness
+		// tier (and on the OFF path, where no parent is capped) the order falls
+		// through to (routedDistance ASC, sortedRequestIndices lex) — byte-identical
+		// to today. See compareParentClaimKey / compareParentCanonicalKey.
 		List<ParentView> parents = new ArrayList<>(ridesToExtend);
-		parents.sort((a, b) -> compareParentCanonicalKey(
-				a.rideDistance(), a.sortedRequestIndices(),
-				b.rideDistance(), b.sortedRequestIndices()));
+		final boolean anyCapped = parents.stream().anyMatch(p -> p.firstValidNodeCap() > 0);
+		parents.sort((a, b) -> compareParentClaimKey(
+				anyCapped,
+				a.firstValidNodeCap(), a.rideDistance(), a.sortedRequestIndices(),
+				b.firstValidNodeCap(), b.rideDistance(), b.sortedRequestIndices()));
 
 		// Collect unique base sets for neighbor enumeration (iteration order is
 		// now deterministic since `parents` is sorted).
@@ -453,6 +461,39 @@ public final class BamasRideExtender {
 	}
 
 	/**
+	 * Total order on parents used for canonical claiming, with marked-ness gated on
+	 * {@code anyCapped}.
+	 *
+	 * <p>When {@code anyCapped} is {@code true} (some parent in the pool carries a
+	 * finite first-valid cap), marked-ness is the PRIMARY key: a marked parent
+	 * ({@code cap == 0}) sorts before an unmarked one ({@code cap > 0}) regardless of
+	 * distance. Within a marked-ness tier the order falls through to
+	 * {@link #compareParentCanonicalKey} (distance ASC, then lex on sorted indices).
+	 *
+	 * <p>When {@code anyCapped} is {@code false} (the production OFF path — every
+	 * parent is marked with cap 0) the marked-ness compare is skipped entirely and the
+	 * result is byte-identical to a bare {@link #compareParentCanonicalKey} call.
+	 *
+	 * <p>This is why marked-first only ever ADDS rides: any child set reachable from a
+	 * marked parent is claimed by a marked parent at cap 0, so its search runs
+	 * unbounded exactly as it did under the old hard filter; only genuinely
+	 * unmarked-only sets receive a finite cap.
+	 *
+	 * <p>Package-private with a primitive signature so the claim order is unit-testable
+	 * without constructing full {@link ParentView} fixtures.
+	 */
+	static int compareParentClaimKey(boolean anyCapped,
+									 long capA, double distA, int[] indicesA,
+									 long capB, double distB, int[] indicesB) {
+		if (anyCapped) {
+			// cap == 0 (marked) sorts before cap > 0 (unmarked).
+			int markedCmp = Boolean.compare(capA > 0, capB > 0);
+			if (markedCmp != 0) return markedCmp;
+		}
+		return compareParentCanonicalKey(distA, indicesA, distB, indicesB);
+	}
+
+	/**
 	 * Minimal read-only view of a parent ride, abstracting over the two parent
 	 * kinds the extender consumes (seam a):
 	 * <ul>
@@ -606,6 +647,7 @@ public final class BamasRideExtender {
 				newSet, graph, network, setRequests, bestValidDist,
 				seedParentOrigin, seedParentDest, seedNewRequest,
 				exMasConfig.isEnableBudgetAwareConstraints(),
+				parentRide.firstValidNodeCap(),
 				(ordering) -> evaluateOrdering(ordering, newSet, setRequests,
 						bestValidDist, bestRide, stats));
 
