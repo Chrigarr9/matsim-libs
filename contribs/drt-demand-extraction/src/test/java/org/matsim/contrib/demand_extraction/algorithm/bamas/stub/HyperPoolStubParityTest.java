@@ -143,6 +143,18 @@ class HyperPoolStubParityTest {
     }
 
     private static void configureMonetaryConstants(Config config) {
+        // Phase-1 TripRouter routing must be deterministic under parallel cacheModes. The
+        // dvrp-grid scenario binds the MATSim default RandomizingTimeDistanceTravelDisutility
+        // (no explicit car factory here), which draws an independent sigma=3.0 perturbation per
+        // router instance — and ModeRoutingCache builds a fresh TripRouter per thread. Different
+        // per-thread perturbations pick different equal-time paths, so req.directDistance flips
+        // run-to-run (1220<->1230), breaking fat-vs-stub byte parity. The DeterministicTravelDisutility
+        // eps tie-break cannot fix this: eps (~1e-6 x min gradient) is dwarfed by the sigma draws.
+        // Turning routing randomness off removes the draw at the source; the car distance-rate term
+        // below then orders different-length paths uniquely. (Served distances are already stable —
+        // MatsimNetworkCache wraps one shared instance.)
+        config.routing().setRoutingRandomness(0.0);
+
         ScoringConfigGroup scoring = config.scoring();
         scoring.setMarginalUtilityOfMoney(1.0);
         scoring.setMarginalUtlOfWaitingPt_utils_hr(0.0);
