@@ -159,7 +159,7 @@ class BamasAlgorithmFingerprintWiringTest {
 
 	/** Read the fingerprint persisted in the manifest. The ctor fingerprint arg is ignored by readManifest(). */
 	private static String manifestFingerprint(Path checkpointDir) {
-		CheckpointManager.Manifest m = new CheckpointManager(checkpointDir, "ignored").readManifest();
+		CheckpointManager.Manifest m = new CheckpointManager(checkpointDir, "ignored", "ignored").readManifest();
 		return m.fingerprint;
 	}
 

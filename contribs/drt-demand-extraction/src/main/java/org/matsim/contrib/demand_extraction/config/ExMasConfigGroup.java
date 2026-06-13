@@ -353,6 +353,14 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// ===========================================
 	private String checkpointDir = "";
 
+	// ── checkpoint FORK resume (Plan B2). When true AND the checkpoint sits strictly below
+	// extensionParentsTopKMinDegree, a resume is accepted even if the parent-pruning knobs changed
+	// (those knobs have not yet shaped any stub at that degree). PLAIN field on purpose — it is a
+	// resume-time decision and must NOT enter the config identity / fingerprint / getParams(),
+	// otherwise it would perturb the hash and defeat its own purpose. Default false = today's strict
+	// guard.
+	private boolean checkpointForkBelowMinDegree = false;
+
 	// Calculate Shapley values for rides (distance contribution per passenger)
 
 	// ===========================================
@@ -1235,6 +1243,20 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	/** True when per-degree checkpointing/resume is enabled (i.e. {@link #getCheckpointDir()} is non-empty). */
 	public boolean isCheckpointingEnabled() {
 		return checkpointDir != null && !checkpointDir.isEmpty();
+	}
+
+	/**
+	 * Opt-in fork resume (Plan B2): when true, a checkpoint written strictly below
+	 * {@link #getExtensionParentsTopKMinDegree()} may be resumed even if the parent-pruning knobs
+	 * changed. PLAIN getter (not {@code @StringGetter}) so it stays out of the fingerprint/identity.
+	 */
+	public boolean isCheckpointForkBelowMinDegree() {
+		return checkpointForkBelowMinDegree;
+	}
+
+	/** @see #isCheckpointForkBelowMinDegree() */
+	public void setCheckpointForkBelowMinDegree(boolean checkpointForkBelowMinDegree) {
+		this.checkpointForkBelowMinDegree = checkpointForkBelowMinDegree;
 	}
 
 	@StringSetter("extensionParentsTier2NodeCap")

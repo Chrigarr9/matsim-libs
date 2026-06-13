@@ -54,15 +54,18 @@ public final class CheckpointManager {
 
 	private final Path dir;
 	private final String fingerprint;
+	/** Forkable-knob-free hash (Plan B2), persisted alongside {@link #fingerprint} for fork resume. */
+	private final String baseFingerprint;
 
 	// In-memory manifest state, rewritten atomically after every barrier.
 	private boolean baseWritten = false;
 	private int highestDegree = 0;
 	private final TreeMap<Integer, long[]> perDegree = new TreeMap<>(); // d -> {rows, generated}
 
-	public CheckpointManager(Path dir, String fingerprint) {
+	public CheckpointManager(Path dir, String fingerprint, String baseFingerprint) {
 		this.dir = dir;
 		this.fingerprint = fingerprint;
+		this.baseFingerprint = baseFingerprint;
 	}
 
 	/** Create the checkpoint directory if needed. */
@@ -116,14 +119,17 @@ public final class CheckpointManager {
 	/** Immutable parsed view of {@code manifest.txt} (Plan A3 Task 4 resume). */
 	public static final class Manifest {
 		public final String fingerprint;
+		/** Forkable-knob-free hash (Plan B2) — the comparison key for fork resume below minDegree. */
+		public final String baseFingerprint;
 		public final boolean baseWritten;
 		public final int highestDegree;
 		/** outputDegree -> {rows, generated}; keys are 3..highestDegree (base degree 2 has none). */
 		public final TreeMap<Integer, long[]> perDegree;
 
-		Manifest(String fingerprint, boolean baseWritten, int highestDegree,
+		Manifest(String fingerprint, String baseFingerprint, boolean baseWritten, int highestDegree,
 				TreeMap<Integer, long[]> perDegree) {
 			this.fingerprint = fingerprint;
+			this.baseFingerprint = baseFingerprint;
 			this.baseWritten = baseWritten;
 			this.highestDegree = highestDegree;
 			this.perDegree = perDegree;
@@ -150,6 +156,7 @@ public final class CheckpointManager {
 	public Manifest readManifest() {
 		Path target = dir.resolve(MANIFEST);
 		String fp = null;
+		String baseFp = null;
 		boolean base = false;
 		int highest = 0;
 		TreeMap<Integer, long[]> perDeg = new TreeMap<>();
@@ -167,6 +174,8 @@ public final class CheckpointManager {
 				String val = line.substring(eq + 1);
 				if (key.equals("fingerprint")) {
 					fp = val;
+				} else if (key.equals("baseFingerprint")) {
+					baseFp = val;
 				} else if (key.equals("base")) {
 					base = val.equals("1");
 				} else if (key.equals("highestDegree")) {
@@ -191,7 +200,15 @@ public final class CheckpointManager {
 			throw new IllegalStateException("Corrupt checkpoint manifest " + target
 					+ " (missing fingerprint or base flag) — delete the checkpoint dir and rerun.");
 		}
-		return new Manifest(fp, base, highest, perDeg);
+		if (baseFp == null) {
+			// A pre-Plan-B2 (v1) manifest lacks baseFingerprint=. The schema changed (manifest v2);
+			// refuse rather than silently mis-read — a stale checkpoint can no longer guarantee
+			// bit-identical resume.
+			throw new IllegalStateException("Stale checkpoint manifest " + target
+					+ " (no baseFingerprint — written by an older manifest schema, pre-v"
+					+ RunFingerprint.CHECKPOINT_VERSION + ") — delete the checkpoint dir and rerun.");
+		}
+		return new Manifest(fp, baseFp, base, highest, perDeg);
 	}
 
 	/**
@@ -280,6 +297,8 @@ public final class CheckpointManager {
 			w.write("# BAMAS checkpoint manifest v" + RunFingerprint.CHECKPOINT_VERSION);
 			w.newLine();
 			w.write("fingerprint=" + fingerprint);
+			w.newLine();
+			w.write("baseFingerprint=" + baseFingerprint);
 			w.newLine();
 			w.write("base=" + (baseWritten ? 1 : 0));
 			w.newLine();

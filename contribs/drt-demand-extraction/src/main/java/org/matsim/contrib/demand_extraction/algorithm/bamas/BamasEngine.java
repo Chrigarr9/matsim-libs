@@ -357,16 +357,29 @@ public final class BamasEngine {
 			if (pairPath) {
 				String fingerprint = RunFingerprint.compute(exMasConfig,
 						fpRequestsPath, fpTravelTimesPath, fpNetworkPath, "bamas");
+				// Plan B2: forkable-knob-free hash, persisted alongside the full one. Computed at a
+				// degree strictly below minDegree so the six parent-pruning knobs are excluded — this
+				// is the comparison key a fork resume uses below minDegree. minDegree-1 is always
+				// below minDegree (any value < minDegree yields the same hash; resumeHighestDegree is
+				// not itself hashed).
+				int minDegree = exMasConfig.getExtensionParentsTopKMinDegree();
+				String baseFingerprint = RunFingerprint.compute(exMasConfig,
+						fpRequestsPath, fpTravelTimesPath, fpNetworkPath, "bamas", minDegree - 1);
 				checkpointMgr = new CheckpointManager(
-						java.nio.file.Path.of(exMasConfig.getCheckpointDir()), fingerprint);
+						java.nio.file.Path.of(exMasConfig.getCheckpointDir()), fingerprint, baseFingerprint);
 				checkpointMgr.init();
 				if (checkpointMgr.hasManifest()) {
 					CheckpointManager.Manifest m = checkpointMgr.readManifest();
-					if (!RunFingerprint.matches(m.fingerprint, fingerprint)) {
+					boolean fork = exMasConfig.isCheckpointForkBelowMinDegree();
+					if (!RunFingerprint.matchesForResume(m, exMasConfig,
+							fpRequestsPath, fpTravelTimesPath, fpNetworkPath, "bamas", fork)) {
 						throw new IllegalStateException(
 								"Checkpoint in " + exMasConfig.getCheckpointDir()
 								+ " is for a different config/requests (fingerprint mismatch) — "
-								+ "delete the checkpoint dir or use a fresh one before resuming.");
+								+ "delete the checkpoint dir or use a fresh one before resuming. "
+								+ "(checkpointForkBelowMinDegree=" + fork
+								+ "; fork resume only relaxes the parent-pruning knobs when the checkpoint"
+								+ " sits strictly below extensionParentsTopKMinDegree=" + minDegree + ".)");
 					}
 					resumeManifest = m;
 					resuming = true;

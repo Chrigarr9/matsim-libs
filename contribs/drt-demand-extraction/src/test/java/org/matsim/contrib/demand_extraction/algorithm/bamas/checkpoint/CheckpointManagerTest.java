@@ -26,7 +26,7 @@ class CheckpointManagerTest {
 
 	@Test
 	void writesBaseAndDegreesWithManifest(@TempDir Path dir) throws IOException {
-		CheckpointManager mgr = new CheckpointManager(dir, "fp-abc");
+		CheckpointManager mgr = new CheckpointManager(dir, "fp-abc", "fp-abc-base");
 		mgr.init();
 
 		// Base = pre-prune pair universe (degree 2, with positions).
@@ -79,7 +79,7 @@ class CheckpointManagerTest {
 	@Test
 	void resumeReadsManifestAndLayers(@TempDir Path dir) {
 		// Write a base + two degrees, then re-open with a fresh manager and read it back.
-		CheckpointManager writer = new CheckpointManager(dir, "fp-resume");
+		CheckpointManager writer = new CheckpointManager(dir, "fp-resume", "fp-resume-base");
 		writer.init();
 		RideLayer pairs = new RideLayer(2);
 		pairs.addRow(new int[] {1, 2}, 0x1L, 0x2L, 100, 50, (byte) 0, new int[] {0, 1});
@@ -91,7 +91,7 @@ class CheckpointManagerTest {
 		d4.addRow(new int[] {1, 2, 3, 4}, 0x1234L, 0x4321L, 300, 120, (byte) 1);
 		writer.writeDegree(4, d4, 11);
 
-		CheckpointManager reader = new CheckpointManager(dir, "fp-resume");
+		CheckpointManager reader = new CheckpointManager(dir, "fp-resume", "fp-resume-base");
 		assertTrue(reader.hasManifest());
 		CheckpointManager.Manifest m = reader.readManifest();
 		assertEquals("fp-resume", m.fingerprint);
@@ -120,7 +120,7 @@ class CheckpointManagerTest {
 
 	@Test
 	void noManifestMeansNoResume(@TempDir Path dir) {
-		CheckpointManager mgr = new CheckpointManager(dir, "fp");
+		CheckpointManager mgr = new CheckpointManager(dir, "fp", "fp-base");
 		mgr.init();
 		assertFalse(mgr.hasManifest());
 	}
@@ -130,7 +130,7 @@ class CheckpointManagerTest {
 		Files.createDirectories(dir);
 		Files.writeString(dir.resolve("manifest.txt"),
 				"# header\nhighestDegree=3\n", StandardCharsets.UTF_8); // no fingerprint, no base
-		CheckpointManager mgr = new CheckpointManager(dir, "fp");
+		CheckpointManager mgr = new CheckpointManager(dir, "fp", "fp-base");
 		assertTrue(mgr.hasManifest());
 		assertThrows(IllegalStateException.class, mgr::readManifest);
 	}
@@ -138,7 +138,7 @@ class CheckpointManagerTest {
 	@Test
 	void expectedJournalBarriersAndRefusal(@TempDir Path dir) {
 		// Write base + two extension degrees using writeBase/writeDegree (same as production).
-		CheckpointManager mgr = new CheckpointManager(dir, "fp-task6");
+		CheckpointManager mgr = new CheckpointManager(dir, "fp-task6", "fp-task6-base");
 		mgr.init();
 
 		// Before any write: 0 expected barriers.

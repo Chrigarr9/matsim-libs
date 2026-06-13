@@ -60,8 +60,14 @@ import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
  */
 public final class RunFingerprint {
 
-	/** Bump to force all existing checkpoints to be treated as incompatible. */
-	public static final int CHECKPOINT_VERSION = 1;
+	/**
+	 * Bump to force all existing checkpoints to be treated as incompatible.
+	 * <p>v2 (Plan B2): the manifest schema gained a {@code baseFingerprint=} line (the forkable-knob-free
+	 * hash used for fork resume). A v1 manifest lacks that line and is refused by
+	 * {@link CheckpointManager#readManifest()}. The constant is also folded into every fingerprint, so
+	 * the bump independently invalidates any v1 checkpoint on the full-hash path.
+	 */
+	public static final int CHECKPOINT_VERSION = 2;
 
 	/**
 	 * Config params that do NOT affect stub/cache identity and are excluded from the hash.
@@ -162,6 +168,42 @@ public final class RunFingerprint {
 	/** True if two fingerprints are compatible (exact equality). */
 	public static boolean matches(String stored, String current) {
 		return stored != null && stored.equals(current);
+	}
+
+	/**
+	 * Decide whether a stored manifest may be resumed under {@code config} (Plan B2). Testable in
+	 * isolation (no algorithm run): drive it with a {@link CheckpointManager.Manifest} carrying the
+	 * stored {@code fingerprint} + {@code baseFingerprint}.
+	 *
+	 * <ul>
+	 *   <li><b>Fork ON and the checkpoint sits strictly below {@code minDegree}</b>
+	 *       ({@code getExtensionParentsTopKMinDegree()}): compare the stored {@code baseFingerprint}
+	 *       against {@code compute(config, …, m.highestDegree)}. Both sides are forkable-knob-free
+	 *       (the resume-degree is below minDegree, and the base was hashed the same way at write time),
+	 *       so they match iff the NON-forkable params agree — the parent-pruning knobs may differ.</li>
+	 *   <li><b>Otherwise</b> (flag off, OR the checkpoint already reached minDegree, where those knobs
+	 *       have shaped stubs): compare the stored full {@code fingerprint} against the full hash —
+	 *       today's strict behaviour, byte-identical to the pre-fork guard.</li>
+	 * </ul>
+	 *
+	 * @param m                 the stored manifest (its {@code fingerprint} + {@code baseFingerprint})
+	 * @param config            the resuming run's config
+	 * @param req               DRT requests file, or {@code null}
+	 * @param tt                travel-times TSV, or {@code null}
+	 * @param net               network file, or {@code null}
+	 * @param algoVersion       algorithm/version tag (e.g. {@code "bamas"})
+	 * @param forkBelowMinDegree opt-in fork flag ({@code config.isCheckpointForkBelowMinDegree()})
+	 * @return true if the resume is compatible
+	 */
+	public static boolean matchesForResume(CheckpointManager.Manifest m, ExMasConfigGroup config,
+			Path req, Path tt, Path net, String algoVersion, boolean forkBelowMinDegree) {
+		int minDegree = config.getExtensionParentsTopKMinDegree();
+		if (forkBelowMinDegree && m.highestDegree < minDegree) {
+			// Both sides forkable-knob-free → match iff the non-forkable params agree.
+			return matches(m.baseFingerprint, compute(config, req, tt, net, algoVersion, m.highestDegree));
+		}
+		// Flag off, or checkpoint already at/above minDegree: full hash (today's behaviour).
+		return matches(m.fingerprint, compute(config, req, tt, net, algoVersion));
 	}
 
 	// ------------------------------------------------------------------
