@@ -197,17 +197,19 @@ public final class BamasEngine {
 		}
 
 		final boolean stubMode = exMasConfig.isStubModeEnabled();
-		// Task 12 — streaming export path. Only the memory-critical D2D run streams: when
-		// stop-based pooling is enabled, Phase 5 needs the materialized degree-3+ D2D rides
-		// as generation INPUT, so we stay on the existing fat path (batch-materialize →
-		// Phase 5/6 → sort/reindex → MaterializedRideStore). The gate and the 100% target run
-		// both have stop_based=false, so they take the streaming branch.
+		// streamingD2D distinguishes "return after door-to-door" (stop-based OFF) from
+		// "continue into Phase 5/6 stop-based+hyperpool" — NOT a fat/stub distinction. When
+		// stop-based is ON, the degree-2 pair stubs and degree-3+ extension stubs are fed
+		// directly into Phase 5 (generateStopBasedRidesBatched) via on-demand materialization;
+		// allRides then holds only the fat singles. The 100% target run has stop_based=false.
 		final boolean streamingD2D = stubMode && !exMasConfig.isEnableStopBased();
-		// Task 13 — degree-2 pair stubs. On the streaming D2D path with extension (maxDegree>2),
-		// the 6.8M-pair universe is generated, graphed, and deduped as compact StubColumns,
-		// never as a 27 GB fat List<Ride>. The maxDegree<=2 early exit and the fat/stop-based
-		// fallback keep the original fat pair flow (those are not the memory-critical runs).
-		final boolean pairStubPath = streamingD2D && maxDegree > 2;
+		// Degree-2 pair stubs: the full pair universe is generated, graphed, and deduped as a
+		// compact StubColumns layer (never a fat List<Ride>), then carried as stubLayers[0] and
+		// extended. This is now independent of stop-based — the stop-based path consumes the same
+		// pair-stub layer through Phase 5 (Pass 2 of generateStopBasedRidesBatched materializes it
+		// first, before the degree-3+ layers, reproducing the old fat-pairs-then-extension order).
+		// Only the maxDegree<=2 early exits keep the fat pair flow.
+		final boolean pairStubPath = stubMode && maxDegree > 2;
 
 		// Plan A3 — per-degree checkpoint/resume (off unless checkpointDir is set). Only the
 		// streaming pair-stub D2D path is supported: that IS the week-long exact 100% run the
@@ -572,15 +574,19 @@ public final class BamasEngine {
 			}
 		}
 
-		// Plan A2 Task 3 — stub mode WITH stop-based: Phase 5 now consumes D2D rides via
-		// batched on-demand materialization instead of bulk-materializing all stubs into allRides
-		// first. The materializer is stored as an instance field so Phase 5 (outside this try
-		// block) can call generateStopBasedRidesBatched with it. allRides still holds the fat
-		// singles+pairs; the stub layers are fed to Phase 5 directly without expanding into allRides.
+		// Plan A2 Task 3 — stub mode WITH stop-based: Phase 5 consumes D2D rides via batched
+		// on-demand materialization instead of bulk-materializing all stubs into allRides first.
+		// The materializer is stored as an instance field so Phase 5 (outside this try block) can
+		// call generateStopBasedRidesBatched with it. allRides holds only the fat singles; the
+		// degree-2 pair layer (stubLayers[0]) and degree-3+ layers are fed to Phase 5 directly.
+		// The 4-arg form (pairGen + reqArray) is REQUIRED: Phase 5 Pass 2 now materializes the
+		// degree-2 pair layer, and degree-2 rebuild needs pairGen's fixed-time routing
+		// (buildRideFromOrdering's cumulative clock misses unwarmed time bins for pairs) and the
+		// generation-copy reqArray (positional resolution, avoiding index-collision via requestById).
 		// NON-DEFERRED contract is preserved: RideMaterializer always populates remainingBudgets.
 		this.runD2DMaterializer = (stubMode && !streamingD2D)
 				? new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
-						network, budgetValidator)
+						network, budgetValidator, pairGen, reqArray)
 				: null;
 
 		// Seam (c) — deferred budgets relocated to the export pass.
