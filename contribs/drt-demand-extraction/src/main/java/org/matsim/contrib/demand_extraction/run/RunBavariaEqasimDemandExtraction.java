@@ -233,7 +233,7 @@ public class RunBavariaEqasimDemandExtraction {
 				addTravelDisutilityFactoryBinding(TransportMode.car)
 						.toInstance(new org.matsim.contrib.demand_extraction.algorithm.network.DeterministicTravelDisutilityFactory(
 								new org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutilityFactory(),
-								controler.getScenario().getNetwork()));
+								scenario.getNetwork()));
 			}
 		});
 
