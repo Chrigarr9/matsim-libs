@@ -283,8 +283,13 @@ public class HyperPoolGenerator {
             // Try to add compatible neighbors
             List<StopToStopRideWrapper> neighbors = graph.getNeighbors(seed);
 
-            // Sort neighbors by degree (prefer high-degree nodes)
-            neighbors.sort(Comparator.comparingInt(graph::getDegree).reversed());
+            // Sort neighbors by degree (prefer high-degree nodes); ties broken by rideIndex.
+            // getNeighbors returns a HashSet copy (iteration order = hash/insertion-sensitive),
+            // so the rideIndex tie-break is required for the same fat-vs-stub parity reason as
+            // getNodesByDegree — without it equal-degree neighbors can be added in a different
+            // order between modes, diverging the cluster composition.
+            neighbors.sort(Comparator.comparingInt(graph::getDegree).reversed()
+                    .thenComparingInt(StopToStopRideWrapper::getRideIndex));
 
             for (StopToStopRideWrapper neighbor : neighbors) {
                 if (assigned.contains(neighbor)) {
@@ -701,11 +706,23 @@ public class HyperPoolGenerator {
                 double rideDistance   = StubScaling.fromDeci(layer.rideDistanceDm(row));
                 double endTime        = departureTime + rideTravelTime;
 
-                // Deferred materializer: called only during per-cluster bundling
+                // Deferred materializer: called only during per-cluster bundling.
+                // S2SRideMaterializer builds the ride with index 0 ("caller re-stamps");
+                // re-stamp it here with the wrapper's real Phase-5 rideIndex so the
+                // HyperPooledRide's sourceRides carry the correct indices (the fat path's
+                // source rides already carry their real index). Without this the stub path
+                // emits sourceRideIndices == 0 for every member and breaks hyperpool_rides
+                // byte-parity (Plan A2).
                 final S2SStubColumns capturedLayer = layer;
                 final int capturedRow = row;
+                final int capturedRideIndex = rideIndex;
                 java.util.function.Supplier<Ride> materializer =
-                        () -> s2sMaterializer.materialize(capturedLayer, capturedRow, requestById);
+                        () -> {
+                            Ride materialized =
+                                    s2sMaterializer.materialize(capturedLayer, capturedRow, requestById);
+                            materialized.assignIndex(capturedRideIndex);
+                            return materialized;
+                        };
 
                 wrappers.add(new StopToStopRideWrapper(
                         rideIndex, pickupStop, dropoffStop, passengerCount,
@@ -1272,11 +1289,22 @@ public class HyperPoolGenerator {
         }
 
         /**
-         * Returns all nodes sorted by degree (descending).
+         * Returns all nodes sorted by degree (descending), ties broken by rideIndex (ascending).
+         *
+         * <p>Plan A2 parity: {@code adjacencyList} is a {@link HashMap}, so {@code keySet()}
+         * iterates in hash-bucket order (wrapper {@code hashCode == rideIndex}), which is
+         * sensitive to insertion order only within collision chains. A bare stable sort by
+         * degree would therefore let the fat path (wrappers inserted in rideIndex order) and the
+         * stub path (inserted in degree-grouped layer order) seed the bundling greedy from
+         * different nodes whenever degrees tie — and the greedy amplifies any seed difference
+         * into a completely different (though similarly-sized) bundle set, breaking
+         * {@code hyperpool_rides.csv} byte-identity. Breaking ties on the unique {@code rideIndex}
+         * makes the seed order a total, insertion-independent order, identical in both modes.
          */
         public List<StopToStopRideWrapper> getNodesByDegree() {
             return adjacencyList.keySet().stream()
-                .sorted(Comparator.comparingInt(this::getDegree).reversed())
+                .sorted(Comparator.comparingInt(this::getDegree).reversed()
+                        .thenComparingInt(StopToStopRideWrapper::getRideIndex))
                 .collect(Collectors.toList());
         }
 

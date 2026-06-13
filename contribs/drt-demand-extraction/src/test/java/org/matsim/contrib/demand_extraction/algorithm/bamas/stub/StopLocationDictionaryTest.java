@@ -15,20 +15,58 @@ class StopLocationDictionaryTest {
 	}
 
 	// -----------------------------------------------------------------------
-	// Intern same stop (two distinct instances, same linkId) → same id, size==1
+	// Intern same stop (two distinct instances, same link/coord/penalty) → same id
 	// -----------------------------------------------------------------------
 
 	@Test
-	void sameLinkIdReturnsSameId() {
+	void identicalStopReturnsSameId() {
 		StopLocationDictionary dict = new StopLocationDictionary();
-		StopLocation s1 = new StopLocation(Id.createLinkId("a"), new Coord(1.0, 2.0));
-		StopLocation s2 = new StopLocation(Id.createLinkId("a"), new Coord(9.9, 8.8), 3.5);
+		StopLocation s1 = new StopLocation(Id.createLinkId("a"), new Coord(1.0, 2.0), 3.5);
+		StopLocation s2 = new StopLocation(Id.createLinkId("a"), new Coord(1.0, 2.0), 3.5);
 
 		int id1 = dict.idOf(s1);
 		int id2 = dict.idOf(s2);
 
-		assertEquals(id1, id2, "two instances with same linkId must return the same interned id");
+		assertEquals(id1, id2, "two stops with identical full identity must return the same id");
 		assertEquals(1, dict.size(), "only one distinct stop should be registered");
+	}
+
+	// -----------------------------------------------------------------------
+	// Same linkId but DIFFERENT coordinate → DISTINCT ids (full-identity interning).
+	// Request-derived stop coords vary per ride on the same link; the dictionary must
+	// preserve each so byId replays the exact coordinate (exmas_rides byte-parity, A2).
+	// -----------------------------------------------------------------------
+
+	@Test
+	void sameLinkDifferentCoordGetsDistinctId() {
+		StopLocationDictionary dict = new StopLocationDictionary();
+		StopLocation s1 = new StopLocation(Id.createLinkId("a"), new Coord(727254.60, 100.0));
+		StopLocation s2 = new StopLocation(Id.createLinkId("a"), new Coord(727254.59, 100.0));
+
+		int id1 = dict.idOf(s1);
+		int id2 = dict.idOf(s2);
+
+		assertNotEquals(id1, id2, "same link but distinct coord must get distinct ids");
+		assertEquals(2, dict.size(), "both distinct-coord stops must be registered");
+		assertEquals(727254.60, dict.byId(id1).getCoord().getX(), 0.0,
+				"byId must replay the exact coordinate of the first stop");
+		assertEquals(727254.59, dict.byId(id2).getCoord().getX(), 0.0,
+				"byId must replay the exact coordinate of the second stop");
+	}
+
+	// -----------------------------------------------------------------------
+	// Same link/coord but DIFFERENT snapping penalty → DISTINCT ids.
+	// -----------------------------------------------------------------------
+
+	@Test
+	void sameLinkAndCoordDifferentPenaltyGetsDistinctId() {
+		StopLocationDictionary dict = new StopLocationDictionary();
+		StopLocation s1 = new StopLocation(Id.createLinkId("a"), new Coord(1.0, 2.0), 0.0);
+		StopLocation s2 = new StopLocation(Id.createLinkId("a"), new Coord(1.0, 2.0), 3.5);
+
+		assertNotEquals(dict.idOf(s1), dict.idOf(s2),
+				"distinct snapping penalties must get distinct ids");
+		assertEquals(2, dict.size());
 	}
 
 	// -----------------------------------------------------------------------
@@ -97,9 +135,9 @@ class StopLocationDictionaryTest {
 		assertEquals(2, idC);
 		assertEquals(3, dict.size());
 
-		// Re-intern A — must still return 0, size unchanged
-		int idA2 = dict.idOf(new StopLocation(Id.createLinkId("aaa"), new Coord(42.0, 42.0)));
-		assertEquals(0, idA2, "re-interning A must still return id 0");
-		assertEquals(3, dict.size(), "re-interning must not grow the dictionary");
+		// Re-intern A with the SAME coord — must still return 0, size unchanged
+		int idA2 = dict.idOf(new StopLocation(Id.createLinkId("aaa"), new Coord(0.0, 0.0)));
+		assertEquals(0, idA2, "re-interning identical A must still return id 0");
+		assertEquals(3, dict.size(), "re-interning an identical stop must not grow the dictionary");
 	}
 }
