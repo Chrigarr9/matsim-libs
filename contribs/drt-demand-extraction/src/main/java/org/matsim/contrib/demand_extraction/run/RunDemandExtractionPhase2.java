@@ -68,6 +68,7 @@ public final class RunDemandExtractionPhase2 {
 				     "--extension-parents-top-k-metric", "--extension-parents-selection-rule",
 				     "--extension-parents-mmr-lambda", "--checkpoint-dir",
 				     "--algorithm-process-count", "--heuristics-process-count" -> i++; // applied via applyPhase2KnobOverrides
+				case "--checkpoint-fork-below-min-degree" -> { } // valueless boolean flag — applied via applyPhase2KnobOverrides
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -119,6 +120,11 @@ public final class RunDemandExtractionPhase2 {
 				// Used by the A3 kill-resume gate to assert true SHA-256 byte-identity.
 				case "--algorithm-process-count" -> cfg.setAlgorithmProcessCount(Integer.parseInt(args[++i]));
 				case "--heuristics-process-count" -> cfg.setHeuristicsProcessCount(Integer.parseInt(args[++i]));
+				// Valueless boolean flag: opts a resume into accepting a pre-minDegree checkpoint
+				// under changed parent-pruning knobs. Must be re-asserted here because Phase 2
+				// rebuilds ExMasConfigGroup from phase1_config.xml (which never serialises this
+				// flag), so CLI is the only way to enable it in a fresh Phase-2 JVM.
+				case "--checkpoint-fork-below-min-degree" -> cfg.setCheckpointForkBelowMinDegree(true);
 				default -> { }
 			}
 		}

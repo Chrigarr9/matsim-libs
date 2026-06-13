@@ -111,6 +111,9 @@ public class RunLyonEqasimDemandExtraction {
 		public final double extensionParentsMmrLambda;
 		/** Plan B: total DFS node cap for unmarked parents. 0 = hard filter. */
 		public final long extensionParentsTier2NodeCap;
+		/** Plan A3 fork: when true, a resume accepts a pre-minDegree checkpoint under
+		 *  changed parent-pruning knobs. Corresponds to {@code --checkpoint-fork-below-min-degree}. */
+		public final boolean checkpointForkBelowMinDegree;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
@@ -128,7 +131,8 @@ public class RunLyonEqasimDemandExtraction {
 				int extensionParentsTopK, int extensionParentsTopKMinDegree,
 				ExMasConfigGroup.PruningQualityMetric extensionParentsTopKMetric,
 				ExMasConfigGroup.ExtensionParentsSelectionRule extensionParentsSelectionRule,
-				double extensionParentsMmrLambda, long extensionParentsTier2NodeCap) {
+				double extensionParentsMmrLambda, long extensionParentsTier2NodeCap,
+				boolean checkpointForkBelowMinDegree) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -161,6 +165,7 @@ public class RunLyonEqasimDemandExtraction {
 			this.extensionParentsSelectionRule = extensionParentsSelectionRule;
 			this.extensionParentsMmrLambda = extensionParentsMmrLambda;
 			this.extensionParentsTier2NodeCap = extensionParentsTier2NodeCap;
+			this.checkpointForkBelowMinDegree = checkpointForkBelowMinDegree;
 		}
 	}
 
@@ -197,6 +202,7 @@ public class RunLyonEqasimDemandExtraction {
 		ExMasConfigGroup.ExtensionParentsSelectionRule extensionParentsSelectionRule = ExMasConfigGroup.ExtensionParentsSelectionRule.TOP_K;
 		double extensionParentsMmrLambda = 0.0;
 		long extensionParentsTier2NodeCap = 0L;
+		boolean checkpointForkBelowMinDegree = false;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -236,6 +242,7 @@ public class RunLyonEqasimDemandExtraction {
 				case "--extension-parents-selection-rule" -> extensionParentsSelectionRule = ExMasConfigGroup.ExtensionParentsSelectionRule.valueOf(args[++i].toUpperCase());
 				case "--extension-parents-mmr-lambda" -> extensionParentsMmrLambda = Double.parseDouble(args[++i]);
 				case "--extension-parents-tier2-node-cap" -> extensionParentsTier2NodeCap = Long.parseLong(args[++i]);
+				case "--checkpoint-fork-below-min-degree" -> checkpointForkBelowMinDegree = true;
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -247,7 +254,8 @@ public class RunLyonEqasimDemandExtraction {
 				hubSetGeoJsonPath, hubTransferBufferSeconds, requestClassificationsPath, fleetSide, metropolePolygonPath,
 				maxOrderingNodes,
 				extensionParentsTopK, extensionParentsTopKMinDegree, extensionParentsTopKMetric,
-				extensionParentsSelectionRule, extensionParentsMmrLambda, extensionParentsTier2NodeCap);
+				extensionParentsSelectionRule, extensionParentsMmrLambda, extensionParentsTier2NodeCap,
+				checkpointForkBelowMinDegree);
 	}
 
 	/**
@@ -581,5 +589,9 @@ public class RunLyonEqasimDemandExtraction {
 		exMas.setExtensionParentsSelectionRule(p.extensionParentsSelectionRule);
 		exMas.setExtensionParentsMmrLambda(p.extensionParentsMmrLambda);
 		exMas.setExtensionParentsTier2NodeCap(p.extensionParentsTier2NodeCap);
+		if (p.checkpointForkBelowMinDegree) {
+			log.info("  Override: checkpointForkBelowMinDegree = true");
+			exMas.setCheckpointForkBelowMinDegree(true);
+		}
 	}
 }

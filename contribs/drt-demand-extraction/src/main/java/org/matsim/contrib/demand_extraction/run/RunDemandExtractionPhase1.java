@@ -184,6 +184,9 @@ public final class RunDemandExtractionPhase1 {
 		exMas.setExtensionParentsSelectionRule(p.extensionParentsSelectionRule);
 		exMas.setExtensionParentsMmrLambda(p.extensionParentsMmrLambda);
 		exMas.setExtensionParentsTier2NodeCap(p.extensionParentsTier2NodeCap);
+		if (p.checkpointForkBelowMinDegree) {
+			exMas.setCheckpointForkBelowMinDegree(true);
+		}
 	}
 
 	/** Override module that swaps {@link DemandExtractionListener} for

@@ -95,6 +95,45 @@ class RunDemandExtractionPhase2ArgsTest {
 				() -> RunDemandExtractionPhase2.parseArgs(args));
 	}
 
+	// ------------------------------------------------------------------ //
+	// B3: --checkpoint-fork-below-min-degree CLI wiring                   //
+	// ------------------------------------------------------------------ //
+
+	@Test
+	void applyPhase2KnobOverridesSetsForkFlagWhenPresent() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		RunDemandExtractionPhase2.applyPhase2KnobOverrides(
+				new String[]{"--checkpoint-fork-below-min-degree"}, cfg);
+		assertTrue(cfg.isCheckpointForkBelowMinDegree(),
+				"flag should flip checkpointForkBelowMinDegree to true");
+	}
+
+	@Test
+	void applyPhase2KnobOverridesLeavesForkFlagFalseWhenAbsent() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		RunDemandExtractionPhase2.applyPhase2KnobOverrides(new String[]{}, cfg);
+		org.junit.jupiter.api.Assertions.assertFalse(cfg.isCheckpointForkBelowMinDegree(),
+				"flag should stay false when --checkpoint-fork-below-min-degree is absent");
+	}
+
+	@Test
+	void parseArgsToleratesForkFlagWithoutConsuming() {
+		// The valueless flag must not cause parseArgs to misread the following token.
+		String[] args = {
+				"--phase1-dir", "/tmp/dump",
+				"--checkpoint-fork-below-min-degree",
+				"--network", "/tmp/net.xml.gz",
+				"--travel-times", "/tmp/tt.tsv",
+				"--output-dir", "/tmp/out"
+		};
+		// Should not throw; if the flag wrongly consumed --network's value, the
+		// subsequent --network token would be missing and this would throw.
+		RunDemandExtractionPhase2.Phase2Args parsed = RunDemandExtractionPhase2.parseArgs(args);
+		assertEquals(java.nio.file.Path.of("/tmp/net.xml.gz"), parsed.networkXml());
+	}
+
 	// Canonical-requests publishing moved to ExtractionDataManager.publishCanonicalRequests;
 	// its behavior is covered by ExtractionDataManagerTest.
 }

@@ -108,6 +108,23 @@ class RunDemandExtractionPhase1WiringTest {
 		org.junit.jupiter.api.Assertions.assertFalse(cfg.isEnableStopBased());
 	}
 
+	@Test
+	void applyParsedArgsMirrorsCheckpointForkBelowMinDegree() {
+		ExMasConfigGroup cfg = new ExMasConfigGroup();
+		RunLyonEqasimDemandExtraction.ParsedArgs p = buildArgs(b -> b.checkpointForkBelowMinDegree = true);
+		RunDemandExtractionPhase1.applyParsedArgs(cfg, p);
+		assertTrue(cfg.isCheckpointForkBelowMinDegree(), "checkpointForkBelowMinDegree should be mirrored");
+	}
+
+	@Test
+	void applyParsedArgsDoesNotSetCheckpointForkWhenFalse() {
+		ExMasConfigGroup cfg = new ExMasConfigGroup();
+		RunLyonEqasimDemandExtraction.ParsedArgs p = buildArgs(b -> {}); // all defaults
+		RunDemandExtractionPhase1.applyParsedArgs(cfg, p);
+		org.junit.jupiter.api.Assertions.assertFalse(cfg.isCheckpointForkBelowMinDegree(),
+				"checkpointForkBelowMinDegree should stay false when flag is absent");
+	}
+
 	// Helper to build a ParsedArgs with a customizer lambda without requiring
 	// all 26 constructor parameters to be repeated in each test.
 	private static RunLyonEqasimDemandExtraction.ParsedArgs buildArgs(
@@ -125,7 +142,8 @@ class RunDemandExtractionPhase1WiringTest {
 				b.maxOrderingNodes,
 				b.extensionParentsTopK, b.extensionParentsTopKMinDegree,
 				b.extensionParentsTopKMetric, b.extensionParentsSelectionRule,
-				b.extensionParentsMmrLambda, b.extensionParentsTier2NodeCap);
+				b.extensionParentsMmrLambda, b.extensionParentsTier2NodeCap,
+				b.checkpointForkBelowMinDegree);
 	}
 
 	/** Mutable builder so tests can override individual fields in a lambda. */
@@ -164,6 +182,7 @@ class RunDemandExtractionPhase1WiringTest {
 				ExMasConfigGroup.ExtensionParentsSelectionRule.TOP_K;
 		double extensionParentsMmrLambda = 0.0;
 		long extensionParentsTier2NodeCap = 0L;
+		boolean checkpointForkBelowMinDegree = false;
 	}
 
 }
