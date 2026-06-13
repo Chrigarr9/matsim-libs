@@ -40,6 +40,7 @@ import org.matsim.contrib.demand_extraction.algorithm.stops.WalkingDistanceCalcu
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.demand.BudgetToConstraintsCalculator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
+import org.matsim.contrib.demand_extraction.demand.RequestResolver;
 import org.matsim.facilities.ActivityFacilities;
 
 /**
@@ -81,6 +82,8 @@ public final class BamasEngine {
 	// generatePairUniverse, …) can share them without threading every value through method
 	// signatures. These hold the SAME values the inline run() locals held, in the same order.
 	private long runAlgorithmStartTime;
+	// Single owner of the request-identity lookups; runReqArray/runRequestById are views of it.
+	private RequestResolver runResolver;
 	private DrtRequest[] runReqArray;
 	private org.matsim.contrib.demand_extraction.algorithm.generation.PairGenerator runPairGen;
 	private boolean runStreamingD2D;
@@ -295,19 +298,14 @@ public final class BamasEngine {
         this.allRides = new ArrayList<>();
         this.hyperPooledRides = new ArrayList<>();
 
-        this.runReqArray = drtRequests.toArray(new DrtRequest[0]);
-
-        // Global-index → request lookup, built identically to BamasRideExtender.requestMap
-        // (same iteration order ⇒ same last-write-wins winner on a shared index). Required
-        // for stub materialization + stub pruning: Paper-2 Extension-2 hub expansion emits
-        // virtual copies that share the parent's DrtRequest.index, so index != array position
-        // and several requests collide on one index. The fat extender resolves every set
-        // member through this map, so winning rides are built from the map's canonical copy;
-        // resolving stubs the same way reproduces the exact origin/dest links (positional
-        // reqArray indexing would pick a different colliding copy → wrong/unreachable OD).
-        java.util.Map<Integer, DrtRequest> requestById = new java.util.HashMap<>();
-        for (DrtRequest r : drtRequests) requestById.put(r.index, r);
-        runRequestById = requestById; // Plan A2 Task 5: needed by generateHyperPooledRidesFromStubs
+        // One construction of the request-identity lookups (the index-collision contract lives
+        // in RequestResolver's javadoc). The ride extender, stub materializer, and stub pruning
+        // all share THIS resolver, so they resolve set members through the identical map — no
+        // "built identically" copies that could drift. byPosition (the array) and byIndex (the
+        // last-write-wins map) are NOT interchangeable; see RequestResolver.
+        this.runResolver = new RequestResolver(drtRequests);
+        this.runReqArray = runResolver.positionalArray();
+        runRequestById = runResolver.indexMap(); // shared instance; used by Phase 5/6 stub stores
 	}
 
 	/**
@@ -574,7 +572,7 @@ public final class BamasEngine {
 
 		for (int degree = loopStart; degree < maxDegree; degree++) {
 			BamasRideExtender extender = new BamasRideExtender(network, graph, budgetValidator,
-													 requests, exMasConfig, prevDegreeGraph);
+													 runResolver, exMasConfig, prevDegreeGraph);
 
 			// Seam (a): STUB parents — the previous iteration's captured layer (degree 3→4+),
 			// or the degree-2 survivor layer at the first iteration (degree 2→3). The loop only
@@ -704,7 +702,7 @@ public final class BamasEngine {
 		// per-row materializer is built later, at the StubRideStore export return.
 		this.runD2DMaterializer = !streamingD2D
 				? new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
-						network, budgetValidator, runPairGen, runReqArray)
+						network, budgetValidator, runPairGen, runResolver)
 				: null;
 
 		// Seam (c): remainingBudgets is populated inline by RideMaterializer.validateAndPopulateBudgets
@@ -760,7 +758,7 @@ public final class BamasEngine {
 			// exact generation copy) instead of the index-collision-prone requestById.
 			org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer materializer =
 					new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
-							network, budgetValidator, runPairGen, runReqArray);
+							network, budgetValidator, runPairGen, runResolver);
 			log.info("Stub mode (streaming): exporting {} D2D rides ({} fat singles+pairs + {} stub rows) "
 					+ "via StubRideStore — no batch-materialize, no fat sort/reindex",
 					totalD2D, allRides.size(), stubLayerRows);

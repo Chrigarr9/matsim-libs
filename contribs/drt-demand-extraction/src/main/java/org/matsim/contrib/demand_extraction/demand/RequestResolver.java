@@ -45,5 +45,16 @@ public final class RequestResolver {
 
     public DrtRequest byPosition(int position) { return byPosition[position]; }
     public DrtRequest[] positionalArray() { return byPosition; }
+
+    /**
+     * The canonical index → request map (last-write-wins, see {@link #byIndex}). Exposed so
+     * consumers that still hold a legacy {@code Map<Integer,DrtRequest>} signature resolve
+     * through the SAME instance the engine and ride extender share — there is exactly one
+     * construction of this map, here, instead of several "built identically" copies. Returns
+     * {@code null} on a missing key (the legacy {@code .get()} contract), unlike the throwing
+     * {@link #byIndex(int)}.
+     */
+    public Map<Integer, DrtRequest> indexMap() { return byIndex; }
+
     public int size() { return byPosition.length; }
 }

@@ -44,7 +44,7 @@ class KelheimMissingTripleRegressionTest {
 				setup.network,
 				setup.graph,
 				setup.budgetValidator,
-				setup.requests,
+				new org.matsim.contrib.demand_extraction.demand.RequestResolver(setup.requests),
 				setup.config);
 
 		List<Ride> referenceExtended = reference.extendRides(setup.pairRides, 100);

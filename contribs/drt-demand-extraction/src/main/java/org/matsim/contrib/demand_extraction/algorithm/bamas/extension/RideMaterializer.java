@@ -10,6 +10,7 @@ import org.matsim.contrib.demand_extraction.algorithm.generation.PairGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
+import org.matsim.contrib.demand_extraction.demand.RequestResolver;
 
 import java.util.Map;
 
@@ -72,11 +73,13 @@ public final class RideMaterializer {
 	}
 
 	public RideMaterializer(MatsimNetworkCache network, BudgetValidator budgetValidator,
-			PairGenerator pairGenerator, DrtRequest[] reqArray) {
+			PairGenerator pairGenerator, RequestResolver resolver) {
 		this.network = network;
 		this.budgetValidator = budgetValidator;
 		this.pairGenerator = pairGenerator;
-		this.reqArray = reqArray;
+		// Positional (generation-copy) view of the engine's shared resolver; the degree-2 pair
+		// branch resolves each request by reqArray[position] — see the class javadoc / RequestResolver.
+		this.reqArray = resolver == null ? null : resolver.positionalArray();
 	}
 
 	/**

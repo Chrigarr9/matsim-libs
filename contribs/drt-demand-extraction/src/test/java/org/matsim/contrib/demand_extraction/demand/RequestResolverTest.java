@@ -1,6 +1,7 @@
 package org.matsim.contrib.demand_extraction.demand;
 
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -60,5 +61,17 @@ class RequestResolverTest {
     void unknownIndexThrows() {
         RequestResolver resolver = new RequestResolver(List.of(req(1)));
         assertThrows(IllegalArgumentException.class, () -> resolver.byIndex(99));
+    }
+
+    @Test
+    void indexMapSharesTheSameLastWriteWinsMapAndReturnsNullOnMissing() {
+        DrtRequest a = req(7);
+        DrtRequest b = req(7);
+        RequestResolver resolver = new RequestResolver(List.of(a, b, req(3)));
+        // same winner as byIndex (last write wins), exposed for legacy Map consumers
+        assertSame(b, resolver.indexMap().get(7));
+        assertSame(resolver.byIndex(3), resolver.indexMap().get(3));
+        // legacy .get() contract: null on missing (NOT the throwing byIndex)
+        assertNull(resolver.indexMap().get(99));
     }
 }

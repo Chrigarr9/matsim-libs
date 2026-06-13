@@ -4,7 +4,6 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -33,6 +32,7 @@ import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
+import org.matsim.contrib.demand_extraction.demand.RequestResolver;
 
 /**
  * Extends degree-D rides to degree-(D+1) using ordering-based enumeration.
@@ -70,18 +70,19 @@ public final class BamasRideExtender {
 	private StubColumns lastDegreeStubs;
 
 	public BamasRideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
-						List<DrtRequest> requests, ExMasConfigGroup exMasConfig) {
-		this(network, graph, budgetValidator, requests, exMasConfig, null);
+						RequestResolver resolver, ExMasConfigGroup exMasConfig) {
+		this(network, graph, budgetValidator, resolver, exMasConfig, null);
 	}
 
 	public BamasRideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
-						List<DrtRequest> requests, ExMasConfigGroup exMasConfig,
+						RequestResolver resolver, ExMasConfigGroup exMasConfig,
 						DegreeGraph prevDegreeGraph) {
 		this.network = network;
 		this.graph = graph;
 		this.budgetValidator = budgetValidator;
-		this.requestMap = new HashMap<>();
-		for (DrtRequest r : requests) requestMap.put(r.index, r);
+		// Shared instance (the engine's one RequestResolver), so set members resolve through the
+		// identical last-write-wins map the materializer and pruning also use — see RequestResolver.
+		this.requestMap = resolver.indexMap();
 		this.exMasConfig = exMasConfig;
 		this.prevDegreeGraph = prevDegreeGraph;
 	}
