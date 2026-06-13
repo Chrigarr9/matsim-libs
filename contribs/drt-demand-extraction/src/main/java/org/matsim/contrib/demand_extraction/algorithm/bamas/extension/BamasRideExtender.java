@@ -1,5 +1,6 @@
 package org.matsim.contrib.demand_extraction.algorithm.bamas.extension;
 
+import it.unimi.dsi.fastutil.ints.IntSet;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
 import java.util.ArrayList;
@@ -156,6 +157,35 @@ public final class BamasRideExtender {
 		List<ParentView> parentViews = new ArrayList<>(parentRows.size());
 		for (int row = 0; row < parentRows.size(); row++) {
 			parentViews.add(new RowParentView(parentRows, row));
+		}
+		return extendParents(parentViews, targetDegree, nextRideIndex);
+	}
+
+	/**
+	 * Tier-2 mixed-cap parent consumption (Task A4): extend the FULL degree-D layer where
+	 * each row is tagged with a per-parent first-valid node cap of {@code 0L} when its row
+	 * index is in {@code markedRows} (unbounded — the old hard-filter survivors) else
+	 * {@code tier2NodeCap} (the finite "second chance" budget for unmarked-only sets). Because
+	 * marked rows carry cap 0 and unmarked rows a positive cap, {@code extendParents} sees
+	 * {@code anyCapped == true} and sorts marked parents first (A3), so every set reachable from
+	 * a marked parent is still searched unbounded — this only ADDS unmarked-only sets under the
+	 * cap. With {@code markedRows} covering every row, this is byte-identical to the 3-arg
+	 * overload (all caps 0).
+	 *
+	 * @param parentRows   degree-D rides as a SoA container (sorted lex)
+	 * @param requestTable global request array indexed by {@link DrtRequest#index}
+	 * @param nextRideIndex starting index for new rides
+	 * @param markedRows   original row indices of the EXTEND-marked parents (cap 0)
+	 * @param tier2NodeCap first-valid node cap applied to unmarked rows ({@code > 0})
+	 * @return list of degree-(D+1) rides, one per feasible set
+	 */
+	public List<Ride> extendRides(RideLayer parentRows, DrtRequest[] requestTable, int nextRideIndex,
+			IntSet markedRows, long tier2NodeCap) {
+		int targetDegree = parentRows.size() == 0 ? 0 : parentRows.degree() + 1;
+		List<ParentView> parentViews = new ArrayList<>(parentRows.size());
+		for (int row = 0; row < parentRows.size(); row++) {
+			long cap = markedRows.contains(row) ? 0L : tier2NodeCap;
+			parentViews.add(new RowParentView(parentRows, row, cap));
 		}
 		return extendParents(parentViews, targetDegree, nextRideIndex);
 	}

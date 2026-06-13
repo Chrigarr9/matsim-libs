@@ -578,13 +578,36 @@ public final class BamasEngine {
 			// or the degree-2 survivor layer at the first iteration (degree 2→3). The loop only
 			// runs for maxDegree>2 (pairLayerPath), so prevRideLayer is always the pair-survivor
 			// layer at first entry and a captured stub layer thereafter — never null.
-			org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer extensionParents = prevRideLayer;
-			if (exMasConfig.getExtensionParentsTopK() > 0
+			boolean topKGate = exMasConfig.getExtensionParentsTopK() > 0
 					&& (degree + 1) >= exMasConfig.getExtensionParentsTopKMinDegree()
-					&& prevRideLayer.degree() >= 3) {
-				extensionParents = filterExtensionParents(prevRideLayer, requestById);
+					&& prevRideLayer.degree() >= 3;
+			long tier2NodeCap = exMasConfig.getExtensionParentsTier2NodeCap();
+			List<Ride> extended;
+			if (topKGate && tier2NodeCap > 0) {
+				// Tier-2 second chance (Task A4): instead of hard-dropping unmarked parents,
+				// feed the FULL parent layer with marked rows uncapped (cap 0) and unmarked rows
+				// under a finite first-valid node cap. Marked-reachable sets stay unbounded (A3
+				// marked-first claim), so this only ADDS unmarked-only sets under the cap.
+				it.unimi.dsi.fastutil.ints.IntOpenHashSet marked =
+						org.matsim.contrib.demand_extraction.algorithm.selection.RideLayerSelection.markParents(
+								prevRideLayer, requestById,
+								exMasConfig.getExtensionParentsTopK(),
+								exMasConfig.getExtensionParentsTopKMetric(),
+								exMasConfig.getExtensionParentsSelectionRule(),
+								exMasConfig.getExtensionParentsMmrLambda());
+				log.info("extension_parents_tier2: degree {} parents {} marked {}/{} (cap={}, K={}, metric={}, rule={}, lambda={})",
+						prevRideLayer.degree(), prevRideLayer.size(), marked.size(), prevRideLayer.size(),
+						tier2NodeCap, exMasConfig.getExtensionParentsTopK(), exMasConfig.getExtensionParentsTopKMetric(),
+						exMasConfig.getExtensionParentsSelectionRule(), exMasConfig.getExtensionParentsMmrLambda());
+				extended = extender.extendRides(prevRideLayer, runReqArray, nextRideIndex, marked, tier2NodeCap);
+			} else {
+				// OFF path (tier2NodeCap == 0) — byte-identical to today: marked-only hard filter.
+				org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer extensionParents = prevRideLayer;
+				if (topKGate) {
+					extensionParents = filterExtensionParents(prevRideLayer, requestById);
+				}
+				extended = extender.extendRides(extensionParents, runReqArray, nextRideIndex);
 			}
-			List<Ride> extended = extender.extendRides(extensionParents, runReqArray, nextRideIndex);
 			long graphBuildStart = System.currentTimeMillis();
 			prevDegreeGraph = extender.buildDegreeGraph(degree + 1);
 			long graphBuildMs = System.currentTimeMillis() - graphBuildStart;

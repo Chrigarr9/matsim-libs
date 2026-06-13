@@ -137,6 +137,28 @@ public final class RideLayerSelection {
 			ExMasConfigGroup.PruningQualityMetric metricKind,
 			ExMasConfigGroup.ExtensionParentsSelectionRule ruleKind,
 			double mmrLambda) {
+		IntOpenHashSet marked = markParents(parents, requestById, k, metricKind, ruleKind, mmrLambda);
+
+		RideLayer filtered = new RideLayer(parents.degree());
+		for (int row = 0; row < parents.size(); row++) {
+			if (marked.contains(row)) copyRow(parents, row, filtered);
+		}
+		return filtered;
+	}
+
+	/**
+	 * Compute the set of EXTEND-marked parent rows WITHOUT materializing the filtered layer
+	 * (Task A4 tier-2 seam). The per-row {@code sets}/{@code metric} build and
+	 * {@link RideSelector#select} call are byte-identical to {@link #filterParents}, which now
+	 * delegates here — so the two never drift. The returned {@link IntOpenHashSet} holds the
+	 * ORIGINAL row indices into {@code parents} (not re-indexed survivor positions). {@code k <= 0}
+	 * marks everything. The input layer is never mutated.
+	 */
+	public static IntOpenHashSet markParents(RideLayer parents,
+			Map<Integer, DrtRequest> requestById, int k,
+			ExMasConfigGroup.PruningQualityMetric metricKind,
+			ExMasConfigGroup.ExtensionParentsSelectionRule ruleKind,
+			double mmrLambda) {
 		int n = parents.size();
 		int degree = parents.degree();
 
@@ -152,13 +174,7 @@ public final class RideLayerSelection {
 		SelectionRule rule = ruleKind == ExMasConfigGroup.ExtensionParentsSelectionRule.MMR
 				? SelectionRule.MMR
 				: SelectionRule.PER_REQUEST_TOP_K;
-		IntOpenHashSet marked = RideSelector.select(sets, metric, rule, k, mmrLambda);
-
-		RideLayer filtered = new RideLayer(degree);
-		for (int row = 0; row < n; row++) {
-			if (marked.contains(row)) copyRow(parents, row, filtered);
-		}
-		return filtered;
+		return RideSelector.select(sets, metric, rule, k, mmrLambda);
 	}
 
 	// === metrics ===========================================================================
