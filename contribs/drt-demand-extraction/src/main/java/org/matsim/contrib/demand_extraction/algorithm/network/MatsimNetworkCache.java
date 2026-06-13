@@ -340,19 +340,6 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	}
 
 	/**
-	 * Pre-populate cache with specific O-D pairs only.
-	 * Useful for filtering cache to only relevant connections.
-	 * 
-	 * @param connections list of origin-destination link ID pairs
-	 * @param departureTime reference departure time for routing
-	 */
-	public void preloadConnections(List<Pair<Id<Link>, Id<Link>>> connections, double departureTime) {
-		for (Pair<Id<Link>, Id<Link>> conn : connections) {
-			getSegment(conn.getFirst(), conn.getSecond(), departureTime);
-		}
-	}
-	
-	/**
 	 * Export ALL cached connections to CSV (debug-only "all" mode).
 	 * Format: origin,destination,time_bin,travel_time,distance
 	 *
@@ -455,40 +442,6 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	}
 	
 	/**
-	 * Import cache from CSV file.
-	 * Only imports entries for links that exist in current network.
-	 */
-	public void importCache(String filepath) throws IOException {
-		try (BufferedReader reader = new BufferedReader(new FileReader(filepath))) {
-			reader.readLine(); // Skip header
-			
-			String line;
-			while ((line = reader.readLine()) != null) {
-				String[] parts = line.split(",");
-				if (parts.length != 6) continue;
-				
-				try {
-					Id<Link> origin = Id.createLinkId(parts[0]);
-					Id<Link> dest = Id.createLinkId(parts[1]);
-					int timeBin = Integer.parseInt(parts[2]);
-					double tt = Double.parseDouble(parts[3]);
-					double dist = Double.parseDouble(parts[4]);
-					double util = Double.parseDouble(parts[5]);
-					
-					// Only import if links exist in network
-					if (network.getLinks().containsKey(origin) && network.getLinks().containsKey(dest)) {
-						long key = PackedKeyCodec.segmentKey(origin.index(), dest.index(), timeBin);
-						TravelSegment seg = new TravelSegment(tt, dist, util);
-						cache.putSpeculative(key, seg);
-					}
-				} catch (Exception e) {
-					// Skip invalid entries
-				}
-			}
-		}
-	}
-	
-	/**
 	 * Clear the cache. Useful for memory management or when network conditions change.
 	 */
 	public void clearCache() {
@@ -550,16 +503,6 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	}
 	
 	/**
-	 * Get routing statistics.
-	 * @return array [totalAttempts, failures, successRate]
-	 */
-	public int[] getRoutingStatistics() {
-		int total = totalRoutingAttempts.get();
-		int failures = routingFailures.get();
-		return new int[]{total, failures};
-	}
-	
-	/**
 	 * Log routing statistics summary.
 	 * Call this after demand extraction to get an overview of routing success/failure rates.
 	 */
@@ -607,16 +550,6 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		}
 	}
 	
-	/**
-	 * Reset routing statistics counters.
-	 * Useful when reusing the cache across multiple iterations.
-	 */
-	public void resetStatistics() {
-		cacheGetAttempts.set(0);
-		totalRoutingAttempts.set(0);
-		routingFailures.set(0);
-	}
-
 	// ── Journaling API (Plan A3 checkpoint/resume) ────────────────────────────
 
 	/**
@@ -714,22 +647,6 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 
 	// ─────────────────────────────────────────────────────────────────────────
 
-	/**
-	 * Simple pair class for O-D connections.
-	 */
-	public static class Pair<A, B> {
-		private final A first;
-		private final B second;
-		
-		public Pair(A first, B second) {
-			this.first = first;
-			this.second = second;
-		}
-		
-		public A getFirst() { return first; }
-		public B getSecond() { return second; }
-	}
-	
 	/**
 	 * Attempt to resolve a Guice binding for {@code type} named {@code mode}; on
 	 * {@link com.google.inject.ConfigurationException} (no binding registered for that name),
