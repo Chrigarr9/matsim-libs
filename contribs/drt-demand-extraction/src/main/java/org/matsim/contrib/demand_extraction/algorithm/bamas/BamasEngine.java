@@ -484,6 +484,10 @@ public final class BamasEngine {
 									network::promoteSegment);
 				}
 				network.compactRetained();
+				// Degree barrier: sample heap and rotate the speculative tier under pressure.
+				// Output-invariant (cross-engine value identity); survivor legs were just promoted
+				// to the retained tier above, so eviction here cannot drop a segment export re-reads.
+				network.checkWatermark();
 
 				// Plan A3 barrier: the degree-(degree+1) layer is now finalized (post in-loop
 				// RATIO prune; post-loop COVERAGE_TOPK re-applies uniformly on resume too).

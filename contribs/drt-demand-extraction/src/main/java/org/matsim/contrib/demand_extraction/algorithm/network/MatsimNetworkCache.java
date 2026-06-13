@@ -115,6 +115,13 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	// SSSP tree for batch precomputation (one per thread, NOT thread-safe)
 	private final ThreadLocal<LeastCostPathTree> threadLocalTree;
 
+	// Heap watermark that drives speculative-tier eviction (design 2026-06-12 §3). Eviction is
+	// OUTPUT-INVARIANT: every shared-cache OD is identical under SpeedyALT and LeastCostPathTree
+	// (403,785 shared ODs, 0 value diffs; guarded by CrossEngineRoutingDeterminismTest), so a
+	// segment dropped from the speculative tier and re-walked later yields a bit-identical value.
+	// Retained (promoted) segments are never evicted. Threshold comes from config.
+	private final HeapWatermark watermark;
+
 	// Batch precompute statistics
 	private final AtomicInteger batchTreesComputed = new AtomicInteger(0);
 	private final AtomicInteger batchTreesSkipped = new AtomicInteger(0);
@@ -171,8 +178,10 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		SpeedyGraph speedyGraph = SpeedyGraphBuilder.build(network);
 		this.threadLocalTree = ThreadLocal.withInitial(() ->
 			new LeastCostPathTree(speedyGraph, this.travelTime, this.travelDisutility));
+
+		this.watermark = HeapWatermark.forRuntime(config.getCacheEvictionWatermark(), cache::evictSpeculative);
 	}
-	
+
 	/**
 	 * Get travel segment between links at specified departure time.
 	 * Results are cached per time bin for efficiency.
@@ -512,6 +521,17 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	 */
 	public void compactRetained() {
 		cache.compactRetained();
+	}
+
+	/**
+	 * Sample heap usage and, if it exceeds the configured watermark fraction, evict the older
+	 * speculative generation. Output-invariant: any evicted segment re-walks to a bit-identical
+	 * value (SpeedyALT == LeastCostPathTree on every shared OD — CrossEngineRoutingDeterminismTest);
+	 * retained/promoted segments are never touched. Call only from single-threaded generation
+	 * barriers, never concurrently with routing.
+	 */
+	public void checkWatermark() {
+		watermark.checkAndMaybeEvict();
 	}
 
 	/**
@@ -882,6 +902,8 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		this.timeBinSize = Integer.MAX_VALUE; // any departure time → bin 0
 		this.dummyPerson = null;
 		this.dummyVehicle = null;
+		// watermark 1.0 → checkWatermark() never auto-evicts; tests drive eviction explicitly.
+		this.watermark = HeapWatermark.forRuntime(1.0, cache::evictSpeculative);
 	}
 
 	/**
@@ -912,6 +934,8 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 			altFactory.createPathCalculator(network, wrapped, travelTime));
 		this.threadLocalTree = ThreadLocal.withInitial(() ->
 			new LeastCostPathTree(speedyGraph, travelTime, wrapped));
+		// watermark 1.0 → checkWatermark() never auto-evicts; tests drive eviction explicitly.
+		this.watermark = HeapWatermark.forRuntime(1.0, cache::evictSpeculative);
 	}
 
 	// ── Packed-key string back-mapping (export / journal drain only) ───────────

@@ -228,7 +228,12 @@ public final class PairGenerator {
 						log.info("  Pair generation progress: {}/{} ({}%), ETA {}",
 								processed, total, String.format("%.1f", percent), formatDuration(remainingSeconds));
 					}
-					return generateCandidatesForRequest(filter, i, ssspBound);
+					List<PairCandidate> out = generateCandidatesForRequest(filter, i, ssspBound);
+					// Origin-batch barrier: sample heap and rotate the speculative tier under
+					// pressure. Output-invariant (cross-engine value identity); HeapWatermark is
+					// synchronized so a parallel race here is safe and at watermark 1.0 a no-op.
+					network.checkWatermark();
+					return out;
 				})
 				.flatMap(List::stream)
 				.collect(Collectors.toList());

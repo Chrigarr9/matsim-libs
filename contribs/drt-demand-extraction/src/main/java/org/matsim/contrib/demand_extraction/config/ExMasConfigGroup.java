@@ -167,6 +167,15 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	private int networkTimeBinSize = 60 * 60; // Network cache time bin size in seconds (1 hour)
 
+	// ── cache eviction watermark (design 2026-06-12-connection-cache-memory-design §3).
+	// Fraction of -Xmx above which the speculative routing-cache tier rotates a generation out.
+	// 1.0 = never evict (memory-rich boxes); lower = more aggressive. Output-invariant by
+	// construction: an evicted segment that is later re-routed reproduces bit-identical values,
+	// because SpeedyALT (point-to-point fills) and LeastCostPathTree (batch SSSP fills) agree
+	// bit-for-bit on every OD — the cross-engine value identity guarded by
+	// CrossEngineRoutingDeterminismTest (403,785 shared cache ODs, 0 value diffs at 1%).
+	private double cacheEvictionWatermark = 0.7;
+
 	// If true, BamasRideExtender skips per-ordering budget validation and BudgetValidator.populateBudgetsBatch
 	// is called once after the extension loop. Safe ONLY when budget validation never rejects on the
 	// scenario (e.g. Bavaria, where budget is subsumed by max-travel-time). On scenarios where budget
@@ -832,6 +841,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     public void setMinDrtAccessEgressDistance(double minDrtAccessEgressDistance) {
         this.minDrtAccessEgressDistance = minDrtAccessEgressDistance;
     }
+
+	@StringGetter("cacheEvictionWatermark")
+	public double getCacheEvictionWatermark() {
+		return cacheEvictionWatermark;
+	}
+
+	@StringSetter("cacheEvictionWatermark")
+	public void setCacheEvictionWatermark(double cacheEvictionWatermark) {
+		this.cacheEvictionWatermark = cacheEvictionWatermark;
+	}
 
 	@StringGetter("networkTimeBinSize")
 	public int getNetworkTimeBinSize() {
@@ -1685,6 +1704,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Post-graph pair pruning: keep only the top fraction of degree-2 rides (by distance savings) "
 				+ "after the shareability graph is built and best-per-set dedup is applied. "
 				+ "1.0 = disabled. 0.50 = keep top 50%. Default: 1.0 (disabled)");
+		map.put("cacheEvictionWatermark",
+				"Routing connection-cache eviction watermark: fraction of -Xmx above which the "
+				+ "speculative cache tier rotates a generation out. 1.0 = never evict (default for "
+				+ "memory-rich runs is to keep this high). Output-invariant: evicted segments "
+				+ "re-route bit-identically (cross-engine value identity, see "
+				+ "CrossEngineRoutingDeterminismTest). Default: 0.7");
 		map.put("interDegreeKeepFraction",
 				"Inter-degree pruning (legacy RATIO_THRESHOLD mode only): keep only the top fraction of rides "
 				+ "(by savingsRatio) after EACH degree extension. Applied directly (no sqrt scaling). "

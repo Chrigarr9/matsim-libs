@@ -88,6 +88,51 @@ public class ConnectionCacheJournalTest {
     }
 
     // -------------------------------------------------------------------------
+    // Test 1b (Task 8 — eviction/journal interplay): a key journaled twice.
+    //
+    // Under watermark eviction a segment can be filled, evicted, then re-routed and
+    // re-journaled — so the SAME (from,to,bin) key appears as TWO segment records.
+    // By the cross-engine value identity (CrossEngineRoutingDeterminismTest), both
+    // carry bit-identical values, so collapsing the records into a per-key map is
+    // equivalent whether the loader keeps the FIRST or the LAST write. This test
+    // pins that contract: the reader returns both records verbatim (no dedup in the
+    // serializer), and first-write == last-write because the values match bit-for-bit.
+    // -------------------------------------------------------------------------
+    @Test
+    void duplicateKeyRecordsAreFirstWriteEqualsLastWrite() throws IOException {
+        Path file = tmp.resolve("dup.journal");
+
+        // Same key (linkA→linkB, bin 0), identical values, journaled in two barriers
+        // (barrier A = original fill, barrier B = post-eviction recompute).
+        var seg = new ConnectionCacheJournal.Segment("linkA", "linkB", 0, 120.5, 1800.0, 3.14);
+        var dup = new ConnectionCacheJournal.Segment("linkA", "linkB", 0, 120.5, 1800.0, 3.14);
+
+        try (var w = ConnectionCacheJournal.Writer.openForAppend(file)) {
+            w.appendBarrier(List.of(seg), List.of());
+            w.appendBarrier(List.of(dup), List.of());
+        }
+
+        ConnectionCacheJournal.Contents c = ConnectionCacheJournal.read(file);
+        List<ConnectionCacheJournal.Segment> segs = c.segments();
+
+        // Reader keeps both records in write order (no serializer-side dedup).
+        assertEquals(2, segs.size(), "both committed records must be returned");
+        assertEquals(2, c.committedBarrierCount());
+
+        ConnectionCacheJournal.Segment first = segs.get(0);
+        ConnectionCacheJournal.Segment last = segs.get(1);
+
+        // First-write == last-write: bit-identical values, so the bulk-load order is irrelevant.
+        assertEquals(first.fromLink(), last.fromLink());
+        assertEquals(first.toLink(), last.toLink());
+        assertEquals(first.bin(), last.bin());
+        assertEquals(Double.doubleToRawLongBits(first.tt()), Double.doubleToRawLongBits(last.tt()));
+        assertEquals(Double.doubleToRawLongBits(first.dist()), Double.doubleToRawLongBits(last.dist()));
+        assertEquals(Double.doubleToRawLongBits(first.utility()),
+                Double.doubleToRawLongBits(last.utility()));
+    }
+
+    // -------------------------------------------------------------------------
     // Test 2: dictionary reuse — link seen in barrier A must NOT grow the file
     //         by a full dict record in barrier B
     // -------------------------------------------------------------------------
