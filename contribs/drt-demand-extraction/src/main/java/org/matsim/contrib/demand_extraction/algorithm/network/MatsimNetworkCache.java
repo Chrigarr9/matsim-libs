@@ -353,22 +353,12 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	}
 	
 	/**
-	 * Export connection cache to CSV file for ExMasCommuter (Python).
+	 * Export ALL cached connections to CSV (debug-only "all" mode).
 	 * Format: origin,destination,time_bin,travel_time,distance
 	 *
 	 * @param filepath output file path
-	 * @param connectionKeys if non-null, export only these "origin_destination_timeBin" keys;
-	 *                       if null, export all cached connections
 	 */
-	public void exportConnectionCache(String filepath, java.util.Set<String> connectionKeys) throws IOException {
-		if (connectionKeys == null) {
-			exportAllEntries(filepath);
-		} else {
-			exportFilteredEntries(filepath, connectionKeys);
-		}
-	}
-
-	private void exportAllEntries(String filepath) throws IOException {
+	public void exportAllEntries(String filepath) throws IOException {
 		try (BufferedWriter writer = new BufferedWriter(new FileWriter(filepath))) {
 			writer.write("origin,destination,time_bin,travel_time,distance\n");
 
@@ -408,49 +398,59 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		}
 	}
 
-	private void exportFilteredEntries(String filepath, java.util.Set<String> connectionKeys) throws IOException {
+	/**
+	 * Export the cache restricted to the given packed-key window domain (Task 9 / design §6).
+	 *
+	 * <p>Writes only the OD/bin segments named in {@code windowKeys} — the set the
+	 * predecessor/successor pass (and {@code successors_only}) actually evaluated, accepted AND
+	 * rejected. Uses the same CSV format and the same deterministic ordering as
+	 * {@link #exportAllEntries} (sort by origin string, dest string, bin), so a window CSV is a
+	 * byte-prefix-stable subset of the "all" CSV. Unreachable segments are skipped, mirroring
+	 * {@code exportAllEntries}.
+	 *
+	 * <p>All window keys are retained-tier (promoted by Task 7 at the evaluation site), so
+	 * {@code cache.get(key)} is never a watermark-eviction miss; a defensive null skip keeps the
+	 * write robust against a key whose segment was never populated.
+	 *
+	 * @param filepath   output file path
+	 * @param windowKeys packed segment keys ({@link PackedKeyCodec#segmentKey}) to export
+	 */
+	public void exportWindow(String filepath, it.unimi.dsi.fastutil.longs.LongSet windowKeys) throws IOException {
 		try (BufferedWriter writer = new BufferedWriter(new FileWriter(filepath))) {
 			writer.write("origin,destination,time_bin,travel_time,distance\n");
 
-			// Deterministic output: sort keys
-			List<String> sortedKeys = connectionKeys.stream().sorted().toList();
+			Id<Link>[] byIndex = linkByIndex();
+
+			// Same deterministic ordering as exportAllEntries: (origin string, dest string, bin).
+			List<Long> keys = new ArrayList<>(windowKeys.size());
+			windowKeys.forEach((long k) -> keys.add(k));
+			keys.sort((a, b) -> {
+				String oa = linkStr(byIndex, PackedKeyCodec.origin(a));
+				String ob = linkStr(byIndex, PackedKeyCodec.origin(b));
+				int cmp = oa.compareTo(ob);
+				if (cmp != 0) return cmp;
+				String da = linkStr(byIndex, PackedKeyCodec.dest(a));
+				String db = linkStr(byIndex, PackedKeyCodec.dest(b));
+				cmp = da.compareTo(db);
+				if (cmp != 0) return cmp;
+				return Integer.compare(PackedKeyCodec.bin(a), PackedKeyCodec.bin(b));
+			});
+
 			int exported = 0;
-			for (String lookupKey : sortedKeys) {
-				int lastUnderscore = lookupKey.lastIndexOf('_');
-				int secondLastUnderscore = lookupKey.lastIndexOf('_', lastUnderscore - 1);
-				if (lastUnderscore < 0 || secondLastUnderscore < 0) {
-					continue;
-				}
-
-				String originStr = lookupKey.substring(0, secondLastUnderscore);
-				String destStr = lookupKey.substring(secondLastUnderscore + 1, lastUnderscore);
-				int timeBin;
-				try {
-					timeBin = Integer.parseInt(lookupKey.substring(lastUnderscore + 1));
-				} catch (NumberFormatException e) {
-					continue;
-				}
-
-				Id<Link> origin = Id.createLinkId(originStr);
-				Id<Link> destination = Id.createLinkId(destStr);
-				long key = PackedKeyCodec.segmentKey(origin.index(), destination.index(), timeBin);
-
+			for (long key : keys) {
 				TravelSegment seg = cache.get(key);
-				if (seg == null) {
-					// Fallback: route on demand (should already be cached from predecessor calc)
-					double canonicalDepartureTime = (timeBin + 0.5) * timeBinSize;
-					seg = getSegment(origin, destination, canonicalDepartureTime);
-				}
 				if (seg == null || !seg.isReachable()) {
 					continue;
 				}
-
 				writer.write(String.format(java.util.Locale.US, "%s,%s,%d,%.2f,%.2f\n",
-						originStr, destStr, timeBin, seg.getTravelTime(), seg.getDistance()));
+						linkStr(byIndex, PackedKeyCodec.origin(key)),
+						linkStr(byIndex, PackedKeyCodec.dest(key)),
+						PackedKeyCodec.bin(key),
+						seg.getTravelTime(), seg.getDistance()));
 				exported++;
 			}
-			log.info("Exported connection cache (filtered): {} entries (from {} requested)",
-					exported, connectionKeys.size());
+			log.info("Exported connection cache (window): {} reachable entries (from {} window keys)",
+					exported, windowKeys.size());
 		}
 	}
 	
@@ -968,14 +968,25 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	}
 
 	/**
-	 * Resolve a packed link index to its string form. Falls back to the raw index as a string
-	 * if the index is outside the back-map (only possible for an id created after the array was
-	 * built, which export/drain do not produce — every drained/exported key came from a network
-	 * link present at build time).
+	 * Resolve a packed link index to its string form. Production path: the network-populated
+	 * back-map array resolves every key (export/drain only emit keys from network links present
+	 * at build time), so this branch is byte-identical to the pre-refactor behaviour.
+	 *
+	 * <p>Fallbacks (the array slot is null, e.g. the {@code forTesting()} cache has no network):
+	 * resolve through the global {@code Id} registry by index — the same registry
+	 * {@code Id.createLinkId} populated — guarding the index against
+	 * {@code getNumberOfIds(Link.class)} because {@link Id#get(int, Class)} indexes an
+	 * unbounded list. Last resort is the raw index as a string.
 	 */
 	private static String linkStr(Id<Link>[] byIndex, int idx) {
 		if (idx >= 0 && idx < byIndex.length && byIndex[idx] != null) {
 			return byIndex[idx].toString();
+		}
+		if (idx >= 0 && idx < Id.getNumberOfIds(Link.class)) {
+			Id<Link> resolved = Id.get(idx, Link.class);
+			if (resolved != null) {
+				return resolved.toString();
+			}
 		}
 		return Integer.toString(idx);
 	}

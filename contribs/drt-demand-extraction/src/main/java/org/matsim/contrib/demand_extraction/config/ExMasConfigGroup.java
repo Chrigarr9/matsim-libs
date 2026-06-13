@@ -356,10 +356,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// 0 or -1 => keep all (no pruning). Default: 50
 	private int maxSuccessors = 50;
 
-	// Connection cache export mode:
-	// - "all": Export ALL cached connections (default — needed for dynamic successor computation in Python)
-	// - "successors_only": Export only connections between successor ride pairs (legacy behavior, smaller file)
-	private String connectionCacheExportMode = "all";
+	// Connection cache export mode (allowed: window|all|successors_only):
+	// - "window" (default): Export only the OD/bin segments the predecessor/successor pass
+	//   evaluated (accepted AND rejected handoffs) — the lookup domain of Python's
+	//   compute_dynamic_successors. Rows are promoted-to-retained so eviction never drops them.
+	// - "all": Export ALL cached connections. Debug-only (full cache footprint, much larger).
+	// - "successors_only": Export only connections between top-K-capped successor ride pairs.
+	private String connectionCacheExportMode = "window";
 
 	// Optional intermediate writes (parity with Python, currently unused)
 	private boolean intermediateWrite = false;
@@ -1288,6 +1291,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	@StringSetter("connectionCacheExportMode")
 	public void setConnectionCacheExportMode(String connectionCacheExportMode) {
+		if (!"window".equals(connectionCacheExportMode)
+				&& !"all".equals(connectionCacheExportMode)
+				&& !"successors_only".equals(connectionCacheExportMode)) {
+			throw new IllegalArgumentException("Unknown connectionCacheExportMode '"
+					+ connectionCacheExportMode + "' (allowed: window|all|successors_only)");
+		}
 		this.connectionCacheExportMode = connectionCacheExportMode;
 	}
 

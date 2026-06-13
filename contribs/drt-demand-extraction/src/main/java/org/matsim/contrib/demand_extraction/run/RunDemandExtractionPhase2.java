@@ -224,7 +224,8 @@ public final class RunDemandExtractionPhase2 {
 			MatsimNetworkCache networkCache = injector.getInstance(MatsimNetworkCache.class);
 			try {
 				ConnectionCacheWriter.writeConnectionCache(connectionCacheCsv.toString(), rides,
-						networkCache, exMasCfg.getNetworkTimeBinSize(), exMasCfg.getConnectionCacheExportMode());
+						networkCache, exMasCfg.getNetworkTimeBinSize(), exMasCfg.getConnectionCacheExportMode(),
+						postProcessor.getWindowKeys());
 				log.info("PHASE 2 STEP 5: wrote connection cache to {}", connectionCacheCsv);
 			} catch (IOException e) {
 				log.error("Failed to write connection cache", e);

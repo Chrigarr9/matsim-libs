@@ -2,10 +2,8 @@ package org.matsim.contrib.demand_extraction.io;
 
 import java.io.IOException;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -13,18 +11,25 @@ import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.util.PackedKeyCodec;
+
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
 /**
  * Utility class for writing network connection cache to CSV files.
  *
- * Supports two export modes (configurable via ExMasConfigGroup.connectionCacheExportMode):
+ * Supports three export modes (configurable via ExMasConfigGroup.connectionCacheExportMode):
  *
- * - "all" (default): Exports ALL cached connections from the network cache.
- *   This provides complete coverage for Python's dynamic successor computation,
- *   which needs travel times for arbitrary ride pairs (not just pre-computed successors).
+ * - "window" (default): Exports only the OD/bin segments the predecessor/successor pass
+ *   actually evaluated (accepted AND rejected handoffs) — the lookup domain of Python's
+ *   compute_dynamic_successors. The window-key set is collected by RidePostProcessor and the
+ *   rows are promoted-to-retained (Task 7), so eviction never drops them.
  *
- * - "successors_only": Exports only connections between successor ride pairs.
- *   Legacy behavior producing a smaller file, but insufficient for dynamic successor
+ * - "all": Exports ALL cached connections from the network cache. Debug-only — the full
+ *   speculative+retained footprint, much larger than the window domain.
+ *
+ * - "successors_only": Exports only connections between top-K-capped successor ride pairs.
+ *   Legacy behavior producing the smallest file; insufficient for dynamic successor
  *   computation in Python when the active ride set differs from pre-computed successors.
  *
  * Format: CSV with columns origin,destination,time_bin,travel_time,distance
@@ -44,14 +49,17 @@ public final class ConnectionCacheWriter {
 	 * Write connection cache to CSV file.
 	 *
 	 * Export mode determines what is written:
-	 * - "all": exports the full network cache (all routed OD pairs)
-	 * - "successors_only": exports only connections between successor ride pairs
+	 * - "window": the evaluated handoff segments collected by the post-processor (default)
+	 * - "all": the full network cache (debug-only)
+	 * - "successors_only": only connections between top-K-capped successor ride pairs
 	 *
 	 * @param filename     output file path
 	 * @param rides        list of ExMAS rides with successor relationships
 	 * @param networkCache routing cache containing pre-computed connections
 	 * @param timeBinSize  size of time bins in seconds (e.g. 900 for 15 min)
-	 * @param exportMode   "all" or "successors_only"
+	 * @param exportMode   "window", "all" or "successors_only"
+	 * @param windowKeys   packed OD/bin keys evaluated by the predecessor/successor pass
+	 *                     ({@code RidePostProcessor.getWindowKeys()}); used only for "window" mode
 	 * @throws IOException if writing fails
 	 */
 	public static void writeConnectionCache(
@@ -59,28 +67,33 @@ public final class ConnectionCacheWriter {
 			List<Ride> rides,
 			MatsimNetworkCache networkCache,
 			int timeBinSize,
-			String exportMode) throws IOException {
+			String exportMode,
+			LongOpenHashSet windowKeys) throws IOException {
 
-		// null filter = export all; non-null = export only those keys
-		Set<String> filter = "successors_only".equals(exportMode)
-				? collectSuccessorConnections(rides, timeBinSize)
-				: null;
-
-		networkCache.exportConnectionCache(filename, filter);
+		switch (exportMode) {
+			case "all" -> networkCache.exportAllEntries(filename);
+			case "successors_only" -> networkCache.exportWindow(
+					filename, collectSuccessorConnections(rides, timeBinSize));
+			case "window" -> networkCache.exportWindow(filename, windowKeys);
+			default -> throw new IllegalArgumentException(
+					"Unknown connectionCacheExportMode '" + exportMode
+							+ "' (allowed: window|all|successors_only)");
+		}
 		log.info("Wrote connection cache (mode={}) to: {}", exportMode, filename);
 	}
 
 	/**
-	 * Collect unique connection keys (origin_destination_timeBin) for all successor relationships.
-	 * These are the only connections needed by the Python optimizer for empty vehicle routing
-	 * when using the "successors_only" export mode.
+	 * Collect packed OD/bin keys for all top-K-capped successor relationships — the only
+	 * connections needed by the Python optimizer for empty-vehicle routing under the
+	 * "successors_only" export mode. Keys are packed via {@link PackedKeyCodec} using the same
+	 * time-bin convention as the cache, so {@code exportWindow} resolves the cached values.
 	 *
 	 * @param rides       list of rides with successor relationships
 	 * @param timeBinSize size of time bins in seconds
-	 * @return set of connection keys in format "originLinkId_destLinkId_timeBin"
+	 * @return packed segment keys for every successor handoff
 	 */
-	private static Set<String> collectSuccessorConnections(List<Ride> rides, int timeBinSize) {
-		Set<String> connectionKeys = new HashSet<>();
+	private static LongOpenHashSet collectSuccessorConnections(List<Ride> rides, int timeBinSize) {
+		LongOpenHashSet connectionKeys = new LongOpenHashSet();
 		Map<Integer, Ride> rideMap = new HashMap<>();
 		for (Ride ride : rides) {
 			rideMap.put(ride.getIndex(), ride);
@@ -101,7 +114,8 @@ public final class ConnectionCacheWriter {
 				if (succRide != null) {
 					Id<Link>[] origins = succRide.getOriginsOrdered();
 					if (origins.length > 0) {
-						connectionKeys.add(fromLink + "_" + origins[0] + "_" + timeBin);
+						connectionKeys.add(PackedKeyCodec.segmentKey(
+								fromLink.index(), origins[0].index(), timeBin));
 					}
 				}
 			}

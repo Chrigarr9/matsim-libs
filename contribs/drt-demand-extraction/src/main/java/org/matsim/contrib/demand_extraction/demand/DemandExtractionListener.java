@@ -243,7 +243,8 @@ public class DemandExtractionListener implements ShutdownListener {
 					+ ".connection_cache.csv";
 			try {
 				ConnectionCacheWriter.writeConnectionCache(connectionCacheFilename, rides, networkCache,
-						exMasConfig.getNetworkTimeBinSize(), exMasConfig.getConnectionCacheExportMode());
+						exMasConfig.getNetworkTimeBinSize(), exMasConfig.getConnectionCacheExportMode(),
+						postProcessor.getWindowKeys());
 			} catch (IOException e) {
 				log.error("Failed to write connection cache", e);
 			}
