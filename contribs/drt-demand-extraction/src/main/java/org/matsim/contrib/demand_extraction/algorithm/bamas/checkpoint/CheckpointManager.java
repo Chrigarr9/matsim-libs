@@ -14,20 +14,20 @@ import java.util.TreeMap;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumnsIO;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayerIO;
 
 /**
  * Per-degree checkpoint writer for the BAMAS extraction (Plan A3).
  *
- * <p>On the streaming D2D path each completed degree leaves a {@link StubColumns} layer; this
+ * <p>On the streaming D2D path each completed degree leaves a {@link RideLayer} layer; this
  * manager persists those layers (plus the pre-prune pair universe, from which the shareability
  * graph + degree-2 survivors are rebuilt — review addendum F6) so a crashed week-long exact
  * 100% run resumes byte-identically from the last completed degree.
  *
  * <h3>Files (in {@code checkpointDir})</h3>
  * <ul>
- *   <li>{@code pair_stubs_preprune.bin} — the pre-prune degree-2 pair universe ({@link StubColumns},
+ *   <li>{@code pair_stubs_preprune.bin} — the pre-prune degree-2 pair universe ({@link RideLayer},
  *       carries the {@code positionsFlat} copy-identity column). Written once at loop entry.</li>
  *   <li>{@code degree_<d>.stubs.bin} — each completed extension degree's survivor layer.</li>
  *   <li>{@code manifest.txt} — fingerprint + highest completed degree + per-degree row/generated
@@ -48,7 +48,7 @@ public final class CheckpointManager {
 	private static final Logger log = LogManager.getLogger(CheckpointManager.class);
 
 	static final String MANIFEST = "manifest.txt";
-	static final String PAIR_STUBS = "pair_stubs_preprune.bin";
+	static final String PAIR_ROWS = "pair_stubs_preprune.bin";
 	/** Sentinel highest-degree value meaning "only the base (pair) checkpoint exists". */
 	static final int BASE_ONLY_DEGREE = 2;
 
@@ -78,28 +78,28 @@ public final class CheckpointManager {
 	 * Persist the pre-prune pair universe (review addendum F6) and mark the base checkpoint done.
 	 * Called once at degree-loop entry on the streaming pair-stub path.
 	 */
-	public void writeBase(StubColumns allPairStubsPreprune) {
-		writeStubFile(PAIR_STUBS, allPairStubsPreprune);
+	public void writeBase(RideLayer allPairsPreprune) {
+		writeRideFile(PAIR_ROWS, allPairsPreprune);
 		baseWritten = true;
 		if (highestDegree < BASE_ONLY_DEGREE) {
 			highestDegree = BASE_ONLY_DEGREE;
 		}
 		writeManifest();
 		log.info("[checkpoint] wrote base pair universe ({} rows) to {}/{}",
-				allPairStubsPreprune.size(), dir, PAIR_STUBS);
+				allPairsPreprune.size(), dir, PAIR_ROWS);
 	}
 
 	/**
 	 * Persist one completed extension degree's survivor layer and advance the manifest.
 	 *
 	 * @param outputDegree   the degree of the rides in {@code layer} (3, 4, ...)
-	 * @param layer          the post-prune survivor {@link StubColumns} for that degree
+	 * @param layer          the post-prune survivor {@link RideLayer} for that degree
 	 * @param generatedCount the number of rides GENERATED at that degree (pre-prune) — restores
 	 *                       {@code nextRideIndex} exactly on resume (reserved index space, not the
 	 *                       surviving count)
 	 */
-	public void writeDegree(int outputDegree, StubColumns layer, int generatedCount) {
-		writeStubFile("degree_" + outputDegree + ".stubs.bin", layer);
+	public void writeDegree(int outputDegree, RideLayer layer, int generatedCount) {
+		writeRideFile("degree_" + outputDegree + ".stubs.bin", layer);
 		perDegree.put(outputDegree, new long[] {layer.size(), generatedCount});
 		if (outputDegree > highestDegree) {
 			highestDegree = outputDegree;
@@ -241,19 +241,19 @@ public final class CheckpointManager {
 	}
 
 	/** Read back the pre-prune pair universe persisted by {@link #writeBase}. */
-	public StubColumns readBase() {
-		return readStubFile(PAIR_STUBS);
+	public RideLayer readBase() {
+		return readRideFile(PAIR_ROWS);
 	}
 
 	/** Read back the survivor layer for one completed extension degree. */
-	public StubColumns readDegree(int outputDegree) {
-		return readStubFile("degree_" + outputDegree + ".stubs.bin");
+	public RideLayer readDegree(int outputDegree) {
+		return readRideFile("degree_" + outputDegree + ".stubs.bin");
 	}
 
-	private StubColumns readStubFile(String name) {
+	private RideLayer readRideFile(String name) {
 		Path target = dir.resolve(name);
 		try (InputStream in = Files.newInputStream(target)) {
-			return StubColumnsIO.read(in);
+			return RideLayerIO.read(in);
 		} catch (IOException e) {
 			throw new UncheckedIOException("Cannot read checkpoint stub file " + target
 					+ " — checkpoint incomplete/corrupt; delete the checkpoint dir and rerun.", e);
@@ -262,11 +262,11 @@ public final class CheckpointManager {
 
 	// ------------------------------------------------------------------
 
-	private void writeStubFile(String name, StubColumns sc) {
+	private void writeRideFile(String name, RideLayer sc) {
 		Path target = dir.resolve(name);
 		Path tmp = dir.resolve(name + ".tmp");
 		try (OutputStream out = Files.newOutputStream(tmp)) {
-			StubColumnsIO.write(sc, out);
+			RideLayerIO.write(sc, out);
 		} catch (IOException e) {
 			throw new UncheckedIOException("Cannot write checkpoint stub file " + target, e);
 		}

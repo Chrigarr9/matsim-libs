@@ -14,7 +14,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.MaterializedRideStore;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.MaterializedRideStore;
 import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.io.lowmem.PhaseOneDumpLayout;

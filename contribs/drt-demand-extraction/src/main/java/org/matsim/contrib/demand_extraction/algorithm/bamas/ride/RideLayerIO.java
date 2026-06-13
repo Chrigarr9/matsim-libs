@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -9,7 +9,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 
 /**
- * Binary serialization of one degree's {@link StubColumns} (Plan A3 — checkpoint/resume).
+ * Binary serialization of one degree's {@link RideLayer} (Plan A3 — checkpoint/resume).
  *
  * <p>Streams the primitive column arrays directly, no per-row object graph. The on-disk form
  * is a small header followed by each column in row order:
@@ -36,19 +36,19 @@ import java.io.OutputStream;
  *
  * <p>The caller owns the stream: {@link #write} flushes but does not close it.
  */
-public final class StubColumnsIO {
+public final class RideLayerIO {
 
 	/** Magic number "STBC" — guards against reading an unrelated/corrupt file. */
 	static final int MAGIC = 0x53544243;
 	/** Format version — bumped on any layout change; read refuses a mismatch. */
 	static final int VERSION = 1;
 
-	private StubColumnsIO() {}
+	private RideLayerIO() {}
 
 	/**
 	 * Write {@code sc} to {@code out} (header + all columns). Flushes; does not close.
 	 */
-	public static void write(StubColumns sc, OutputStream out) throws IOException {
+	public static void write(RideLayer sc, OutputStream out) throws IOException {
 		DataOutputStream d = new DataOutputStream(new BufferedOutputStream(out));
 		int degree = sc.degree();
 		int size = sc.size();
@@ -83,10 +83,10 @@ public final class StubColumnsIO {
 	}
 
 	/**
-	 * Read a {@link StubColumns} from {@code in}. Refuses a bad magic or version mismatch
+	 * Read a {@link RideLayer} from {@code in}. Refuses a bad magic or version mismatch
 	 * with an {@link IOException} (same posture as the checkpoint fingerprint refusal).
 	 */
-	public static StubColumns read(InputStream in) throws IOException {
+	public static RideLayer read(InputStream in) throws IOException {
 		DataInputStream d = new DataInputStream(new BufferedInputStream(in));
 
 		int magic = d.readInt();
@@ -128,7 +128,7 @@ public final class StubColumnsIO {
 			for (int i = 0; i < flat; i++) positionsFlat[i] = d.readInt();
 		}
 
-		return StubColumns.adopt(degree, size, setsFlat, originOrder, destOrder,
+		return RideLayer.adopt(degree, size, setsFlat, originOrder, destOrder,
 				rideDistanceDm, travelTimeDs, flags, positionsFlat);
 	}
 }

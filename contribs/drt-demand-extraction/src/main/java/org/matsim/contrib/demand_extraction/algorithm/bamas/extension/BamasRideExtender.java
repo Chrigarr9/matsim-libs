@@ -23,10 +23,10 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.graph.DegreeGraph;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.OrderingCodec;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStub;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubScaling;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.OrderingCodec;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideRow;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideMetricScaling;
 import org.matsim.contrib.demand_extraction.algorithm.graph.ShareabilityGraph;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
@@ -69,7 +69,7 @@ public final class BamasRideExtender {
 	// degree's parents (degree 3→4+) and as the per-degree layer to materialize at the end.
 	// buildDegreeGraph still consumes the fat resultBySetHash (populated unconditionally and
 	// order-independent → identical graph); Task 12 migrates the graph build to stubs.
-	private StubColumns lastDegreeStubs;
+	private RideLayer lastDegreeRows;
 
 	public BamasRideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						RequestResolver resolver, ExMasConfigGroup exMasConfig) {
@@ -110,8 +110,8 @@ public final class BamasRideExtender {
 	 * as the next degree's parents (degree 3→4 and up). It is also the per-degree layer
 	 * accumulated for end-of-run batch materialization.
 	 */
-	public StubColumns getLastDegreeStubs() {
-		return lastDegreeStubs;
+	public RideLayer getLastDegreeRows() {
+		return lastDegreeRows;
 	}
 
 	/**
@@ -138,10 +138,10 @@ public final class BamasRideExtender {
 
 	/**
 	 * Stub-mode parent consumption (seam a): extend a degree-D layer held as a
-	 * {@link StubColumns} to degree D+1. Each parent row is wrapped in a
+	 * {@link RideLayer} to degree D+1. Each parent row is wrapped in a
 	 * {@link StubParentView} that reconstructs {@code originsGlobal()} /
 	 * {@code destsGlobal()} / {@code requestIndices()} from the packed local
-	 * positions, and reports {@code rideDistance()} via {@link StubScaling#fromDeci}
+	 * positions, and reports {@code rideDistance()} via {@link RideMetricScaling#fromDeci}
 	 * — bit-identical to the old {@code getRideDistance()} double (Task 4), so the
 	 * EPSILON comparison in {@link #compareParentCanonicalKey} reproduces the exact
 	 * canonical parent choice the fat path made.
@@ -151,11 +151,11 @@ public final class BamasRideExtender {
 	 * @param nextRideIndex starting index for new rides
 	 * @return list of degree-(D+1) rides, one per feasible set
 	 */
-	public List<Ride> extendRides(StubColumns parentStubs, DrtRequest[] requestTable, int nextRideIndex) {
-		int targetDegree = parentStubs.size() == 0 ? 0 : parentStubs.degree() + 1;
-		List<ParentView> parentViews = new ArrayList<>(parentStubs.size());
-		for (int row = 0; row < parentStubs.size(); row++) {
-			parentViews.add(new StubParentView(parentStubs, row));
+	public List<Ride> extendRides(RideLayer parentRows, DrtRequest[] requestTable, int nextRideIndex) {
+		int targetDegree = parentRows.size() == 0 ? 0 : parentRows.degree() + 1;
+		List<ParentView> parentViews = new ArrayList<>(parentRows.size());
+		for (int row = 0; row < parentRows.size(); row++) {
+			parentViews.add(new RowParentView(parentRows, row));
 		}
 		return extendParents(parentViews, targetDegree, nextRideIndex);
 	}
@@ -230,7 +230,7 @@ public final class BamasRideExtender {
 		// Per-thread stub buffers: keyed by Thread.currentThread().getId(). Only populated
 		// when stubModeEnabled; otherwise stays empty. Each thread only writes to its own
 		// key, so no locking is needed beyond computeIfAbsent's atomicity on the map.
-		ConcurrentHashMap<Long, StubColumns> stubBuffers = new ConcurrentHashMap<>();
+		ConcurrentHashMap<Long, RideLayer> rowBuffers = new ConcurrentHashMap<>();
 
 		BlockingQueue<ExtensionTask> queue = new ArrayBlockingQueue<>(Math.max(16, parallelism * 4));
 		ExecutorService workers = Executors.newFixedThreadPool(parallelism);
@@ -258,9 +258,9 @@ public final class BamasRideExtender {
 					if (bestRide != null) {
 						resultBySetHash.put(task.newSetHash, bestRide);
 						resultsFound.incrementAndGet();
-						RideStub s = RideStub.fromRide(bestRide);
-						stubBuffers.computeIfAbsent(Thread.currentThread().getId(),
-								id -> new StubColumns(targetDegree))
+						RideRow s = RideRow.fromRide(bestRide);
+						rowBuffers.computeIfAbsent(Thread.currentThread().getId(),
+								id -> new RideLayer(targetDegree))
 								.addRow(s.sortedSet, s.originPacked, s.destPacked,
 										s.distDm, s.ttDs, s.flags);
 					}
@@ -370,12 +370,12 @@ public final class BamasRideExtender {
 		// Store results for graph building (accessed by buildDegreeGraph)
 		this.lastResultBySetHash = resultBySetHash;
 
-		// Merge per-worker stub buffers into one sorted StubColumns — the degree-(D+1)
+		// Merge per-worker stub buffers into one sorted RideLayer — the degree-(D+1)
 		// layer the engine carries forward (BamasEngine.getLastDegreeStubs). Fat-overload
 		// callers (the MissingTriple regression tests) simply ignore it.
-		this.lastDegreeStubs = stubBuffers.isEmpty()
-				? new StubColumns(targetDegree > 0 ? targetDegree : 1)
-				: StubColumns.mergeSorted(stubBuffers.values());
+		this.lastDegreeRows = rowBuffers.isEmpty()
+				? new RideLayer(targetDegree > 0 ? targetDegree : 1)
+				: RideLayer.mergeSorted(rowBuffers.values());
 
 		// Deterministic output order: sort by sorted-request-indices lex.
 		// Required because resultBySetHash.values() iteration is not deterministic
@@ -431,7 +431,7 @@ public final class BamasRideExtender {
 	 * FP noise from flipping canonical parent choices between runs.
 	 *
 	 * <p><b>Stub-path equivalence (Plan A seam a):</b> for stub parents the
-	 * distance fed here is {@link StubScaling#fromDeci(int)}, i.e. an exact
+	 * distance fed here is {@link RideMetricScaling#fromDeci(int)}, i.e. an exact
 	 * multiple of 0.1. Since {@code EPSILON}=1e-9 ≪ 0.1, distinct decimetre
 	 * values always differ by ≥0.1 and are ordered, while equal decimetre
 	 * values give {@code diff==0} and fall through to the lex tie-break —
@@ -457,7 +457,7 @@ public final class BamasRideExtender {
 	 * kinds the extender consumes (seam a):
 	 * <ul>
 	 *   <li>{@link RideParentView} — a fat {@link Ride} (degree 2→3, pairs stay fat).</li>
-	 *   <li>{@link StubParentView} — one row of a {@link StubColumns} layer (3→4+).</li>
+	 *   <li>{@link StubParentView} — one row of a {@link RideLayer} layer (3→4+).</li>
 	 * </ul>
 	 *
 	 * <p>Exposes exactly what the sort, the producer loop and {@link #processSet}
@@ -489,28 +489,28 @@ public final class BamasRideExtender {
 	}
 
 	/**
-	 * {@link ParentView} backed by one row of a {@link StubColumns} layer.
+	 * {@link ParentView} backed by one row of a {@link RideLayer} layer.
 	 *
-	 * <p>{@code rideDistance()} returns {@link StubScaling#fromDeci}, which is
+	 * <p>{@code rideDistance()} returns {@link RideMetricScaling#fromDeci}, which is
 	 * bit-identical to the original 0.1-rounded {@code Ride.getRideDistance()} double
 	 * (Task 4 proved this). Combined with {@link #compareParentCanonicalKey}'s EPSILON
 	 * (1e-9 ≪ 0.1), the canonical parent choice is identical to the fat path.
 	 *
 	 * <p>The origin/dest orderings are reconstructed via the same unpack-then-map logic
-	 * as {@link RideStub#originsGlobal()} / {@link RideStub#destsGlobal()}.
+	 * as {@link RideRow#originsGlobal()} / {@link RideRow#destsGlobal()}.
 	 */
-	private static final class StubParentView implements ParentView {
-		private final StubColumns cols;
+	private static final class RowParentView implements ParentView {
+		private final RideLayer cols;
 		private final int row;
 		// Cached sorted request set (the stored slice is already sorted ascending).
 		private final int[] sortedSet;
-		StubParentView(StubColumns cols, int row) {
+		RowParentView(RideLayer cols, int row) {
 			this.cols = cols;
 			this.row = row;
 			this.sortedSet = cols.requestIndices(row); // defensive copy, sorted ascending
 		}
 		@Override public double rideDistance() {
-			return StubScaling.fromDeci(cols.rideDistanceDm(row));
+			return RideMetricScaling.fromDeci(cols.rideDistanceDm(row));
 		}
 		@Override public int[] sortedRequestIndices() { return sortedSet.clone(); }
 		@Override public int[] requestIndices() { return sortedSet.clone(); }
@@ -553,7 +553,7 @@ public final class BamasRideExtender {
 	 *
 	 * @param parentRide the best ride for the base set at the previous degree, viewed
 	 *                   through {@link ParentView} so it can be backed by either a fat
-	 *                   {@link Ride} (degree 2→3) or a {@link StubColumns} row (3→4+).
+	 *                   {@link Ride} (degree 2→3) or a {@link RideLayer} row (3→4+).
 	 * @return best validated ride for this set, or null if no valid ordering exists
 	 */
 	private Ride processSet(int[] newSet, long setHash, int targetDegree, ParentView parentRide) {
@@ -698,7 +698,7 @@ public final class BamasRideExtender {
 	 * its original FIFO/LIFO kind in {@code flags}, and the CSV output writes
 	 * {@code ride.getKind()} verbatim, so a materialized pair must reproduce
 	 * FIFO/LIFO — not the {@link RideKind#MIXED} the extension path uses. Degree-3+
-	 * stubs encode MIXED in their flags ({@code RideStub.fromRide}), so passing the
+	 * stubs encode MIXED in their flags ({@code RideRow.fromRide}), so passing the
 	 * decoded kind is a no-op for them.
 	 */
 	static Ride buildRideFromOrdering(MatsimNetworkCache network,

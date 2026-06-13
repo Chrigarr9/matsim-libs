@@ -24,7 +24,7 @@ import org.matsim.api.core.v01.Scenario;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasEngine;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStores;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideStores;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCacheTestFixture;

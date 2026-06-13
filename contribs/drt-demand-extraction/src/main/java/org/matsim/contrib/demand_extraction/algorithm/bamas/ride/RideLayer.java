@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -8,7 +8,7 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 /**
  * Struct-of-arrays (SoA) container for ride stubs of a fixed degree.
  *
- * <p>One {@code StubColumns} instance holds all surviving rides of exactly one degree
+ * <p>One {@code RideLayer} instance holds all surviving rides of exactly one degree
  * as parallel primitive arrays — roughly 30-40 bytes per row — instead of heavyweight
  * {@link org.matsim.contrib.demand_extraction.algorithm.domain.Ride} objects (~4 KB each).
  *
@@ -34,7 +34,7 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  * <h3>Growth</h3>
  * Amortised doubling on all backing arrays.  No per-row objects are allocated.
  */
-public final class StubColumns {
+public final class RideLayer {
 
 	private static final int INITIAL_CAPACITY = 16;
 
@@ -77,7 +77,7 @@ public final class StubColumns {
 	 *
 	 * @param degree number of passengers per ride; fixed for the lifetime of this instance
 	 */
-	public StubColumns(int degree) {
+	public RideLayer(int degree) {
 		if (degree < 1) {
 			throw new IllegalArgumentException("degree must be >= 1, got " + degree);
 		}
@@ -220,7 +220,7 @@ public final class StubColumns {
 	// Bulk array access (package-private) — for binary checkpoint IO (Plan A3).
 	// These return the LIVE backing arrays; the first {@code size()} rows are valid
 	// ({@code size()*degree} elements for the flat columns). Callers must treat them as
-	// read-only and must not retain references past the StubColumns' lifetime. Streaming
+	// read-only and must not retain references past the RideLayer' lifetime. Streaming
 	// the raw arrays avoids per-row allocation when persisting 10^7-10^8 rows at 100%.
 	// -----------------------------------------------------------------------
 
@@ -234,7 +234,7 @@ public final class StubColumns {
 	int[]  positionsFlatRaw()  { return positionsFlat; }
 
 	/**
-	 * Build a {@link StubColumns} directly from deserialized column arrays (Plan A3 IO read).
+	 * Build a {@link RideLayer} directly from deserialized column arrays (Plan A3 IO read).
 	 *
 	 * <p>The arrays are ADOPTED as-is (no copy); each must hold exactly {@code size} rows
 	 * ({@code size*degree} elements for {@code setsFlat} and, if non-null, {@code positionsFlat}).
@@ -243,10 +243,10 @@ public final class StubColumns {
 	 *
 	 * @param positionsFlat the optional position column, or {@code null} if this layer has none
 	 */
-	static StubColumns adopt(int degree, int size,
+	static RideLayer adopt(int degree, int size,
 			int[] setsFlat, long[] originOrder, long[] destOrder,
 			int[] rideDistanceDm, int[] travelTimeDs, byte[] flags, int[] positionsFlat) {
-		StubColumns sc = new StubColumns(degree);
+		RideLayer sc = new RideLayer(degree);
 		sc.setsFlat = setsFlat;
 		sc.originOrder = originOrder;
 		sc.destOrder = destOrder;
@@ -293,8 +293,8 @@ public final class StubColumns {
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Merge a non-empty collection of same-degree {@link StubColumns} buffers into a
-	 * single new {@link StubColumns} whose rows are in ascending lexicographic order
+	 * Merge a non-empty collection of same-degree {@link RideLayer} buffers into a
+	 * single new {@link RideLayer} whose rows are in ascending lexicographic order
 	 * of their {@code setsFlat} slices.
 	 *
 	 * <h3>Determinism guarantee</h3>
@@ -317,17 +317,17 @@ public final class StubColumns {
 	 *
 	 * <h3>Empty collection</h3>
 	 * Requires non-empty input: without any part there is no degree information
-	 * available.  Use {@code new StubColumns(degree)} directly for the empty case.
+	 * available.  Use {@code new RideLayer(degree)} directly for the empty case.
 	 *
 	 * @param parts non-empty collection of same-degree buffers; buffers may be empty
-	 * @return a new {@link StubColumns} containing all rows in ascending lex order
+	 * @return a new {@link RideLayer} containing all rows in ascending lex order
 	 * @throws IllegalArgumentException if {@code parts} is empty or buffers have
 	 *         differing degrees
 	 */
 	// NOTE: mergeSorted is degree-3+ only — the degree-2 pair layer is never merged
 	// through here (it is built/pruned via sequential addRow in BamasEngine), so the
 	// optional positionsFlat column need not be propagated by this method.
-	public static StubColumns mergeSorted(Collection<StubColumns> parts) {
+	public static RideLayer mergeSorted(Collection<RideLayer> parts) {
 		if (parts.isEmpty()) {
 			throw new IllegalArgumentException(
 					"mergeSorted requires non-empty collection; use new StubColumns(degree) for the empty case");
@@ -335,7 +335,7 @@ public final class StubColumns {
 
 		// Validate all parts share one degree
 		int degree = -1;
-		for (StubColumns part : parts) {
+		for (RideLayer part : parts) {
 			if (degree == -1) {
 				degree = part.degree;
 			} else if (part.degree != degree) {
@@ -347,12 +347,12 @@ public final class StubColumns {
 		// Count total rows and build flat index array: each entry encodes (partIndex, rowIndex).
 		// We keep parallel object + int arrays to avoid boxing.
 		int totalRows = 0;
-		for (StubColumns part : parts) {
+		for (RideLayer part : parts) {
 			totalRows += part.size;
 		}
 
 		// Store parts as an array for indexed access during sort.
-		StubColumns[] partArray = parts.toArray(new StubColumns[0]);
+		RideLayer[] partArray = parts.toArray(new RideLayer[0]);
 
 		// partIdx[i] and rowIdx[i] together identify the i-th candidate row.
 		int[] partIdx = new int[totalRows];
@@ -374,9 +374,9 @@ public final class StubColumns {
 		Integer[] order = new Integer[totalRows];
 		for (int i = 0; i < totalRows; i++) order[i] = i;
 		Arrays.sort(order, (ia, ib) -> {
-			StubColumns pa = partArray[partIdx[ia]];
+			RideLayer pa = partArray[partIdx[ia]];
 			int ra = rowIdx[ia];
-			StubColumns pb = partArray[partIdx[ib]];
+			RideLayer pb = partArray[partIdx[ib]];
 			int rb = rowIdx[ib];
 			int baseA = ra * d;
 			int baseB = rb * d;
@@ -388,10 +388,10 @@ public final class StubColumns {
 		});
 
 		// Construct merged container in sorted order.
-		StubColumns merged = new StubColumns(d);
+		RideLayer merged = new RideLayer(d);
 		for (int i = 0; i < totalRows; i++) {
 			int idx = order[i];
-			StubColumns src = partArray[partIdx[idx]];
+			RideLayer src = partArray[partIdx[idx]];
 			int r = rowIdx[idx];
 			merged.addRow(
 					Arrays.copyOfRange(src.setsFlat, r * d, r * d + d),

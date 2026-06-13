@@ -4,14 +4,14 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStore;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideStore;
 import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 
 /**
  * Result of a Stage-1 algorithm run.
  *
  * <p>{@code rides} is a {@link RideStore} over the door-to-door and stop-to-stop
- * variants. BAMAS may return a streaming {@code StubRideStore} on the memory-critical
+ * variants. BAMAS may return a streaming {@code ColumnarRideStore} on the memory-critical
  * D2D path; the reference ExMAS path wraps its fat list in a {@code MaterializedRideStore}.
  * Consumers materialize lazily via {@link RideStore#forEachMaterialized}.
  * {@code hyperPooledRides} carries the multi-stop Stage-2 (HyperPool)

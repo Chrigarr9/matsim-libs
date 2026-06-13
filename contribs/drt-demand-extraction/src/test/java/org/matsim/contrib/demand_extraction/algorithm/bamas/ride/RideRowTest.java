@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -13,7 +13,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
 /**
- * Round-trip trap-catcher for {@link RideStub}.
+ * Round-trip trap-catcher for {@link RideRow}.
  *
  * <h3>The critical test</h3>
  * Uses non-contiguous global request indices {17, 4099, 65537} — values whose
@@ -28,7 +28,7 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  * element to avoid floating-point summation error and hit exactly 1234.5 m /
  * 678.9 s.  Expected stub integers: distDm=12345, ttDs=6789.
  */
-class RideStubTest {
+class RideRowTest {
 
     // ── helpers (reuse pattern from MaterializedRideStoreTest) ────────────────
 
@@ -138,7 +138,7 @@ class RideStubTest {
                 "fixture: rideTravelTime must be 678.9");
 
         // Extract stub.
-        RideStub stub = RideStub.fromRide(ride);
+        RideRow row = RideRow.fromRide(ride);
 
         // Verify the fixture is actually non-sorted (guards test quality: if this
         // fails the fixture accidentally uses sorted requests[] and loses discriminating power).
@@ -146,22 +146,22 @@ class RideStubTest {
                 "fixture: getRequestIndices() must be non-sorted {65537, 17, 4099} to exercise the sort");
 
         // (a) sortedSet, distDm, ttDs, kind
-        assertArrayEquals(new int[]{ 17, 4099, 65537 }, stub.sortedSet,
+        assertArrayEquals(new int[]{ 17, 4099, 65537 }, row.sortedSet,
                 "sortedSet must be ascending: {17, 4099, 65537} (fromRide must sort even when requests[] is not)");
-        assertEquals(12345, stub.distDm,
+        assertEquals(12345, row.distDm,
                 "distDm must be toDeci(1234.5) == 12345");
-        assertEquals(6789, stub.ttDs,
+        assertEquals(6789, row.ttDs,
                 "ttDs must be toDeci(678.9) == 6789");
-        assertEquals(RideKind.FIFO, RideStub.flagsToKind(stub.flags),
+        assertEquals(RideKind.FIFO, RideRow.flagsToKind(row.flags),
                 "kind round-trip via flags must reproduce FIFO");
 
         // (b) THE TRAP-CATCHER: ordering round-trip must reproduce exact global arrays.
         // A global-packing bug (packing 4099 directly → 4099 & 0xF = 3, wrong local)
         // would map back to sortedSet[3] which is out-of-bounds → AIOOBE, or if it
         // happened to be in-bounds would produce the wrong global index.
-        assertArrayEquals(ride.getOriginsIndex(), stub.originsGlobal(),
+        assertArrayEquals(ride.getOriginsIndex(), row.originsGlobal(),
                 "originsGlobal() must reproduce getOriginsIndex() exactly");
-        assertArrayEquals(ride.getDestinationsIndex(), stub.destsGlobal(),
+        assertArrayEquals(ride.getDestinationsIndex(), row.destsGlobal(),
                 "destsGlobal() must reproduce getDestinationsIndex() exactly");
     }
 
@@ -170,8 +170,8 @@ class RideStubTest {
     @Test
     void allRideKindsRoundTripThroughFlags() {
         for (RideKind kind : RideKind.values()) {
-            byte flags = RideStub.kindToFlags(kind);
-            assertEquals(kind, RideStub.flagsToKind(flags),
+            byte flags = RideRow.kindToFlags(kind);
+            assertEquals(kind, RideRow.flagsToKind(flags),
                     "kind " + kind + " must survive kindToFlags/flagsToKind round-trip");
         }
     }
@@ -212,7 +212,7 @@ class RideStubTest {
                 .startTime(0.0)
                 .build();
 
-        assertThrows(IllegalStateException.class, () -> RideStub.fromRide(badRide),
+        assertThrows(IllegalStateException.class, () -> RideRow.fromRide(badRide),
                 "fromRide must throw IllegalStateException when an ordering index is absent from the request set");
     }
 
@@ -221,7 +221,7 @@ class RideStubTest {
     @Test
     void degreeEqualsSortedSetLength() {
         Ride ride = buildTestRide();
-        RideStub stub = RideStub.fromRide(ride);
-        assertEquals(3, stub.degree(), "degree() must equal sortedSet.length for a degree-3 ride");
+        RideRow row = RideRow.fromRide(ride);
+        assertEquals(3, row.degree(), "degree() must equal sortedSet.length for a degree-3 ride");
     }
 }

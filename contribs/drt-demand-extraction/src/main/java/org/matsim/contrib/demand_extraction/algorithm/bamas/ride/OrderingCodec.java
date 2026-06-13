@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 /**
  * Packs a ride's pickup/dropoff ordering into a single {@code long} using 4 bits per position.

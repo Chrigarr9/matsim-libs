@@ -17,8 +17,8 @@ import org.apache.logging.log4j.Logger;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStub;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideRow;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
@@ -114,26 +114,26 @@ public final class PairGenerator {
 
 	/**
 	 * Stub-mode (Task 13) pair generation: identical to {@link #generatePairs(DrtRequest[])}
-	 * but emits a compact degree-2 {@link StubColumns} instead of a fat {@code List<Ride>}.
+	 * but emits a compact degree-2 {@link RideLayer} instead of a fat {@code List<Ride>}.
 	 *
 	 * <p>Phases 1 (candidate collection) and 2 (deterministic sort) are shared verbatim via
 	 * {@link #collectSortedCandidates}. Phase 3 replays the SAME build + validate sequence
 	 * in the SAME order; each surviving fat ride is converted to a stub row via
-	 * {@link RideStub#fromRide(Ride)} and appended with {@link StubColumns#addRow}, then
+	 * {@link RideRow#fromRide(Ride)} and appended with {@link RideLayer#addRow}, then
 	 * discarded. So:
 	 * <ul>
 	 *   <li>The 6.8M-ride transient fat list (~27 GB at 100%) never exists — only one
 	 *       transient {@link Ride} per validated candidate, plus the ~30 B/row stub columns.</li>
 	 *   <li>The row order is byte-identical to the fat {@code pairs} list order, which is the
 	 *       insertion order the downstream dedup (contract #1) and export (contract #3) depend on.</li>
-	 *   <li>The FIFO/LIFO kind is preserved in {@code flags} (RideStub.kindToFlags), so the
+	 *   <li>The FIFO/LIFO kind is preserved in {@code flags} (RideRow.kindToFlags), so the
 	 *       shareability-graph edge kind and the CSV {@code kind} column both reproduce master.</li>
 	 * </ul>
 	 *
 	 * @param requests global request array
-	 * @return all valid pairs as a degree-2 {@link StubColumns} (the complete pre-dedup universe)
+	 * @return all valid pairs as a degree-2 {@link RideLayer} (the complete pre-dedup universe)
 	 */
-	public StubColumns generatePairStubs(DrtRequest[] requests) {
+	public RideLayer generatePairLayer(DrtRequest[] requests) {
 		long startTime = System.currentTimeMillis();
 		List<PairCandidate> candidates = collectSortedCandidates(requests, startTime);
 
@@ -147,7 +147,7 @@ public final class PairGenerator {
 		for (int p = 0; p < requests.length; p++) idPos.put(requests[p], p);
 
 		// Phase 3: Validate sequentially, emit stubs in the same order as the fat path.
-		StubColumns pairStubs = new StubColumns(2);
+		RideLayer pairs = new RideLayer(2);
 		int nextRideIndex = requests.length; // Start after single rides (mirrors the fat path)
 		int fifoCreated = 0;
 		int lifoCreated = 0;
@@ -156,7 +156,7 @@ public final class PairGenerator {
 			Ride ride = buildRide(c, nextRideIndex);
 			Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
 			if (validated != null) {
-				RideStub s = RideStub.fromRide(validated);
+				RideRow s = RideRow.fromRide(validated);
 				// Positions aligned to s.sortedSet: for each sorted global index, pick whichever
 				// of the pair's two request objects has that index, then look up its reqArray
 				// position. A pair always has two DISTINCT indices (different parents), so the
@@ -177,7 +177,7 @@ public final class PairGenerator {
 					}
 					positions[k] = pos;
 				}
-				pairStubs.addRow(s.sortedSet, s.originPacked, s.destPacked, s.distDm, s.ttDs, s.flags, positions);
+				pairs.addRow(s.sortedSet, s.originPacked, s.destPacked, s.distDm, s.ttDs, s.flags, positions);
 				promotePairChainSegments(c);
 				nextRideIndex++;
 				if (c.kind == RideKind.FIFO) fifoCreated++;
@@ -185,8 +185,8 @@ public final class PairGenerator {
 			}
 		}
 
-		logCompletion(requests.length, pairStubs.size(), fifoCreated, lifoCreated, candidates.size(), startTime);
-		return pairStubs;
+		logCompletion(requests.length, pairs.size(), fifoCreated, lifoCreated, candidates.size(), startTime);
+		return pairs;
 	}
 
 	/**

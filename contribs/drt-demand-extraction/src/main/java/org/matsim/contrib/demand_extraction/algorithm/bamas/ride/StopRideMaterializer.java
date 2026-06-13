@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 import java.util.Map;
 
@@ -18,7 +18,7 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  *
  * <h3>What it does</h3>
  * Reconstructs a full {@link Ride} with {@link RideVariant#STOP_TO_STOP} from a compact
- * {@link S2SStubColumns} row WITHOUT re-running stop discovery.  The stops are PINNED
+ * {@link StopRideLayer} row WITHOUT re-running stop discovery.  The stops are PINNED
  * (read from the {@link StopLocationDictionary}), the walk distances are read from the
  * stub's exact-double columns, and the S2S segment is re-routed via
  * {@link MatsimNetworkCache#getSegment} at the stored {@code startTime} — the same call
@@ -53,7 +53,7 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  * {@link org.matsim.contrib.demand_extraction.algorithm.generation.StopBasedRideGenerator#convertToStopBasedBudgetAware}.
  * Otherwise the legacy formula {@code delays[i] = totalTime - directTime} is used.
  */
-public final class S2SRideMaterializer {
+public final class StopRideMaterializer {
 
 	private final MatsimNetworkCache network;
 	private final BudgetValidator budgetValidator;
@@ -66,7 +66,7 @@ public final class S2SRideMaterializer {
 	 * @param stopDictionary  the dictionary built during Phase 5 stubbification
 	 * @param config          for walk speed and {@code enableBudgetAwareConstraints}
 	 */
-	public S2SRideMaterializer(MatsimNetworkCache network, BudgetValidator budgetValidator,
+	public StopRideMaterializer(MatsimNetworkCache network, BudgetValidator budgetValidator,
 			StopLocationDictionary stopDictionary, ExMasConfigGroup config) {
 		this.network = network;
 		this.budgetValidator = budgetValidator;
@@ -85,7 +85,7 @@ public final class S2SRideMaterializer {
 	 * @throws IllegalStateException if the S2S segment cannot be routed or budget
 	 *         validation fails for a previously-winning row
 	 */
-	public Ride materialize(S2SStubColumns cols, int row,
+	public Ride materialize(StopRideLayer cols, int row,
 			Map<Integer, DrtRequest> requestById) {
 		int degree = cols.degree();
 
@@ -179,8 +179,8 @@ public final class S2SRideMaterializer {
 		// Self-check: quantised distance and travel time must match stub columns.
 		// Recompute from the re-routed segment (NOT from passengerTravelTimes, which
 		// include walk time — rideDistance and rideTravelTime are the IN-VEHICLE segment).
-		int distDmRebuilt = StubScaling.toDeci(inVehicleDistance);
-		int ttDsRebuilt   = StubScaling.toDeci(inVehicleTime);
+		int distDmRebuilt = RideMetricScaling.toDeci(inVehicleDistance);
+		int ttDsRebuilt   = RideMetricScaling.toDeci(inVehicleTime);
 		if (distDmRebuilt != cols.rideDistanceDm(row) || ttDsRebuilt != cols.travelTimeDs(row)) {
 			throw new IllegalStateException(String.format(
 					"S2S materializer parity mismatch at degree %d row %d: "
@@ -194,7 +194,7 @@ public final class S2SRideMaterializer {
 		return Ride.builder()
 				.index(0) // caller re-stamps with post-sort sequential index
 				.degree(degree)
-				.kind(RideStub.flagsToKind(cols.flags(row)))
+				.kind(RideRow.flagsToKind(cols.flags(row)))
 				.requests(originsOrdered)
 				.originsOrderedRequests(originsOrdered)
 				.destinationsOrderedRequests(destsOrdered)

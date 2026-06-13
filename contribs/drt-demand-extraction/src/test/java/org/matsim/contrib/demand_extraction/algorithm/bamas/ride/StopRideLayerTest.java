@@ -1,10 +1,10 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
-class S2SStubColumnsTest {
+class StopRideLayerTest {
 
 	/** Identity ordering for degree d. */
 	private static long identity(int d) {
@@ -19,7 +19,7 @@ class S2SStubColumnsTest {
 
 	@Test
 	void appendOneRow_degreeAndSizeCorrect() {
-		S2SStubColumns cols = new S2SStubColumns(3);
+		StopRideLayer cols = new StopRideLayer(3);
 
 		int[] set = {0, 1, 2};
 		long orig = identity(3);
@@ -47,7 +47,7 @@ class S2SStubColumnsTest {
 
 	@Test
 	void readBackStopIdsAndD2D() {
-		S2SStubColumns cols = new S2SStubColumns(3);
+		StopRideLayer cols = new StopRideLayer(3);
 
 		int[] set = {10, 20, 30};
 		long orig = identity(3);
@@ -91,7 +91,7 @@ class S2SStubColumnsTest {
 
 	@Test
 	void walkArraysBitIdentical() {
-		S2SStubColumns cols = new S2SStubColumns(3);
+		StopRideLayer cols = new StopRideLayer(3);
 
 		// Include a value that loses precision as float: 123.456789012345
 		double[] access = {123.456789012345, 0.0, -7.000000001};
@@ -124,7 +124,7 @@ class S2SStubColumnsTest {
 
 	@Test
 	void twoRows_slicingAndGrowth() {
-		S2SStubColumns cols = new S2SStubColumns(3);
+		StopRideLayer cols = new StopRideLayer(3);
 
 		double[] access0 = {1.1, 2.2, 3.3};
 		double[] egress0 = {4.4, 5.5, 6.6};
@@ -177,7 +177,7 @@ class S2SStubColumnsTest {
 
 	@Test
 	void wrongLengthAccessWalkThrows() {
-		S2SStubColumns cols = new S2SStubColumns(3);
+		StopRideLayer cols = new StopRideLayer(3);
 		assertThrows(IllegalArgumentException.class, () ->
 				cols.addRow(new int[]{0, 1, 2}, identity(3), identity(3),
 						100, 200, (byte) 0, 1, 2, 3600.0, 0,
@@ -192,7 +192,7 @@ class S2SStubColumnsTest {
 
 	@Test
 	void wrongLengthEgressWalkThrows() {
-		S2SStubColumns cols = new S2SStubColumns(3);
+		StopRideLayer cols = new StopRideLayer(3);
 		assertThrows(IllegalArgumentException.class, () ->
 				cols.addRow(new int[]{0, 1, 2}, identity(3), identity(3),
 						100, 200, (byte) 0, 1, 2, 3600.0, 0,
@@ -207,7 +207,7 @@ class S2SStubColumnsTest {
 
 	@Test
 	void startTimeBitIdentical() {
-		S2SStubColumns cols = new S2SStubColumns(2);
+		StopRideLayer cols = new StopRideLayer(2);
 		double startTime0 = 28800.123456789;  // value with sub-second precision
 		double startTime1 = 0.0;              // boundary
 

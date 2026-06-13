@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -15,17 +15,17 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  * ({@code stubModeEnabled && enableStopBased}) without ever holding the full fat ride list
  * in memory.
  *
- * <h3>Relationship to {@link StubRideStore}</h3>
- * {@link StubRideStore} covers only the D2D path ({@code stubModeEnabled && !enableStopBased}).
+ * <h3>Relationship to {@link ColumnarRideStore}</h3>
+ * {@link ColumnarRideStore} covers only the D2D path ({@code stubModeEnabled && !enableStopBased}).
  * This store extends that design to include S2S stubs: it holds fat D2D singles+pairs,
  * D2D degree-3+ stub layers (materialized on demand via {@link RideMaterializer}), and
- * S2S stub layers (materialized on demand via {@link S2SRideMaterializer}).
+ * S2S stub layers (materialized on demand via {@link StopRideMaterializer}).
  *
  * <h3>Sort order</h3>
  * The master code sorts {@code allRides} by
  * {@code (variant, degree, firstPickup)} after Phase 5/6 and before export.
  * This store replicates that stable sort using the same lightweight row-reference array
- * approach as {@link StubRideStore}:
+ * approach as {@link ColumnarRideStore}:
  * <ul>
  *   <li>{@link RideVariant#DOOR_TO_DOOR} (ordinal 0) sorts before
  *       {@link RideVariant#STOP_TO_STOP} (ordinal 1) — all D2D rows before S2S rows.</li>
@@ -46,16 +46,16 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  * D2D stubs materialized into allRides during earlier phases, then S2S rides appended in
  * Phase-5 output order.
  */
-public final class HyperPoolStubRideStore implements RideStore {
+public final class HyperPoolRideStore implements RideStore {
 
 	/** Source tag: a fat D2D ride (single or pair). */
 	private static final int SRC_FAT_D2D = -1;
 
 	private final List<Ride> fatSingularPairs;
-	private final List<StubColumns> d2dStubLayers;
+	private final List<RideLayer> d2dRideLayers;
 	private final RideMaterializer d2dMaterializer;
-	private final List<S2SStubColumns> s2sStubLayers; // per-degree, Phase-5 row order
-	private final S2SRideMaterializer s2sMaterializer;
+	private final List<StopRideLayer> s2sRideLayers; // per-degree, Phase-5 row order
+	private final StopRideMaterializer s2sMaterializer;
 	private final Map<Integer, DrtRequest> requestById;
 
 	/** Total number of rides across all sources. */
@@ -83,22 +83,22 @@ public final class HyperPoolStubRideStore implements RideStore {
 	 * @param s2sMaterializer  S2S pinned-stop replayer
 	 * @param requestById      global index → request map
 	 */
-	public HyperPoolStubRideStore(List<Ride> fatSingularPairs,
-			List<StubColumns> d2dStubLayers,
+	public HyperPoolRideStore(List<Ride> fatSingularPairs,
+			List<RideLayer> d2dRideLayers,
 			RideMaterializer d2dMaterializer,
-			List<S2SStubColumns> s2sStubLayers,
-			S2SRideMaterializer s2sMaterializer,
+			List<StopRideLayer> s2sRideLayers,
+			StopRideMaterializer s2sMaterializer,
 			Map<Integer, DrtRequest> requestById) {
 		this.fatSingularPairs = fatSingularPairs;
-		this.d2dStubLayers    = d2dStubLayers;
+		this.d2dRideLayers    = d2dRideLayers;
 		this.d2dMaterializer  = d2dMaterializer;
-		this.s2sStubLayers    = s2sStubLayers;
+		this.s2sRideLayers    = s2sRideLayers;
 		this.s2sMaterializer  = s2sMaterializer;
 		this.requestById      = requestById;
 
-		int d2dStubRows = d2dStubLayers.stream().mapToInt(StubColumns::size).sum();
-		int s2sStubRows = s2sStubLayers.stream().mapToInt(S2SStubColumns::size).sum();
-		this.total = fatSingularPairs.size() + d2dStubRows + s2sStubRows;
+		int d2dRows = d2dRideLayers.stream().mapToInt(RideLayer::size).sum();
+		int s2sRows = s2sRideLayers.stream().mapToInt(StopRideLayer::size).sum();
+		this.total = fatSingularPairs.size() + d2dRows + s2sRows;
 
 		this.sourceOf   = new int[total];
 		this.localRowOf = new int[total];
@@ -118,7 +118,7 @@ public final class HyperPoolStubRideStore implements RideStore {
 	 * mode-independent index identical to what export assigns here (Plan A2 hyperpool fix).
 	 */
 	private void computeOrder() {
-		int[][] perm = computeSortPermutation(fatSingularPairs, d2dStubLayers, s2sStubLayers);
+		int[][] perm = computeSortPermutation(fatSingularPairs, d2dRideLayers, s2sRideLayers);
 		System.arraycopy(perm[0], 0, sourceOf, 0, total);
 		System.arraycopy(perm[1], 0, localRowOf, 0, total);
 	}
@@ -139,12 +139,12 @@ public final class HyperPoolStubRideStore implements RideStore {
 	 */
 	public static int[][] computeSortPermutation(
 			List<Ride> fatSingularPairs,
-			List<StubColumns> d2dStubLayers,
-			List<S2SStubColumns> s2sStubLayers) {
+			List<RideLayer> d2dRideLayers,
+			List<StopRideLayer> s2sRideLayers) {
 
-		int d2dStubRows = d2dStubLayers.stream().mapToInt(StubColumns::size).sum();
-		int s2sStubRows = s2sStubLayers.stream().mapToInt(S2SStubColumns::size).sum();
-		int total = fatSingularPairs.size() + d2dStubRows + s2sStubRows;
+		int d2dRows = d2dRideLayers.stream().mapToInt(RideLayer::size).sum();
+		int s2sRows = s2sRideLayers.stream().mapToInt(StopRideLayer::size).sum();
+		int total = fatSingularPairs.size() + d2dRows + s2sRows;
 
 		List<RowRef> refs = new ArrayList<>(total);
 
@@ -156,9 +156,9 @@ public final class HyperPoolStubRideStore implements RideStore {
 		}
 
 		// D2D stub layers
-		int nD2D = d2dStubLayers.size();
+		int nD2D = d2dRideLayers.size();
 		for (int s = 0; s < nD2D; s++) {
-			StubColumns layer = d2dStubLayers.get(s);
+			RideLayer layer = d2dRideLayers.get(s);
 			int degree = layer.degree();
 			for (int row = 0; row < layer.size(); row++) {
 				refs.add(new RowRef(RideVariant.DOOR_TO_DOOR.ordinal(), degree,
@@ -167,8 +167,8 @@ public final class HyperPoolStubRideStore implements RideStore {
 		}
 
 		// S2S stub layers (variant = STOP_TO_STOP, ordinal > D2D)
-		for (int s = 0; s < s2sStubLayers.size(); s++) {
-			S2SStubColumns layer = s2sStubLayers.get(s);
+		for (int s = 0; s < s2sRideLayers.size(); s++) {
+			StopRideLayer layer = s2sRideLayers.get(s);
 			int degree = layer.degree();
 			for (int row = 0; row < layer.size(); row++) {
 				// Source index offset: D2D stubs occupy [0, nD2D), S2S stubs start at nD2D.
@@ -220,13 +220,13 @@ public final class HyperPoolStubRideStore implements RideStore {
 			return fatSingularPairs.get(local);
 		}
 
-		int nD2D = d2dStubLayers.size();
+		int nD2D = d2dRideLayers.size();
 		if (src < nD2D) {
 			// D2D stub layer
-			return d2dMaterializer.materialize(d2dStubLayers.get(src), local, requestById);
+			return d2dMaterializer.materialize(d2dRideLayers.get(src), local, requestById);
 		} else {
 			// S2S stub layer
-			return s2sMaterializer.materialize(s2sStubLayers.get(src - nD2D), local, requestById);
+			return s2sMaterializer.materialize(s2sRideLayers.get(src - nD2D), local, requestById);
 		}
 	}
 
@@ -260,19 +260,19 @@ public final class HyperPoolStubRideStore implements RideStore {
 			return fatSingularPairs.get(local).getRequestIndices();
 		}
 
-		int nD2D = d2dStubLayers.size();
-		StubColumns d2dCols;
+		int nD2D = d2dRideLayers.size();
+		RideLayer d2dCols;
 		int degree;
 		int[] sortedSet;
 		int[] originLocal;
 
 		if (src < nD2D) {
-			d2dCols = d2dStubLayers.get(src);
+			d2dCols = d2dRideLayers.get(src);
 			degree  = d2dCols.degree();
 			originLocal = OrderingCodec.unpack(d2dCols.originOrder(local), degree);
 			sortedSet   = d2dCols.requestIndices(local);
 		} else {
-			S2SStubColumns s2sCols = s2sStubLayers.get(src - nD2D);
+			StopRideLayer s2sCols = s2sRideLayers.get(src - nD2D);
 			degree  = s2sCols.degree();
 			originLocal = OrderingCodec.unpack(s2sCols.originOrder(local), degree);
 			sortedSet   = s2sCols.requestIndices(local);

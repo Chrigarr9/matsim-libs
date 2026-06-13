@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -7,7 +7,7 @@ import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
-class StubColumnsTest {
+class RideLayerTest {
 
 	/** Build a minimal DrtRequest sufficient for startTime derivation. */
 	private static DrtRequest req(int index, double requestTime) {
@@ -29,7 +29,7 @@ class StubColumnsTest {
 
 	@Test
 	void twoRowsColumnRoundTrip() {
-		StubColumns cols = new StubColumns(3);
+		RideLayer cols = new RideLayer(3);
 
 		// Row 0 — large, non-contiguous global request indices
 		int[] set0 = {17, 4099, 65537};
@@ -84,7 +84,7 @@ class StubColumnsTest {
 
 	@Test
 	void growthDoublingPreservesEarlyRow() {
-		StubColumns cols = new StubColumns(3);
+		RideLayer cols = new RideLayer(3);
 
 		int[] set0 = {100, 200, 300};
 		long orig0 = OrderingCodec.pack(new int[]{0, 1, 2});
@@ -125,7 +125,7 @@ class StubColumnsTest {
 	 */
 	@Test
 	void startTimeDoesDoubleIndirection() {
-		StubColumns cols = new StubColumns(3);
+		RideLayer cols = new RideLayer(3);
 
 		int[] set = {2, 5, 9};
 		// firstLocal = 1 (origin ordering picks local position 1 first)
@@ -151,7 +151,7 @@ class StubColumnsTest {
 
 	@Test
 	void addRowRejectsWrongSetLength() {
-		StubColumns cols = new StubColumns(3);
+		RideLayer cols = new RideLayer(3);
 		assertThrows(IllegalArgumentException.class,
 				() -> cols.addRow(new int[]{1, 2}, 0L, 0L, 0, 0, (byte) 0),
 				"addRow must reject set length != degree");

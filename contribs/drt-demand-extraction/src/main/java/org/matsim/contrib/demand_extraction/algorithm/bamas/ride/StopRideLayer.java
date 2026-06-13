@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 import it.unimi.dsi.fastutil.doubles.DoubleArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
@@ -6,8 +6,8 @@ import it.unimi.dsi.fastutil.ints.IntArrayList;
 /**
  * Struct-of-arrays (SoA) container for stop-to-stop (S2S) ride stubs of a fixed degree.
  *
- * <p>Composes (does NOT extend — {@link StubColumns} is {@code final}) an inner
- * {@link StubColumns} for the door-to-door (D2D) columns, and adds FIVE parallel S2S
+ * <p>Composes (does NOT extend — {@link RideLayer} is {@code final}) an inner
+ * {@link RideLayer} for the door-to-door (D2D) columns, and adds FIVE parallel S2S
  * columns:
  * <ul>
  *   <li>{@code pickupStopId} — dense int id of the pickup stop per row
@@ -33,7 +33,7 @@ import it.unimi.dsi.fastutil.ints.IntArrayList;
  * <h3>Memory layout</h3>
  * Each row contributes:
  * <ul>
- *   <li>D2D layer: ~30–40 bytes (see {@link StubColumns})</li>
+ *   <li>D2D layer: ~30–40 bytes (see {@link RideLayer})</li>
  *   <li>2 ints (8 bytes) for pickup/dropoff stop ids</li>
  *   <li>8 bytes for startTime double</li>
  *   <li>2 × degree × 8 bytes for access/egress walk flats</li>
@@ -43,10 +43,10 @@ import it.unimi.dsi.fastutil.ints.IntArrayList;
  * <h3>Thread safety</h3>
  * Not thread-safe. Use per-thread instances.
  */
-public final class S2SStubColumns {
+public final class StopRideLayer {
 
 	/** Inner D2D column store — composition, not inheritance. */
-	private final StubColumns d2d;
+	private final RideLayer d2d;
 
 	/** Pickup stop ids, one per row (fastutil IntArrayList for primitive storage). */
 	private final IntArrayList pickupStopIds;
@@ -92,9 +92,9 @@ public final class S2SStubColumns {
 	 * @param degree number of passengers per ride; fixed for the lifetime of this instance
 	 * @throws IllegalArgumentException if degree < 1
 	 */
-	public S2SStubColumns(int degree) {
+	public StopRideLayer(int degree) {
 		this.degree = degree;
-		this.d2d = new StubColumns(degree);
+		this.d2d = new RideLayer(degree);
 		this.pickupStopIds  = new IntArrayList();
 		this.dropoffStopIds = new IntArrayList();
 		this.accessWalkFlat = new DoubleArrayList();
@@ -110,7 +110,7 @@ public final class S2SStubColumns {
 	/**
 	 * Append one S2S row to the container.
 	 *
-	 * <p>The D2D part is delegated to the inner {@link StubColumns}. The S2S columns
+	 * <p>The D2D part is delegated to the inner {@link RideLayer}. The S2S columns
 	 * (stop ids, start time, and walk slices) are appended in parallel, keeping all columns
 	 * index-aligned.
 	 *

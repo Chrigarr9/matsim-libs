@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -64,13 +64,13 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  * fat-source rides are long-lived. Neither is reused across calls, so retaining is benign
  * in practice — but callers must still honour the {@link RideStore} no-retain contract.
  */
-public final class StubRideStore implements RideStore {
+public final class ColumnarRideStore implements RideStore {
 
 	/** Source tag: a fat ride (single or pair). */
 	private static final int SRC_FAT = -1;
 
 	private final List<Ride> fatSingularPairs; // singles + pairs (D2D), in insertion order
-	private final List<StubColumns> stubLayers; // degree-3+ D2D layers, in degree order
+	private final List<RideLayer> rideLayers; // degree-3+ D2D layers, in degree order
 	private final RideMaterializer materializer;
 	private final java.util.Map<Integer, DrtRequest> requestById;
 
@@ -95,20 +95,20 @@ public final class StubRideStore implements RideStore {
 	 * @param materializer     stateless replayer (network + budget validator)
 	 * @param requestById      global index → request map (resolve by index, never array pos)
 	 */
-	public StubRideStore(List<Ride> fatSingularPairs,
-			List<StubColumns> stubLayers,
+	public ColumnarRideStore(List<Ride> fatSingularPairs,
+			List<RideLayer> rideLayers,
 			RideMaterializer materializer,
 			java.util.Map<Integer, DrtRequest> requestById) {
 		this.fatSingularPairs = fatSingularPairs;
-		this.stubLayers = stubLayers;
+		this.rideLayers = rideLayers;
 		this.materializer = materializer;
 		this.requestById = requestById;
 
-		int stubRows = 0;
-		for (StubColumns layer : stubLayers) {
-			stubRows += layer.size();
+		int rows = 0;
+		for (RideLayer layer : rideLayers) {
+			rows += layer.size();
 		}
-		this.total = fatSingularPairs.size() + stubRows;
+		this.total = fatSingularPairs.size() + rows;
 
 		this.sourceOf = new int[total];
 		this.localRowOf = new int[total];
@@ -131,8 +131,8 @@ public final class StubRideStore implements RideStore {
 			Ride r = fatSingularPairs.get(i);
 			refs.add(new RowRef(r.getVariant().ordinal(), r.getDegree(), r.getRequestIndices(), SRC_FAT, i));
 		}
-		for (int s = 0; s < stubLayers.size(); s++) {
-			StubColumns layer = stubLayers.get(s);
+		for (int s = 0; s < rideLayers.size(); s++) {
+			RideLayer layer = rideLayers.get(s);
 			int degree = layer.degree();
 			for (int row = 0; row < layer.size(); row++) {
 				refs.add(new RowRef(RideVariant.DOOR_TO_DOOR.ordinal(), degree,
@@ -168,7 +168,7 @@ public final class StubRideStore implements RideStore {
 		if (src == SRC_FAT) {
 			return fatSingularPairs.get(local);
 		}
-		return materializer.materialize(stubLayers.get(src), local, requestById);
+		return materializer.materialize(rideLayers.get(src), local, requestById);
 	}
 
 	@Override
@@ -203,7 +203,7 @@ public final class StubRideStore implements RideStore {
 		// Pickup-order indices from the stub: originsOrdered[i] = sortedSet[unpack(origin)[i]].
 		// Matches Ride.getRequestIndices() semantics (requests[] == originsOrdered) without
 		// a full materialization.
-		StubColumns layer = stubLayers.get(src);
+		RideLayer layer = rideLayers.get(src);
 		int degree = layer.degree();
 		int[] originLocal = OrderingCodec.unpack(layer.originOrder(local), degree);
 		int[] sortedSet = layer.requestIndices(local);

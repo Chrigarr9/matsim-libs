@@ -194,7 +194,7 @@ public class DemandExtractionListener implements ShutdownListener {
 		AlgorithmResult algorithmResult = algorithm.run(requests);
 
 		// Post-process rides with advanced metrics (maxCost, Shapley, predecessors).
-		// The algorithm hands back a RideStore (streaming StubRideStore on the memory-critical
+		// The algorithm hands back a RideStore (streaming ColumnarRideStore on the memory-critical
 		// D2D path, MaterializedRideStore otherwise); the post-processor materializes through it.
 		RidePostProcessor.MaxCostResolver maxCostResolver = (budget, request, tt, dist) -> {
 			Person person = population.getPersons().get(request.personId);

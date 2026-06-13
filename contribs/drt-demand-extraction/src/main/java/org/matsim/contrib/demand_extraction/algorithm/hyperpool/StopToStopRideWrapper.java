@@ -27,7 +27,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation;
  *       are derived from the ride at construction time and cached as scalars.  The deferred
  *       materializer is {@code () -> ride}.</li>
  *   <li><strong>Stub mode (Plan A2 Task 5)</strong> — backed by scalar fields resolved from
- *       an {@link org.matsim.contrib.demand_extraction.algorithm.bamas.stub.S2SStubColumns} row.
+ *       an {@link org.matsim.contrib.demand_extraction.algorithm.bamas.ride.StopRideLayer} row.
  *       The full ride is constructed lazily via {@link #materialize()} only when the per-cluster
  *       bundling code needs it (
  *       {@link org.matsim.contrib.demand_extraction.algorithm.hyperpool.HyperPoolGenerator}
@@ -126,8 +126,8 @@ public final class StopToStopRideWrapper {
      *   <li>{@code rideIndex} — post-Phase-5 sequential index already stamped on the stub row</li>
      *   <li>{@code pickupStop}/{@code dropoffStop} — resolved from the stop dictionary</li>
      *   <li>{@code passengerCount} — stub layer's degree</li>
-     *   <li>{@code departureTime} — {@code S2SStubColumns.startTime(row)}</li>
-     *   <li>{@code rideTravelTime}/{@code rideDistance} — {@code StubScaling.fromDeci(ttDs/distDm)}</li>
+     *   <li>{@code departureTime} — {@code StopRideLayer.startTime(row)}</li>
+     *   <li>{@code rideTravelTime}/{@code rideDistance} — {@code RideMetricScaling.fromDeci(ttDs/distDm)}</li>
      *   <li>{@code endTime} — {@code departureTime + rideTravelTime}</li>
      * </ul>
      *
@@ -136,8 +136,8 @@ public final class StopToStopRideWrapper {
      * @param dropoffStop   dropoff stop resolved from the stop dictionary
      * @param passengerCount number of passengers (= stub layer degree)
      * @param departureTime departure time from the S2S stub's startTime column (seconds)
-     * @param rideTravelTime in-vehicle travel time from the S2S stub (seconds, via StubScaling)
-     * @param rideDistance  in-vehicle distance from the S2S stub (metres, via StubScaling)
+     * @param rideTravelTime in-vehicle travel time from the S2S stub (seconds, via RideMetricScaling)
+     * @param rideDistance  in-vehicle distance from the S2S stub (metres, via RideMetricScaling)
      * @param endTime       {@code departureTime + rideTravelTime}
      * @param materializer  supplier that lazily constructs the full {@link Ride}; invoked only
      *                      during per-cluster bundling (not during graph construction)
@@ -170,7 +170,7 @@ public final class StopToStopRideWrapper {
      *
      * <p>In fat mode this returns the ride passed to the constructor immediately.
      * In stub mode this triggers pinned-stop replay via {@link
-     * org.matsim.contrib.demand_extraction.algorithm.bamas.stub.S2SRideMaterializer} —
+     * org.matsim.contrib.demand_extraction.algorithm.bamas.ride.StopRideMaterializer} —
      * an expensive operation that should be called only during per-cluster bundling,
      * not during graph construction or compatibility checks.
      *

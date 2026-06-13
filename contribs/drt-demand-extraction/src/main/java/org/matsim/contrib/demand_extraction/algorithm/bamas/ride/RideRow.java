@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 import java.util.Arrays;
 
@@ -22,7 +22,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
  * local.
  *
  * <h3>Distance and travel time</h3>
- * Stored as decimetres / deciseconds (integer tenths) via {@link StubScaling},
+ * Stored as decimetres / deciseconds (integer tenths) via {@link RideMetricScaling},
  * which is loss-free for values that went through {@code Ride}'s own
  * {@code Math.round(x * 10.0) / 10.0} rounding step.
  *
@@ -30,7 +30,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
  * Two lowest bits of {@code flags} hold {@link RideKind#ordinal()} (0..3).
  * Symmetric via {@link #kindToFlags}/{@link #flagsToKind}.
  */
-public final class RideStub {
+public final class RideRow {
 
     /** Sorted request indices (ascending), length == degree. */
     public final int[] sortedSet;
@@ -55,7 +55,7 @@ public final class RideStub {
 
     // ── constructor ───────────────────────────────────────────────────────────
 
-    public RideStub(int[] sortedSet, long originPacked, long destPacked,
+    public RideRow(int[] sortedSet, long originPacked, long destPacked,
                     int distDm, int ttDs, byte flags) {
         this.sortedSet = sortedSet;
         this.originPacked = originPacked;
@@ -68,7 +68,7 @@ public final class RideStub {
     // ── factory ───────────────────────────────────────────────────────────────
 
     /**
-     * Extract a {@link RideStub} from a completed {@link Ride}.
+     * Extract a {@link RideRow} from a completed {@link Ride}.
      *
      * <p>Converts origin/destination orderings from <em>global</em> request indices
      * to <em>local</em> positions within the sorted request set before packing.
@@ -79,7 +79,7 @@ public final class RideStub {
      *                               the ride's request set (would indicate an
      *                               inconsistent Ride state)
      */
-    public static RideStub fromRide(Ride ride) {
+    public static RideRow fromRide(Ride ride) {
         // Build sorted set of global request indices.
         int[] indices = ride.getRequestIndices();
         int[] sorted = indices.clone();
@@ -95,11 +95,11 @@ public final class RideStub {
         int[] destsLocal = toLocalPositions(destsGlobal, sorted);
         long destPacked = OrderingCodec.pack(destsLocal);
 
-        int distDm = StubScaling.toDeci(ride.getRideDistance());
-        int ttDs   = StubScaling.toDeci(ride.getRideTravelTime());
+        int distDm = RideMetricScaling.toDeci(ride.getRideDistance());
+        int ttDs   = RideMetricScaling.toDeci(ride.getRideTravelTime());
         byte flags  = kindToFlags(ride.getKind());
 
-        return new RideStub(sorted, originPacked, destPacked, distDm, ttDs, flags);
+        return new RideRow(sorted, originPacked, destPacked, distDm, ttDs, flags);
     }
 
     /**

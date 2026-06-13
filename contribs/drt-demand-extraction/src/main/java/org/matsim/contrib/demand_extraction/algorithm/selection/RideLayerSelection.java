@@ -5,18 +5,18 @@ import java.util.Map;
 
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.OrderingCodec;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubScaling;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.OrderingCodec;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideMetricScaling;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
 /**
  * Adapter between the primitive {@link RideSelector} engine and a stub-mode
- * {@link StubColumns} layer. Computes per-row quality metrics off stub-derived values
- * (ride distance via {@link StubScaling#fromDeci}, {@code sumDirectDistance} summed in
+ * {@link RideLayer} layer. Computes per-row quality metrics off stub-derived values
+ * (ride distance via {@link RideMetricScaling#fromDeci}, {@code sumDirectDistance} summed in
  * PICKUP order through the index-collision-safe {@code requestById} map), runs the
- * selector, and rebuilds a filtered {@link StubColumns} of the survivors.
+ * selector, and rebuilds a filtered {@link RideLayer} of the survivors.
  *
  * <p>This replaces the stub methods of the former {@code PostExtensionPruner}
  * ({@code pruneStubLayer}/{@code pruneStubCoverageTopK}/{@code pruneStubRatioThreshold}) and
@@ -36,9 +36,9 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  *       {@code ExtensionParentFilter}.</li>
  * </ul>
  */
-public final class StubLayerSelection {
+public final class RideLayerSelection {
 
-	private StubLayerSelection() { /* non-instantiable */ }
+	private RideLayerSelection() { /* non-instantiable */ }
 
 	// === post-extension / inter-degree pruning (replaces PostExtensionPruner.pruneStubLayer) ===
 
@@ -48,7 +48,7 @@ public final class StubLayerSelection {
 	 * {@code keepTopFraction >= 1.0} is a no-op pass-through (matches the old
 	 * {@code buildPruner} returning null).
 	 */
-	public static StubColumns prune(StubColumns layer, Map<Integer, DrtRequest> requestById,
+	public static RideLayer prune(RideLayer layer, Map<Integer, DrtRequest> requestById,
 			ExMasConfigGroup cfg) {
 		if (layer == null || layer.size() == 0 || layer.degree() <= 1) {
 			return layer;
@@ -59,7 +59,7 @@ public final class StubLayerSelection {
 		};
 	}
 
-	private static StubColumns pruneCoverageTopK(StubColumns layer,
+	private static RideLayer pruneCoverageTopK(RideLayer layer,
 			Map<Integer, DrtRequest> requestById, ExMasConfigGroup cfg) {
 		int n = layer.size();
 		int degree = layer.degree();
@@ -69,8 +69,8 @@ public final class StubLayerSelection {
 		double[] quality = new double[n];
 		for (int i = 0; i < n; i++) {
 			sets[i] = layer.requestIndices(i);
-			double sumDirect = sumDirectDistanceStub(layer, i, requestById);
-			double rideDist = StubScaling.fromDeci(layer.rideDistanceDm(i));
+			double sumDirect = sumDirectDistanceRow(layer, i, requestById);
+			double rideDist = RideMetricScaling.fromDeci(layer.rideDistanceDm(i));
 			quality[i] = pruneMetric(cfg.getPruningQualityMetric(), rideDist, sumDirect);
 		}
 
@@ -85,14 +85,14 @@ public final class StubLayerSelection {
 		for (int i = 0; i < n; i++) order[i] = i;
 		Arrays.sort(order, SelectionTieBreak.comparator(quality, sets));
 
-		StubColumns out = new StubColumns(degree);
+		RideLayer out = new RideLayer(degree);
 		for (int row : order) {
 			if (kept.contains(row)) copyRow(layer, row, out);
 		}
 		return out;
 	}
 
-	private static StubColumns pruneRatioThreshold(StubColumns layer,
+	private static RideLayer pruneRatioThreshold(RideLayer layer,
 			Map<Integer, DrtRequest> requestById, ExMasConfigGroup cfg) {
 		double keepTopFraction = cfg.getInterDegreeKeepFraction();
 		if (keepTopFraction >= 1.0) {
@@ -107,8 +107,8 @@ public final class StubLayerSelection {
 		// ascending row order, matching the former pruneStubRatioThreshold.
 		double[] savings = new double[n];
 		for (int i = 0; i < n; i++) {
-			double sumDirect = sumDirectDistanceStub(layer, i, requestById);
-			double rideDist = StubScaling.fromDeci(layer.rideDistanceDm(i));
+			double sumDirect = sumDirectDistanceRow(layer, i, requestById);
+			double rideDist = RideMetricScaling.fromDeci(layer.rideDistanceDm(i));
 			savings[i] = sumDirect > 0 ? 1.0 - rideDist / sumDirect : 0;
 		}
 
@@ -118,7 +118,7 @@ public final class StubLayerSelection {
 		thresholdIndex = Math.min(thresholdIndex, sorted.length - 1);
 		double threshold = sorted[thresholdIndex];
 
-		StubColumns out = new StubColumns(degree);
+		RideLayer out = new RideLayer(degree);
 		for (int i = 0; i < n; i++) {
 			if (savings[i] >= threshold) copyRow(layer, i, out);
 		}
@@ -132,7 +132,7 @@ public final class StubLayerSelection {
 	 * member requests), returning a new layer with only the marked rows in ascending row order.
 	 * {@code k <= 0} keeps everything. The input layer is never mutated.
 	 */
-	public static StubColumns filterParents(StubColumns parents,
+	public static RideLayer filterParents(RideLayer parents,
 			Map<Integer, DrtRequest> requestById, int k,
 			ExMasConfigGroup.PruningQualityMetric metricKind,
 			ExMasConfigGroup.ExtensionParentsSelectionRule ruleKind,
@@ -144,8 +144,8 @@ public final class StubLayerSelection {
 		double[] metric = new double[n];
 		for (int row = 0; row < n; row++) {
 			sets[row] = parents.requestIndices(row);
-			double sumDirect = sumDirectDistanceStub(parents, row, requestById);
-			double rideDist = StubScaling.fromDeci(parents.rideDistanceDm(row));
+			double sumDirect = sumDirectDistanceRow(parents, row, requestById);
+			double rideDist = RideMetricScaling.fromDeci(parents.rideDistanceDm(row));
 			metric[row] = parentMetric(metricKind, rideDist, sumDirect, degree);
 		}
 
@@ -154,7 +154,7 @@ public final class StubLayerSelection {
 				: SelectionRule.PER_REQUEST_TOP_K;
 		IntOpenHashSet marked = RideSelector.select(sets, metric, rule, k, mmrLambda);
 
-		StubColumns filtered = new StubColumns(degree);
+		RideLayer filtered = new RideLayer(degree);
 		for (int row = 0; row < n; row++) {
 			if (marked.contains(row)) copyRow(parents, row, filtered);
 		}
@@ -206,7 +206,7 @@ public final class StubLayerSelection {
 	 * {@code RequestResolver}): Paper-2 Extension-2 hub expansion emits virtual copies sharing
 	 * a parent's index, so positional indexing would resolve a different copy → wrong distance.
 	 */
-	public static double sumDirectDistanceStub(StubColumns layer, int row,
+	public static double sumDirectDistanceRow(RideLayer layer, int row,
 			Map<Integer, DrtRequest> requestById) {
 		int degree = layer.degree();
 		int[] sortedSet = layer.requestIndices(row);
@@ -218,7 +218,7 @@ public final class StubLayerSelection {
 		return sum;
 	}
 
-	private static void copyRow(StubColumns src, int row, StubColumns dst) {
+	private static void copyRow(RideLayer src, int row, RideLayer dst) {
 		dst.addRow(
 				src.requestIndices(row),
 				src.originOrder(row),

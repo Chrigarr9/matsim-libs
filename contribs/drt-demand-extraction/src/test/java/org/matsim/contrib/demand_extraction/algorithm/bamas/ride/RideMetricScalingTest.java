@@ -1,11 +1,11 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
 /**
- * Proves the bit-exactness contract of {@link StubScaling}.
+ * Proves the bit-exactness contract of {@link RideMetricScaling}.
  *
  * <p>The claim: because {@code Ride} rounds {@code rideDistance}/{@code rideTravelTime}
  * to one decimal place ({@code Math.round(x*10.0)/10.0}), storing
@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
  * <em>epsilon-equal &lt;=&gt; int-equal</em>, and an int comparator with no epsilon
  * is exactly equivalent.
  */
-class StubScalingTest {
+class RideMetricScalingTest {
 
 	/**
 	 * Every 0.1-rounded double round-trips through int decimeters without
@@ -37,8 +37,8 @@ class StubScalingTest {
 	void decimeterRoundTripMatchesRideRounding() {
 		for (double raw = 0.0; raw < 5000.0; raw += 0.017) {
 			double rounded = Math.round(raw * 10.0) / 10.0;   // what Ride stores
-			int dm = StubScaling.toDeci(rounded);              // what the stub stores
-			double back = StubScaling.fromDeci(dm);            // reconstructed for CSV
+			int dm = RideMetricScaling.toDeci(rounded);              // what the stub stores
+			double back = RideMetricScaling.fromDeci(dm);            // reconstructed for CSV
 			// The number the CSV writer would emit must be identical either way:
 			assertEquals(fmt(rounded), fmt(back),
 					"CSV-formatted value drifted at raw=" + raw
@@ -59,7 +59,7 @@ class StubScalingTest {
 		double a = Math.round(123.4 * 10.0) / 10.0;
 		double b = Math.round(123.5 * 10.0) / 10.0;
 		assertEquals(
-				Integer.signum(Integer.compare(StubScaling.toDeci(a), StubScaling.toDeci(b))),
+				Integer.signum(Integer.compare(RideMetricScaling.toDeci(a), RideMetricScaling.toDeci(b))),
 				Integer.signum(Double.compare(a, b)),
 				"sign must agree for a < b");
 
@@ -67,7 +67,7 @@ class StubScalingTest {
 		double c = Math.round(200.0 * 10.0) / 10.0;
 		double d = Math.round(200.0 * 10.0) / 10.0;
 		assertEquals(
-				Integer.signum(Integer.compare(StubScaling.toDeci(c), StubScaling.toDeci(d))),
+				Integer.signum(Integer.compare(RideMetricScaling.toDeci(c), RideMetricScaling.toDeci(d))),
 				Integer.signum(Double.compare(c, d)),
 				"sign must agree for a == b");
 
@@ -75,7 +75,7 @@ class StubScalingTest {
 		double e = Math.round(500.9 * 10.0) / 10.0;
 		double f = Math.round(500.8 * 10.0) / 10.0;
 		assertEquals(
-				Integer.signum(Integer.compare(StubScaling.toDeci(e), StubScaling.toDeci(f))),
+				Integer.signum(Integer.compare(RideMetricScaling.toDeci(e), RideMetricScaling.toDeci(f))),
 				Integer.signum(Double.compare(e, f)),
 				"sign must agree for a > b");
 	}

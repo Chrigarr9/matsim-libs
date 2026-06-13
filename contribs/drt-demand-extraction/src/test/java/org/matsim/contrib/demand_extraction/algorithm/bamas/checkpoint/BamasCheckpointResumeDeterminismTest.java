@@ -26,7 +26,7 @@ import org.matsim.api.core.v01.network.Network;
 import org.matsim.api.core.v01.network.NetworkFactory;
 import org.matsim.api.core.v01.network.Node;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasEngine;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStores;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideStores;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.network.ConnectionCacheJournal;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
@@ -53,7 +53,7 @@ import org.matsim.core.trafficmonitoring.FreeSpeedTravelTime;
  * written and resume is exercised end-to-end.
  *
  * <h3>What this asserts</h3>
- * Resume reloads the per-degree {@code StubColumns} from disk byte-for-byte (ride STRUCTURE:
+ * Resume reloads the per-degree {@code RideLayer} from disk byte-for-byte (ride STRUCTURE:
  * request sets, pickup ordering, FIFO/LIFO kind, degree) AND, with the Task-5 connection-cache
  * journal, repopulates the routing cache so the per-ride routed VALUES (distance, travel time,
  * network utility, start/end time) re-materialise bit-identically too. Both signatures are asserted

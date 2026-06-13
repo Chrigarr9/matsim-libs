@@ -9,7 +9,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.MaterializedRideStore;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.MaterializedRideStore;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
@@ -20,7 +20,7 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 /**
  * Failing (red) test for Task 2 of the chained_timebin feature.
  *
- * <p>Asserts that {@link RidePostProcessor#process(org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStore)} populates
+ * <p>Asserts that {@link RidePostProcessor#process(org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideStore)} populates
  * {@link Ride#getReposTimeMeanOutgoing()} with the mean travel time over
  * all feasible outgoing successors, per the design spec:
  *
@@ -132,7 +132,7 @@ class RidePostProcessorReposTimeTest {
 	 * {@code (fromLinkId, toLinkId) -> travelTime} map.
 	 * All other pairs return {@link TravelSegment#unreachable()}.
 	 */
-	private static TravelSegmentLookup stubLookup(
+	private static TravelSegmentLookup rowLookup(
 			Map<String, Double> travelTimeByLinkPair) {
 		return (from, to, departureTime) -> {
 			String key = from.toString() + "|" + to.toString();
@@ -201,7 +201,7 @@ class RidePostProcessorReposTimeTest {
 		routingTable.put(pair(DEST_A, ORIG_C), 120.0);
 		routingTable.put(pair(DEST_B, ORIG_C), 200.0);
 
-		TravelSegmentLookup lookup = stubLookup(routingTable);
+		TravelSegmentLookup lookup = rowLookup(routingTable);
 		ExMasConfigGroup cfg = minimalConfig();
 
 		RidePostProcessor processor = new RidePostProcessor(

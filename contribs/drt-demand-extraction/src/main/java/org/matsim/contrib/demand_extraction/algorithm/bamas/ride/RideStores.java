@@ -1,4 +1,4 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,7 +17,7 @@ public final class RideStores {
 	 * Eagerly materialize a whole {@link RideStore} into a {@code List<Ride>}.
 	 *
 	 * <p>This forces the entire output into memory, so it defeats the streaming
-	 * memory benefit of a {@link StubRideStore}. It exists for callers that genuinely
+	 * memory benefit of a {@link ColumnarRideStore}. It exists for callers that genuinely
 	 * need a random-access list (tests, ad-hoc analysis) and for back-compat at call
 	 * sites that previously received a fat list directly from the engine. Production
 	 * consumers (post-processor, CSV writer) should iterate via
@@ -25,7 +25,7 @@ public final class RideStores {
 	 *
 	 * <p>The {@link RideStore} contract forbids retaining the visited {@link Ride} beyond
 	 * the callback; both shipped stores ({@link MaterializedRideStore},
-	 * {@link StubRideStore}) hand out a distinct object per element, so collecting them
+	 * {@link ColumnarRideStore}) hand out a distinct object per element, so collecting them
 	 * into a list is safe.
 	 *
 	 * @param store the store to drain

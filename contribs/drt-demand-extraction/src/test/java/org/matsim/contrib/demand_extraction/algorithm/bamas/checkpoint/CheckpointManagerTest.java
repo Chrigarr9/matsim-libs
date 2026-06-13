@@ -15,8 +15,8 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns;
-import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumnsIO;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayerIO;
 
 /**
  * Checkpoint writer behaviour (Plan A3 Task 3): files land, are round-trippable, and the
@@ -30,17 +30,17 @@ class CheckpointManagerTest {
 		mgr.init();
 
 		// Base = pre-prune pair universe (degree 2, with positions).
-		StubColumns pairs = new StubColumns(2);
+		RideLayer pairs = new RideLayer(2);
 		pairs.addRow(new int[] {1, 2}, 0x1L, 0x2L, 100, 50, (byte) 0, new int[] {0, 1});
 		pairs.addRow(new int[] {3, 4}, 0x3L, 0x4L, 110, 55, (byte) 1, new int[] {2, 3});
 		mgr.writeBase(pairs);
 
 		// Two extension degrees.
-		StubColumns d3 = new StubColumns(3);
+		RideLayer d3 = new RideLayer(3);
 		d3.addRow(new int[] {1, 2, 3}, 0x123L, 0x321L, 200, 90, (byte) 0);
 		mgr.writeDegree(3, d3, 7);
 
-		StubColumns d4 = new StubColumns(4);
+		RideLayer d4 = new RideLayer(4);
 		d4.addRow(new int[] {1, 2, 3, 4}, 0x1234L, 0x4321L, 300, 120, (byte) 1);
 		d4.addRow(new int[] {2, 3, 4, 5}, 0x2345L, 0x5432L, 310, 125, (byte) 0);
 		mgr.writeDegree(4, d4, 11);
@@ -55,13 +55,13 @@ class CheckpointManagerTest {
 					"no orphaned .tmp files");
 		}
 
-		// Stub files round-trip via StubColumnsIO (incl. positions on the pair layer).
-		StubColumns pairsBack = read(dir.resolve("pair_stubs_preprune.bin"));
+		// Stub files round-trip via RideLayerIO (incl. positions on the pair layer).
+		RideLayer pairsBack = read(dir.resolve("pair_stubs_preprune.bin"));
 		assertEquals(2, pairsBack.degree());
 		assertEquals(2, pairsBack.size());
 		assertArrayEquals(new int[] {2, 3}, pairsBack.positionIndices(1));
 
-		StubColumns d4Back = read(dir.resolve("degree_4.stubs.bin"));
+		RideLayer d4Back = read(dir.resolve("degree_4.stubs.bin"));
 		assertEquals(4, d4Back.degree());
 		assertEquals(2, d4Back.size());
 		assertEquals(0x5432L, d4Back.destOrder(1));
@@ -81,13 +81,13 @@ class CheckpointManagerTest {
 		// Write a base + two degrees, then re-open with a fresh manager and read it back.
 		CheckpointManager writer = new CheckpointManager(dir, "fp-resume");
 		writer.init();
-		StubColumns pairs = new StubColumns(2);
+		RideLayer pairs = new RideLayer(2);
 		pairs.addRow(new int[] {1, 2}, 0x1L, 0x2L, 100, 50, (byte) 0, new int[] {0, 1});
 		writer.writeBase(pairs);
-		StubColumns d3 = new StubColumns(3);
+		RideLayer d3 = new RideLayer(3);
 		d3.addRow(new int[] {1, 2, 3}, 0x123L, 0x321L, 200, 90, (byte) 0);
 		writer.writeDegree(3, d3, 7);
-		StubColumns d4 = new StubColumns(4);
+		RideLayer d4 = new RideLayer(4);
 		d4.addRow(new int[] {1, 2, 3, 4}, 0x1234L, 0x4321L, 300, 120, (byte) 1);
 		writer.writeDegree(4, d4, 11);
 
@@ -109,7 +109,7 @@ class CheckpointManagerTest {
 
 		// Adopting the manifest lets a resumed run append the NEXT degree on top.
 		reader.adoptManifest(m);
-		StubColumns d5 = new StubColumns(5);
+		RideLayer d5 = new RideLayer(5);
 		d5.addRow(new int[] {1, 2, 3, 4, 5}, 0x12345L, 0x54321L, 400, 150, (byte) 0);
 		reader.writeDegree(5, d5, 13);
 		CheckpointManager.Manifest m2 = reader.readManifest();
@@ -145,19 +145,19 @@ class CheckpointManagerTest {
 		assertEquals(0, mgr.expectedJournalBarriers());
 
 		// After base: 1 expected barrier.
-		StubColumns pairs = new StubColumns(2);
+		RideLayer pairs = new RideLayer(2);
 		pairs.addRow(new int[]{1, 2}, 0x1L, 0x2L, 100, 50, (byte) 0, new int[]{0, 1});
 		mgr.writeBase(pairs);
 		assertEquals(1, mgr.expectedJournalBarriers());
 
 		// After degree 3: 2 expected barriers.
-		StubColumns d3 = new StubColumns(3);
+		RideLayer d3 = new RideLayer(3);
 		d3.addRow(new int[]{1, 2, 3}, 0x123L, 0x321L, 200, 90, (byte) 0);
 		mgr.writeDegree(3, d3, 7);
 		assertEquals(2, mgr.expectedJournalBarriers());
 
 		// After degree 4: 3 expected barriers.
-		StubColumns d4 = new StubColumns(4);
+		RideLayer d4 = new RideLayer(4);
 		d4.addRow(new int[]{1, 2, 3, 4}, 0x1234L, 0x4321L, 300, 120, (byte) 1);
 		mgr.writeDegree(4, d4, 11);
 		assertEquals(3, mgr.expectedJournalBarriers());
@@ -173,9 +173,9 @@ class CheckpointManagerTest {
 		mgr.requireJournalCoversCompletedDegrees(4);
 	}
 
-	private static StubColumns read(Path p) throws IOException {
+	private static RideLayer read(Path p) throws IOException {
 		try (InputStream in = Files.newInputStream(p)) {
-			return StubColumnsIO.read(in);
+			return RideLayerIO.read(in);
 		}
 	}
 }

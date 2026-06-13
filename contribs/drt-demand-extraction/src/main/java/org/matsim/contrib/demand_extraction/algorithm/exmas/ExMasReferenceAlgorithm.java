@@ -55,7 +55,7 @@ public class ExMasReferenceAlgorithm implements ExMasAlgorithm {
 		// Reference engine doesn't emit EnumerationStats-style diagnostics. It returns a
 		// fat list; wrap in a MaterializedRideStore for the shared AlgorithmResult contract.
 		return new AlgorithmResult(
-				new org.matsim.contrib.demand_extraction.algorithm.bamas.stub.MaterializedRideStore(rides),
+				new org.matsim.contrib.demand_extraction.algorithm.bamas.ride.MaterializedRideStore(rides),
 				Map.of());
 	}
 }

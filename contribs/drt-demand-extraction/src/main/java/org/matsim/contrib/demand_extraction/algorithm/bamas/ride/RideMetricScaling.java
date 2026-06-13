@@ -1,8 +1,8 @@
-package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
+package org.matsim.contrib.demand_extraction.algorithm.bamas.ride;
 
 /**
  * Scaling helpers for the decimeter / decisecond integer representation used in
- * {@link StubColumns}.
+ * {@link RideLayer}.
  *
  * <h3>Bit-exactness contract</h3>
  * {@code Ride} rounds {@code rideDistance} and {@code rideTravelTime} to one decimal
@@ -25,9 +25,9 @@ package org.matsim.contrib.demand_extraction.algorithm.bamas.stub;
  * <p>This class is pure (no dependencies on MATSim or other project classes) and
  * stateless.
  */
-public final class StubScaling {
+public final class RideMetricScaling {
 
-	private StubScaling() {}
+	private RideMetricScaling() {}
 
 	/**
 	 * Convert a 0.1-rounded distance/time value to integer decimetres or deciseconds.

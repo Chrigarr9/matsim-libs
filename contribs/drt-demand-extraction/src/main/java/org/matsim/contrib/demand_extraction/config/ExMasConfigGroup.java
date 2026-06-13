@@ -341,7 +341,7 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	// ── checkpoint/resume (Plan A3). Directory for per-degree stub checkpoints + the
 	// connection-cache journal. Empty string ("") = checkpointing OFF (no code path active).
-	// When set, every degree barrier persists its StubColumns + (at loop entry) the pre-prune
+	// When set, every degree barrier persists its RideLayer + (at loop entry) the pre-prune
 	// pair universe + cache journal, so a week-long exact 100% run resumes byte-identically
 	// after a crash. The journal is correctness-required (not an optimization): SSSP-populated
 	// cache entries from the skipped pair-gen phase are not bit-reproducible by re-routing, so
