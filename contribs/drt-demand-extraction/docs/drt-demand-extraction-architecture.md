@@ -421,6 +421,21 @@ degree by keeping rides in descending savings order until every request
 still has enough options. Production R4 uses `COVERAGE_TOPK(K=20,
 ABS_SAVINGS)` on top of the P15 gate.
 
+**Quality-loss caveat (P15 + P19 are not admissibility-preserving).** Unlike
+the six methodological-core mechanisms, the two planner-tunable gates can drop
+rides that the unpruned optimum would have kept, so R4 is a *heuristic*
+approximation of the R2 no-prune ride set, not a lossless compression of it.
+The retained-value gap is bounded empirically by the R2 ⊂ R3 ⊂ R4 comparison
+battery (the paper reports the cost/quality delta at the MIP-solution level,
+where it is small). It is **not** reliably predictable offline: the
+`scripts/pruning_calibration.py` cascade simulator reproduces the native Java
+gate's per-degree survivor counts at degree 2–3 but diverges at degree 4+
+(any-parent retention over-predicts ~1.7–2×, all-parent under-predicts ~4.7×),
+because the offline ride corpus lacks the extension-path lineage the native
+gate prunes on. Slope/threshold calibration of `COVERAGE_TOPK`/`RATIO_THRESHOLD`
+must therefore be validated against native high-degree runs (see
+`scripts/validate_gate_parity.py`), not the simulator alone.
+
 ### Pruning effectiveness (historical 10% Bavaria, 21k requests)
 
 > Lyon 10% per-degree counter data lives in the comparison-battery `EnumerationStats` artifacts (commit `0e811ed`). The Bavaria numbers below predate the algorithm/{exmas,bamas} fork and are kept for relative-magnitude reference only.

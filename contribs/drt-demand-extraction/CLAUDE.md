@@ -85,8 +85,20 @@ scripts/regenerate_exmas_reference_golden.sh [--force]
 - `BudgetToConstraintsCalculator` — Converts utility budget to DRT constraints
 - `DrtRequest` / `DrtRequestFactory` — Core request data objects
 
-**`algorithm/engine/`** — Main ExMAS orchestration
-- `ExMasEngine` — Entry point: singles -> pairs -> extensions -> HyperPool
+**`algorithm/engine/`** — Shared orchestration helpers
+- `RidePostProcessor` — maxCost/Shapley/successor enrichment of the Stage-1 ride set (both algorithms)
+
+**`algorithm/bamas/`** — BAMAS, the active Stage-1 algorithm (see "Algorithm fork" above)
+- `BamasEngine` — phase-structured orchestration (singles → pairs → degree-by-degree extension → HyperPool); phase methods extracted in cleanup Task 3
+- `extension/` — `BamasRideExtender` (degree D→D+1), `RideMaterializer`
+- `ride/` — columnar ride representation: `RideLayer`/`RideRow`/`ColumnarRideStore`/`HyperPoolRideStore` + materializers + `RideLayerIO`. (Renamed from the former `stub/` package + "Stub*" types in cleanup Task 2b; the on-disk checkpoint files keep their `.stubs.bin` names.)
+- `checkpoint/` — `CheckpointManager` + `RunFingerprint`: per-degree resume for the low-memory 100% path (Plan A3)
+- `generation/`, `graph/` — BAMAS-specific pair generation + degree-graph index
+
+**`algorithm/exmas/`** — frozen reference ExMAS (`--algorithm=exmas`, Paper 1 R1 baseline; verified byte-equal to `main`)
+
+**`algorithm/selection/`** — unified post-extension pruning (cleanup Task 7)
+- `RideSelector` + `RideLayerSelection` — applies the planner-tunable gates `COVERAGE_TOPK` / `RATIO_THRESHOLD` over `RideLayer`s
 
 **`algorithm/generation/`** — Ride generation
 - `SingleRideGenerator` (degree 1), `PairGenerator` (degree 2 FIFO/LIFO), `TimeFilter`
@@ -100,7 +112,7 @@ scripts/regenerate_exmas_reference_golden.sh [--force]
 
 **`algorithm/domain/`** — Core data: `Ride`, `HyperPooledRide`, `RideVariant`, `RideKind`
 
-**`io/`** — Output: `ExMasCsvWriter`, `ConnectionCacheWriter`, `PersonAttributesWriter`
+**`io/`** — Output: `ExtractionDataManager` (single owner of the output-file wiring + `<demandDir>/<runId>.<name>.csv` convention, cleanup Task 5), delegating to `ExMasCsvWriter`, `ConnectionCacheWriter`, `PersonAttributesWriter`
 
 ### Key Design Decisions
 - **Trip-wise budgets:** Each trip gets independent budget, linked via `groupId` for subtour chains
@@ -123,6 +135,8 @@ Key params:
 - HyperPool Stage 2: `enableHyperPooling`, `hyperPoolMinOccupancy`, `hyperPoolTimeWindowSeconds`
 - Pruning: `maxPoolingDegree`, `pruningKeepTopFractionPerRequestSet`, `pruningMaxRidesToKeepPerRequestSet`
 
+**Removed knobs.** Cleanup Task 8 deleted a set of dead/superseded config knobs (e.g. `intermediateWrite`, `useMatsimWalkRouter`, `useDeterministicNetworkRouting`, `predefinedStopsFile`, and the former `stubModeEnabled` toggle — stub-mode streaming is now always-on). The full audit (what was removed, why, and the migration note that `ExMasConfigGroup` *strictly* rejects unknown `<param>` entries at XML-parse time, so a pre-cleanup output config can no longer be re-read as input) lives in `../../../docs/plans/2026-06-13-exmas-config-audit.md`.
+
 ## Integration with Python (ExmasCommuters)
 
 ```
@@ -135,10 +149,10 @@ simwrapper (Vue.js)          → Interactive visualization
 - `max_cost` per ride — DONE (`maxCosts`, `maxCostsPerKm` columns)
 - Shapley values — DONE (`shapleyValues` column)
 - Successor edges — DONE (`successors` column; top-K capped per ride, see `RidePostProcessor.computePredecessors`)
-- `predecessors` column — DONE but **redundant** (reverse map of `successors`; Python `preprocessor.py:410` drops it on every load). Candidate for removal from Java emit; the post-MIP path cover recomputes successors dynamically over the MIP-selected ride set regardless.
+- `predecessors` column — **removed from the Java emit** (`ExMasCsvWriter` writes `successors` only; predecessors were a redundant reverse map that Python dropped on load). The post-MIP path cover recomputes successors dynamically over the MIP-selected ride set regardless.
 - Network export for empty vehicle distances — DONE (`connection_cache.csv`; populated as a side-effect of the successor enumeration pass)
 
-The path cover's edge-feasibility ladder requires the cache to cover handoff pairs `(last-destination of i, first-origin of j)` within the configured `predecessorsFilterTime` window (default 1800 s). The `connectionCacheExportMode` option chooses what to emit: `"all"` writes everything BAMAS routed (default, broadest); `"successors_only"` writes only the top-K-capped successor rows. A "handoffs" mode (write rows whose endpoints match any kept ride's last-destination × first-origin — the lookup domain of Python's `compute_dynamic_successors`) is implemented offline in `scripts/post_topk_prune.py --cache-mode handoffs`.
+The path cover's edge-feasibility ladder requires the cache to cover handoff pairs `(last-destination of i, first-origin of j)` within the configured `predecessorsFilterTime` window (default 1800 s). The `connectionCacheExportMode` option chooses what to emit (validated set: `window`/`all`/`successors_only`): `"window"` (default) writes only the rows within the `predecessorsFilterTime` handoff window — the memory-bounded mode used by the 100% path; `"all"` writes everything BAMAS routed (broadest); `"successors_only"` writes only the top-K-capped successor rows. A "handoffs" mode (write rows whose endpoints match any kept ride's last-destination × first-origin — the lookup domain of Python's `compute_dynamic_successors`) is implemented offline in `scripts/post_topk_prune.py --cache-mode handoffs`.
 
 ## Low-memory two-phase mode
 
