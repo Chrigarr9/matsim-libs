@@ -109,8 +109,43 @@ public final class HyperPoolStubRideStore implements RideStore {
 	 * Build the row-reference array in concatenation order, then stable-sort by
 	 * {@code (variant, degree, firstPickup)} — the mirror of the master
 	 * {@code allRides.sort(...)} on the same element set.
+	 *
+	 * <p>Delegates to {@link #computeSortPermutation} so the exact same ordering is
+	 * available <em>before</em> Phase 6 (the bundling step) — see
+	 * {@code BamasEngine.generateHyperPooledRidesFromStubs}. Phase 6 stamps each S2S
+	 * wrapper with its final post-sort index (its position {@code r} in this permutation)
+	 * so HyperPool clustering and {@code sourceRideIndices} consume the FINAL,
+	 * mode-independent index identical to what export assigns here (Plan A2 hyperpool fix).
 	 */
 	private void computeOrder() {
+		int[][] perm = computeSortPermutation(fatSingularPairs, d2dStubLayers, s2sStubLayers);
+		System.arraycopy(perm[0], 0, sourceOf, 0, total);
+		System.arraycopy(perm[1], 0, localRowOf, 0, total);
+	}
+
+	/**
+	 * Compute the export sort permutation over the combined D2D + S2S row universe, shared
+	 * between this store (export) and Phase 6 (pre-bundling index canonicalization).
+	 *
+	 * <p>Concatenation order: fat D2D singles+pairs → D2D stub layers (degree order) → S2S
+	 * stub layers (degree order, Phase-5 row order within each degree). Stable-sorted by
+	 * {@code (variant, degree, firstPickup)}. The returned permutation is the byte-for-byte
+	 * order the export uses, so position {@code r} == the final ride index of that row.
+	 *
+	 * @return {@code int[2][total]}: {@code [0] = sourceOf}, {@code [1] = localRowOf}, with
+	 *         the same encoding documented on the {@link #sourceOf} field — {@code SRC_FAT_D2D}
+	 *         for fat rows, {@code [0, nD2D)} for D2D stub layers, {@code >= nD2D} for S2S stub
+	 *         layers (where {@code nD2D = d2dStubLayers.size()}).
+	 */
+	public static int[][] computeSortPermutation(
+			List<Ride> fatSingularPairs,
+			List<StubColumns> d2dStubLayers,
+			List<S2SStubColumns> s2sStubLayers) {
+
+		int d2dStubRows = d2dStubLayers.stream().mapToInt(StubColumns::size).sum();
+		int s2sStubRows = s2sStubLayers.stream().mapToInt(S2SStubColumns::size).sum();
+		int total = fatSingularPairs.size() + d2dStubRows + s2sStubRows;
+
 		List<RowRef> refs = new ArrayList<>(total);
 
 		// Fat D2D singles + pairs
@@ -156,11 +191,14 @@ public final class HyperPoolStubRideStore implements RideStore {
 			return Integer.compare(a.firstPickup, b.firstPickup);
 		});
 
+		int[] sourceOf   = new int[total];
+		int[] localRowOf = new int[total];
 		for (int r = 0; r < total; r++) {
 			RowRef ref = refs.get(r);
 			sourceOf[r]   = ref.source;
 			localRowOf[r] = ref.localRow;
 		}
+		return new int[][] { sourceOf, localRowOf };
 	}
 
 	/**

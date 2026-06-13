@@ -53,6 +53,21 @@ import org.matsim.facilities.ActivityFacilities;
 public final class BamasEngine {
 	private static final Logger log = LogManager.getLogger(BamasEngine.class);
 
+	/**
+	 * Final export ordering of the fat ride list: variant (D2D before S2S), then degree
+	 * ascending, then first request index ascending. Used both for the post-Phase-6
+	 * sort+reindex of {@code allRides} AND (Plan A2 hyperpool fix) for the pre-Phase-6
+	 * stamping of S2S rides with their final, mode-independent index. Sharing the one
+	 * comparator is what guarantees the pre-Phase-6 index equals the export index.
+	 */
+	private static final java.util.Comparator<Ride> EXPORT_RIDE_COMPARATOR =
+			java.util.Comparator.comparing(Ride::getVariant)
+					.thenComparingInt(Ride::getDegree)
+					.thenComparingInt(r -> {
+						int[] indices = r.getRequestIndices();
+						return indices.length > 0 ? indices[0] : Integer.MAX_VALUE;
+					});
+
 	private final MatsimNetworkCache network;
 	private final BudgetValidator budgetValidator;
 	private final double horizon;
@@ -690,6 +705,10 @@ public final class BamasEngine {
 					// materialized lazily per cluster during bundling only.
 					hyperPooledRides = generateHyperPooledRidesFromStubs();
 				} else {
+					// Plan A2 (hyperpool index canonicalization): stamp S2S rides with their final
+					// export index BEFORE bundling, so clustering + sourceRideIndices consume
+					// mode-independent indices identical to the stub path.
+					stampFinalS2SIndicesForHyperPool();
 					hyperPooledRides = generateHyperPooledRides(stopBasedRides);
 				}
 				log.info("Generated {} hyper-pooled rides", hyperPooledRides.size());
@@ -702,13 +721,7 @@ public final class BamasEngine {
 		if (runS2SStubs == null) {
 			// Fat path: sort + reindex allRides (which includes S2S rides).
 			// Sort by: variant (D2D first), then degree (ascending), then by first request index (ascending)
-			allRides.sort(java.util.Comparator
-					.comparing(Ride::getVariant)
-					.thenComparingInt(Ride::getDegree)
-					.thenComparingInt(r -> {
-						int[] indices = r.getRequestIndices();
-						return indices.length > 0 ? indices[0] : Integer.MAX_VALUE;
-					}));
+			allRides.sort(EXPORT_RIDE_COMPARATOR);
 
 			// Re-assign indices sequentially after sorting
 			for (int i = 0; i < allRides.size(); i++) {
@@ -1116,6 +1129,34 @@ public final class BamasEngine {
 	}
 
 	/**
+	 * Plan A2 (hyperpool index canonicalization) — fat path. Stamp every S2S ride in
+	 * {@code allRides} with its FINAL post-export-sort index <em>before</em> Phase 6.
+	 *
+	 * <p>Phase 6 runs before the export sort+reindex (see {@code generateRides}), so without
+	 * this the HyperPool clustering tie-break (which keys on {@link Ride#getIndex()} via
+	 * {@code StopToStopRideWrapper}) and the emitted {@code sourceRideIndices} would consume
+	 * the PRE-FINAL Phase-5 generation index. That pre-final index is threaded differently in
+	 * the fat vs stub Phase-5 paths, so it diverges between modes even though the final export
+	 * order is identical. Stamping the final index here makes the fat Phase-6 input bit-identical
+	 * to the stub path's (which feeds the same final index via {@code computeSortPermutation}).
+	 *
+	 * <p>Sorts a COPY — {@code allRides}' own order is left untouched, so the later in-place
+	 * export sort+reindex reassigns the identical values (S2S rows land at the same positions)
+	 * and {@code exmas_rides.csv} byte-parity is preserved. The comparator ignores the ride's
+	 * own index, so re-stamping does not perturb the sort.
+	 */
+	private void stampFinalS2SIndicesForHyperPool() {
+		List<Ride> exportOrder = new ArrayList<>(allRides);
+		exportOrder.sort(EXPORT_RIDE_COMPARATOR);
+		for (int i = 0; i < exportOrder.size(); i++) {
+			Ride r = exportOrder.get(i);
+			if (r.getVariant() == RideVariant.STOP_TO_STOP) {
+				r.assignIndex(i);
+			}
+		}
+	}
+
+	/**
 	 * Generate hyper-pooled rides from stop-to-stop rides using HyperPool Stage 2.
 	 *
 	 * <p>Bundles multiple stop-to-stop rides together where passengers walk to/from
@@ -1196,10 +1237,34 @@ public final class BamasEngine {
 	private List<HyperPooledRide> generateHyperPooledRidesFromStubs() {
 		// S2S start index = number of D2D rides (fat + stub rows) — mirrors generateStopBasedRidesBatched
 		int fatD2DCount  = allRides.size();
-		int stubD2DCount = runStubLayers == null ? 0
-				: runStubLayers.stream().mapToInt(
-						org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns::size).sum();
+		List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> d2dStubLayers =
+				runStubLayers != null ? runStubLayers : new ArrayList<>();
+		int stubD2DCount = d2dStubLayers.stream().mapToInt(
+				org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns::size).sum();
 		int s2sStartIndex = fatD2DCount + stubD2DCount;
+
+		// Plan A2 (hyperpool index canonicalization): compute the SAME export sort permutation
+		// HyperPoolStubRideStore will use at export time, BEFORE bundling. Each S2S row's final
+		// ride index is its position r in this permutation. Feed those final indices to the
+		// wrappers so clustering + sourceRideIndices match the fat path (which stamps the
+		// identical final index via stampFinalS2SIndicesForHyperPool). The three inputs here are
+		// the exact objects passed to the HyperPoolStubRideStore constructor in the same state,
+		// so the permutation — and thus every S2S final index — is identical to export.
+		int[][] perm = org.matsim.contrib.demand_extraction.algorithm.bamas.stub.HyperPoolStubRideStore
+				.computeSortPermutation(allRides, d2dStubLayers, runS2SStubs);
+		int[] sourceOf   = perm[0];
+		int[] localRowOf = perm[1];
+		int nD2DLayers = d2dStubLayers.size();
+		int[][] s2sFinalIndex = new int[runS2SStubs.size()][];
+		for (int s = 0; s < runS2SStubs.size(); s++) {
+			s2sFinalIndex[s] = new int[runS2SStubs.get(s).size()];
+		}
+		for (int r = 0; r < sourceOf.length; r++) {
+			int src = sourceOf[r];
+			if (src >= nD2DLayers) { // S2S row: src == nD2DLayers + s2sLayerIndex
+				s2sFinalIndex[src - nD2DLayers][localRowOf[r]] = r;
+			}
+		}
 
 		// Build S2SRideMaterializer (same args as in the export-pass construction)
 		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.S2SRideMaterializer s2sMat =
@@ -1229,7 +1294,8 @@ public final class BamasEngine {
 				hyperPoolWalkBudgetProvider);
 
 		List<HyperPooledRide> result = generator.generateFromStubs(
-				runS2SStubs, s2sMat, runStopDictionary, runRequestById, network, s2sStartIndex);
+				runS2SStubs, s2sMat, runStopDictionary, runRequestById, network, s2sStartIndex,
+				s2sFinalIndex);
 
 		generator.logStatistics();
 		return result;
