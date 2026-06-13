@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
+import org.matsim.api.core.v01.Id;
+import org.matsim.api.core.v01.network.Link;
 import org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation;
 
 /**
@@ -15,19 +17,45 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation;
  * object header + fields) to 4 bytes, and enables fastutil primitive collections
  * downstream.
  *
- * <h3>Equality semantics</h3>
- * Two {@link StopLocation} instances are equal if and only if their {@code linkId}s are
- * equal (see {@link StopLocation#equals}). Consequently two instances constructed with
- * the same {@code linkId} but different coordinates or snapping penalties are interned to
- * the SAME id. The first-inserted instance is stored for reverse lookup.
+ * <h3>Interning identity — full stop, NOT linkId-only</h3>
+ * Stops are interned by their FULL identity — {@code (linkId, coord.x, coord.y,
+ * snappingPenalty)} — rather than by {@link StopLocation#equals} (which is linkId-only).
+ * This matters because a stop's coordinate is request-derived: stop finders snap to the
+ * closest point on the link to the <em>centroid of the served passengers' locations</em>
+ * (see {@code NetworkLinkStopFinder}, {@code GeometricStopFinder}). Two S2S rides can
+ * therefore pin DIFFERENT coordinates on the SAME link — most visibly for upsampled
+ * duplicate persons whose jittered origins shift the centroid by centimetres.
+ *
+ * <p>Interning by linkId-only would collapse those distinct-coordinate stops to a single
+ * id and replay the first-inserted instance's coordinate for all of them, so the stub
+ * path's {@code pickupStopX/Y} and {@code snappingPenalty} columns would diverge from the
+ * fat path by ~0.01 m and break {@code exmas_rides.csv} byte-parity (Plan A2). Interning
+ * by full identity makes {@link #byId(int)} return the EXACT stop the fat ride carried, so
+ * the round-trip is bit-exact. Stops that are genuinely identical (same link, same coord,
+ * same penalty) still dedup to one id, so the memory win is preserved for the common case;
+ * only genuinely-distinct stops cost an extra entry (negligible — tens of MB at 100%).
  *
  * <h3>Thread safety</h3>
  * Not thread-safe. Use per-thread instances and merge if needed.
  */
 public final class StopLocationDictionary {
 
-	/** Maps StopLocation → dense int id. Default return value -1 signals "absent". */
-	private final Object2IntOpenHashMap<StopLocation> forward;
+	/**
+	 * Full-identity interning key. Two stops dedup to one id iff their link, coordinate and
+	 * snapping penalty are all bit-equal (record {@code equals} compares doubles via
+	 * {@link Double#compare}). This is deliberately stricter than {@link StopLocation#equals}
+	 * (linkId-only) so the reverse lookup replays the exact coordinate — required for
+	 * {@code exmas_rides.csv} byte-parity between the fat and stub paths.
+	 */
+	private record StopKey(Id<Link> linkId, double x, double y, double snappingPenalty) {
+		static StopKey of(StopLocation stop) {
+			return new StopKey(stop.getLinkId(), stop.getCoord().getX(), stop.getCoord().getY(),
+					stop.getSnappingPenalty());
+		}
+	}
+
+	/** Maps full-identity StopKey → dense int id. Default return value -1 signals "absent". */
+	private final Object2IntOpenHashMap<StopKey> forward;
 
 	/** Reverse lookup: id → StopLocation (first-inserted instance). */
 	private final List<StopLocation> reverse;
@@ -41,18 +69,20 @@ public final class StopLocationDictionary {
 
 	/**
 	 * Return the dense id for {@code stop}, assigning a new one (= current {@link #size()})
-	 * if this stop has not been interned before.
+	 * if a stop with this exact full identity ({@code linkId}, coordinate, snapping penalty)
+	 * has not been interned before.
 	 *
 	 * @param stop the stop to intern; must not be null
 	 * @return dense id in [0, size())
 	 */
 	public int idOf(StopLocation stop) {
-		int existing = forward.getInt(stop);
+		StopKey key = StopKey.of(stop);
+		int existing = forward.getInt(key);
 		if (existing != -1) {
 			return existing;
 		}
 		int newId = reverse.size();
-		forward.put(stop, newId);
+		forward.put(key, newId);
 		reverse.add(stop);
 		return newId;
 	}

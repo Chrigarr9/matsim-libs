@@ -27,8 +27,12 @@ import org.matsim.contrib.demand_extraction.algorithm.hyperpool.HyperPoolGenerat
 import org.matsim.contrib.demand_extraction.algorithm.hyperpool.StopCompatibilityChecker;
 import org.matsim.contrib.demand_extraction.algorithm.network.ConnectionCacheJournal;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.HyperPoolStubRideStore;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.MaterializedRideStore;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStore;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.S2SRideMaterializer;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.S2SStubColumns;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StopLocationDictionary;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubRideStore;
 import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinder;
 import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinderFactory;
@@ -49,6 +53,21 @@ import org.matsim.facilities.ActivityFacilities;
 public final class BamasEngine {
 	private static final Logger log = LogManager.getLogger(BamasEngine.class);
 
+	/**
+	 * Final export ordering of the fat ride list: variant (D2D before S2S), then degree
+	 * ascending, then first request index ascending. Used both for the post-Phase-6
+	 * sort+reindex of {@code allRides} AND (Plan A2 hyperpool fix) for the pre-Phase-6
+	 * stamping of S2S rides with their final, mode-independent index. Sharing the one
+	 * comparator is what guarantees the pre-Phase-6 index equals the export index.
+	 */
+	private static final java.util.Comparator<Ride> EXPORT_RIDE_COMPARATOR =
+			java.util.Comparator.comparing(Ride::getVariant)
+					.thenComparingInt(Ride::getDegree)
+					.thenComparingInt(r -> {
+						int[] indices = r.getRequestIndices();
+						return indices.length > 0 ? indices[0] : Integer.MAX_VALUE;
+					});
+
 	private final MatsimNetworkCache network;
 	private final BudgetValidator budgetValidator;
 	private final double horizon;
@@ -61,6 +80,17 @@ public final class BamasEngine {
 	private List<Ride> allRides;
 	private List<HyperPooledRide> hyperPooledRides;
 	private ShareabilityGraph graph;
+	// Plan A2 Task 3 — stub layers and D2D materializer, set during run() and consumed by
+	// generateStopBasedRidesBatched (Phase 5) which executes outside the inner try block.
+	private List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> runStubLayers;
+	private org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer runD2DMaterializer;
+	// Plan A2 Task 4 — S2S stubs and stop dictionary populated by generateStopBasedRidesBatched;
+	// consumed when building HyperPoolStubRideStore for the stub-mode export path.
+	private List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.S2SStubColumns> runS2SStubs;
+	private org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StopLocationDictionary runStopDictionary;
+	// Plan A2 Task 5 — requestById map needed by generateHyperPooledRidesFromStubs; set early in run()
+	// alongside the other run* fields so Phase 6 can access it without parameter threading.
+	private java.util.Map<Integer, DrtRequest> runRequestById;
 
 	// Plan A3 — optional routing-input file paths for the checkpoint fingerprint. When set,
 	// their content hashes enrich the (otherwise config-only) RunFingerprint so a resume refuses
@@ -149,6 +179,7 @@ public final class BamasEngine {
         // reqArray indexing would pick a different colliding copy → wrong/unreachable OD).
         java.util.Map<Integer, DrtRequest> requestById = new java.util.HashMap<>();
         for (DrtRequest r : drtRequests) requestById.put(r.index, r);
+        runRequestById = requestById; // Plan A2 Task 5: needed by generateHyperPooledRidesFromStubs
 
 		int algorithmProcessCount = exMasConfig.getAlgorithmProcessCount();
 
@@ -368,6 +399,7 @@ public final class BamasEngine {
 		// it is not retained past each iteration. Task 12 makes export streaming.
 		List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> stubLayers =
 				stubMode ? new ArrayList<>() : null;
+		this.runStubLayers = stubLayers; // Plan A2: expose to Phase 5 outside the try block
 		// Task 13: on the pairStubPath the degree-2 survivor layer is the FIRST stub layer, so
 		// the StubRideStore concatenation is fat-singles → pair-layer → degree-3 → … (contract
 		// #3). extensionLayerStart marks where degree-3+ layers begin, so the post-loop
@@ -517,35 +549,24 @@ public final class BamasEngine {
 			}
 		}
 
-		// Fat-stub path only (stub mode WITH stop-based): batch-materialize the degree-3+
-		// layers into fat Ride objects and concatenate with the still-fat singles + pairs in
-		// allRides, so Phase 5 stop-based generation can consume the full D2D set. The final
-		// sort + reindex (below) then runs UNCHANGED, exactly as in the fat path. The
-		// streaming D2D path (stubMode && !enableStopBased) skips this entirely — it folds
-		// materialize + sort + reindex into StubRideStore and returns below, before Phase 5.
-		// NON-DEFERRED: materialize replays buildRideFromOrdering + validateAndPopulateBudgets,
-		// so remainingBudgets is populated inline (see RideMaterializer).
-		if (stubMode && !streamingD2D) {
-			org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer materializer =
-					new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
-							network, budgetValidator);
-			int materialized = 0;
-			for (org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer : stubLayers) {
-				for (int row = 0; row < layer.size(); row++) {
-					allRides.add(materializer.materialize(layer, row, requestById));
-					materialized++;
-				}
-			}
-			log.info("Stub mode (fat path, stop-based enabled): materialized {} degree-3+ extension rides from {} per-degree layers",
-					materialized, stubLayers.size());
-		}
+		// Plan A2 Task 3 — stub mode WITH stop-based: Phase 5 now consumes D2D rides via
+		// batched on-demand materialization instead of bulk-materializing all stubs into allRides
+		// first. The materializer is stored as an instance field so Phase 5 (outside this try
+		// block) can call generateStopBasedRidesBatched with it. allRides still holds the fat
+		// singles+pairs; the stub layers are fed to Phase 5 directly without expanding into allRides.
+		// NON-DEFERRED contract is preserved: RideMaterializer always populates remainingBudgets.
+		this.runD2DMaterializer = (stubMode && !streamingD2D)
+				? new org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer(
+						network, budgetValidator)
+				: null;
 
 		// Seam (c) — deferred budgets relocated to the export pass.
 		// stub mode (either branch): remainingBudgets is populated inline by
 		// RideMaterializer.validateAndPopulateBudgets — the streaming path does it lazily
-		// during forEachMaterialized, the fat-stub path did it in the batch-materialize loop
-		// above. Either way the stub layers themselves carry NO budgets, so populateBudgetsBatch
-		// must NOT also run in stub mode (it would double-populate / run on stub-less rows).
+		// during forEachMaterialized, the stop-based stub path (Plan A2) does it per-batch
+		// inside generateStopBasedRidesBatched. Either way the stub layers themselves carry
+		// NO budgets, so populateBudgetsBatch must NOT also run in stub mode (it would
+		// double-populate / run on stub-less rows).
 		// Only the non-stub deferred path needs the batch. NOTE: the parity gate scenario is
 		// NON-DEFERRED (deferExtensionBudgetValidation=false), so it does NOT exercise this
 		// branch — the correctness of the stub-mode skip is reasoned, not gate-verified.
@@ -649,10 +670,23 @@ public final class BamasEngine {
 			log.info("PHASE 5: Stop-Based Ride Generation (HyperPool Stage 1)");
 			log.info("======================================================================");
 
-			stopBasedRides = generateStopBasedRides(allRides);
-			if (!stopBasedRides.isEmpty()) {
-				allRides.addAll(stopBasedRides);
-				log.info("Added {} stop-to-stop ride variants", stopBasedRides.size());
+			// Plan A2 Task 4: stub mode uses batched materialization + S2S stubbification.
+			// The returned list is used ONLY for Phase 6 (intermediate, full-rides path).
+			// S2S rides are NOT added to allRides in stub mode — the HyperPoolStubRideStore
+			// handles them from runS2SStubs without materialising the entire S2S universe.
+			// Fat path (non-stub) uses the original single-pass approach.
+			if (runD2DMaterializer != null) {
+				stopBasedRides = generateStopBasedRidesBatched(
+						allRides, runStubLayers, runD2DMaterializer, requestById);
+				// Stub mode: do NOT add to allRides — HyperPoolStubRideStore streams them.
+				log.info("Generated {} stop-to-stop rides (stub mode: stored as stubs, not in allRides)",
+						stopBasedRides.size());
+			} else {
+				stopBasedRides = generateStopBasedRides(allRides);
+				if (!stopBasedRides.isEmpty()) {
+					allRides.addAll(stopBasedRides);
+					log.info("Added {} stop-to-stop ride variants", stopBasedRides.size());
+				}
 			}
 		}
 
@@ -666,54 +700,101 @@ public final class BamasEngine {
 				log.info("PHASE 6: Hyper-Pooling (HyperPool Stage 2)");
 				log.info("======================================================================");
 
-				hyperPooledRides = generateHyperPooledRides(stopBasedRides);
+				if (runS2SStubs != null) {
+					// Plan A2 Task 5: stub mode — S2S universe stays compact; full rides are
+					// materialized lazily per cluster during bundling only.
+					hyperPooledRides = generateHyperPooledRidesFromStubs();
+				} else {
+					// Plan A2 (hyperpool index canonicalization): stamp S2S rides with their final
+					// export index BEFORE bundling, so clustering + sourceRideIndices consume
+					// mode-independent indices identical to the stub path.
+					stampFinalS2SIndicesForHyperPool();
+					hyperPooledRides = generateHyperPooledRides(stopBasedRides);
+				}
 				log.info("Generated {} hyper-pooled rides", hyperPooledRides.size());
 			}
 		}
 
-		// Sort rides for deterministic output (parallel processing can create non-deterministic order)
-		// Sort by: variant (D2D first), then degree (ascending), then by first request index (ascending)
-		allRides.sort(java.util.Comparator
-				.comparing(Ride::getVariant)
-				.thenComparingInt(Ride::getDegree)
-				.thenComparingInt(r -> {
-					int[] indices = r.getRequestIndices();
-					return indices.length > 0 ? indices[0] : Integer.MAX_VALUE;
-				}));
+		// Plan A2 Task 4: stub mode bypasses the fat sort+reindex — HyperPoolStubRideStore
+		// performs an equivalent stable sort on its row-reference array at construction.
+		// For the fat path (non-stub), run the original sort+reindex.
+		if (runS2SStubs == null) {
+			// Fat path: sort + reindex allRides (which includes S2S rides).
+			// Sort by: variant (D2D first), then degree (ascending), then by first request index (ascending)
+			allRides.sort(EXPORT_RIDE_COMPARATOR);
 
-		// Re-assign indices sequentially after sorting
-		for (int i = 0; i < allRides.size(); i++) {
-			Ride oldRide = allRides.get(i);
-			Ride newRide = oldRide.toBuilder()
-					.index(i)  // New sequential index
-					.build();
-			allRides.set(i, newRide);
+			// Re-assign indices sequentially after sorting
+			for (int i = 0; i < allRides.size(); i++) {
+				Ride oldRide = allRides.get(i);
+				Ride newRide = oldRide.toBuilder()
+						.index(i)  // New sequential index
+						.build();
+				allRides.set(i, newRide);
+			}
 		}
 
 		// Final summary
 		if (exMasConfig.isEnableStopBased()) {
-			long d2dCount = allRides.stream().filter(r -> r.getVariant() == RideVariant.DOOR_TO_DOOR).count();
-			long s2sCount = allRides.stream().filter(r -> r.getVariant() == RideVariant.STOP_TO_STOP).count();
 			log.info("");
 			log.info("======================================================================");
-			if (exMasConfig.isEnableHyperPooling()) {
-				log.info("Final Summary (with Stop-Based Pooling and Hyper-Pooling)");
-				log.info("  Door-to-Door rides: {}", d2dCount);
-				log.info("  Stop-to-Stop rides: {}", s2sCount);
-				log.info("  Hyper-Pooled rides: {}", hyperPooledRides.size());
-				log.info("  Total Ride objects: {}", allRides.size());
-				log.info("  Total HyperPooledRide objects: {}", hyperPooledRides.size());
+			if (runS2SStubs != null) {
+				// Stub mode: count from stubs.
+				int d2dTotal = allRides.size() + (runStubLayers == null ? 0
+						: runStubLayers.stream().mapToInt(
+								org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns::size
+						).sum());
+				int s2sTotal = runS2SStubs.stream().mapToInt(S2SStubColumns::size).sum();
+				if (exMasConfig.isEnableHyperPooling()) {
+					log.info("Final Summary (with Stop-Based Pooling and Hyper-Pooling, stub mode)");
+					log.info("  Door-to-Door rides: {}", d2dTotal);
+					log.info("  Stop-to-Stop rides (stubs): {}", s2sTotal);
+					log.info("  Hyper-Pooled rides: {}", hyperPooledRides.size());
+				} else {
+					log.info("Final Summary (with Stop-Based Pooling, stub mode)");
+					log.info("  Door-to-Door rides: {}", d2dTotal);
+					log.info("  Stop-to-Stop rides (stubs): {}", s2sTotal);
+					log.info("  Total rides: {}", d2dTotal + s2sTotal);
+				}
 			} else {
-				log.info("Final Summary (with Stop-Based Pooling)");
-				log.info("  Door-to-Door rides: {}", d2dCount);
-				log.info("  Stop-to-Stop rides: {}", s2sCount);
-				log.info("  Total rides: {}", allRides.size());
+				long d2dCount = allRides.stream().filter(r -> r.getVariant() == RideVariant.DOOR_TO_DOOR).count();
+				long s2sCount = allRides.stream().filter(r -> r.getVariant() == RideVariant.STOP_TO_STOP).count();
+				if (exMasConfig.isEnableHyperPooling()) {
+					log.info("Final Summary (with Stop-Based Pooling and Hyper-Pooling)");
+					log.info("  Door-to-Door rides: {}", d2dCount);
+					log.info("  Stop-to-Stop rides: {}", s2sCount);
+					log.info("  Hyper-Pooled rides: {}", hyperPooledRides.size());
+					log.info("  Total Ride objects: {}", allRides.size());
+					log.info("  Total HyperPooledRide objects: {}", hyperPooledRides.size());
+				} else {
+					log.info("Final Summary (with Stop-Based Pooling)");
+					log.info("  Door-to-Door rides: {}", d2dCount);
+					log.info("  Stop-to-Stop rides: {}", s2sCount);
+					log.info("  Total rides: {}", allRides.size());
+				}
 			}
 			log.info("======================================================================");
 		}
 
-		// Fat path (non-stub, OR stub mode with stop-based enabled): allRides is the
-		// sorted + reindexed full list. Wrap as-is, preserving byte-identical output.
+		// Plan A2 Task 4: stub mode with stop-based enabled → stream via HyperPoolStubRideStore
+		// (D2D stubs + S2S stubs) instead of materialising all rides into allRides.
+		// runS2SStubs is non-null iff generateStopBasedRidesBatched ran (stubMode && enableStopBased).
+		if (runS2SStubs != null) {
+			S2SRideMaterializer s2sMat = new S2SRideMaterializer(
+					network, budgetValidator, runStopDictionary, exMasConfig);
+			log.info("Stub mode (HyperPool streaming): exporting via HyperPoolStubRideStore — "
+					+ "{} fat D2D + {} D2D stub rows + {} S2S stub rows",
+					allRides.size(),
+					runStubLayers == null ? 0 : runStubLayers.stream().mapToInt(
+						org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns::size
+					).sum(),
+					runS2SStubs.stream().mapToInt(S2SStubColumns::size).sum());
+			return new HyperPoolStubRideStore(
+					allRides, runStubLayers != null ? runStubLayers : new ArrayList<>(),
+					runD2DMaterializer, runS2SStubs, s2sMat, requestById);
+		}
+
+		// Fat path (non-stub path, or stub mode WITHOUT stop-based — the latter returns earlier
+		// via StubRideStore): allRides is the sorted + reindexed full list.
 		return new MaterializedRideStore(allRides);
 	}
 
@@ -845,6 +926,237 @@ public final class BamasEngine {
 	}
 
 	/**
+	 * Plan A2 Task 3 — batched D2D materialization feeding {@link StopBasedRideGenerator}.
+	 *
+	 * <p>Replaces the former bulk-materialize-then-Phase-5 flow. Instead of expanding all
+	 * stub layers into {@code allRides} before calling {@code generateStopBasedRides}, this
+	 * method feeds D2D rides to the generator in two passes:
+	 * <ol>
+	 *   <li>Fat rides already in {@code fatRides} (singles + pairs, already materialised).
+	 *   <li>Degree-3+ stub layers, materialised in fixed-size batches (100 k rows).
+	 * </ol>
+	 *
+	 * <p><strong>Parity contract:</strong> The {@link StopBasedRideGenerator} sorts conversion
+	 * candidates by {@code sourceRide.getIndex()} before assigning S2S indices. In the current
+	 * code, all pairs and all materialised stubs carry index 0 (pairs from
+	 * {@code PairGenerator.buildRide(c, 0)}, stubs from {@code RideMaterializer} which also
+	 * returns index 0). A stable sort over index-0 elements preserves input order. Therefore
+	 * two-pass feeding (fat rides first, stubs second — each pass sorted by index 0 in input
+	 * order) produces the SAME candidate sequence as the former single-pass feed, and thus the
+	 * same S2S output. The {@code nextIndex} is threaded across passes by actual produced
+	 * count, not by batch size, so no index gaps occur when conversions fail.
+	 *
+	 * @param fatRides     fat singles + pairs already in allRides
+	 * @param stubs        degree-3+ per-degree stub layers (never null in stub mode)
+	 * @param materializer D2D stub materializer (RideMaterializer instance)
+	 * @param requestById  global request lookup (passed to materializer)
+	 * @return all generated stop-based rides, with sequentially threaded S2S indices
+	 */
+	/**
+	 * Plan A2 Task 4 helper: extract S2S stub fields from a full {@link Ride} produced by
+	 * {@link StopBasedRideGenerator} and append a row to the appropriate per-degree
+	 * {@link S2SStubColumns} in {@code stubs}, creating the layer if absent.
+	 *
+	 * <p>The sorted set and origin/dest packed orderings are derived following the same
+	 * approach as {@link org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStub#fromRide}:
+	 * sort the pickup-order indices to obtain the sorted set, then convert each ordering
+	 * array (pickup, dropoff) from global to local positions.
+	 *
+	 * <p>{@code distDm}/{@code ttDs} capture the S2S in-vehicle segment (the only connection
+	 * segment on an S2S ride); they are used for the self-check in
+	 * {@link S2SRideMaterializer} and as the sort key for
+	 * {@link HyperPoolStubRideStore}. They are NOT fed into the connection arrays during
+	 * pinned-stop replay (which re-routes for exact values).
+	 */
+	private static void stubbifyS2SRide(Ride ride,
+			java.util.Map<Integer, S2SStubColumns> stubs,
+			StopLocationDictionary dictionary) {
+		int degree = ride.getDegree();
+		S2SStubColumns layer = stubs.computeIfAbsent(degree, S2SStubColumns::new);
+
+		// Build sorted set (ascending global indices) — same approach as RideStub.fromRide.
+		int[] pickupGlobal = ride.getOriginsIndex();      // global indices in pickup order
+		int[] sortedSet = pickupGlobal.clone();
+		java.util.Arrays.sort(sortedSet);
+
+		// Convert pickup ordering from global to local positions in the sorted set.
+		int[] originsLocal = toLocalPositions(sortedSet, pickupGlobal);
+		long originPacked = org.matsim.contrib.demand_extraction.algorithm.bamas.stub.OrderingCodec
+				.pack(originsLocal);
+
+		// Convert dropoff ordering from global to local positions in the sorted set.
+		int[] destGlobal = ride.getDestinationsIndex();  // global indices in dropoff order
+		int[] destsLocal = toLocalPositions(sortedSet, destGlobal);
+		long destPacked = org.matsim.contrib.demand_extraction.algorithm.bamas.stub.OrderingCodec
+				.pack(destsLocal);
+
+		// S2S ride has exactly ONE connection segment.
+		// Use getRideDistance()/getRideTravelTime() which are already 0.1-rounded.
+		int distDm = org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubScaling
+				.toDeci(ride.getRideDistance());
+		int ttDs = org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubScaling
+				.toDeci(ride.getRideTravelTime());
+		byte flags = org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStub
+				.kindToFlags(ride.getKind());
+
+		int pickupId  = dictionary.idOf(ride.getPickupStop());
+		int dropoffId = dictionary.idOf(ride.getDropoffStop());
+
+		layer.addRow(sortedSet, originPacked, destPacked, distDm, ttDs, flags,
+				pickupId, dropoffId, ride.getStartTime(), ride.getIndex(),
+				ride.getAccessWalkDistances(), ride.getEgressWalkDistances());
+	}
+
+	/**
+	 * Convert an array of global request indices to their local positions within
+	 * the sorted set (ascending). Mirrors the same helper in
+	 * {@link org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStub}.
+	 */
+	private static int[] toLocalPositions(int[] sortedSet, int[] globals) {
+		int[] locals = new int[globals.length];
+		for (int i = 0; i < globals.length; i++) {
+			int local = java.util.Arrays.binarySearch(sortedSet, globals[i]);
+			if (local < 0) {
+				throw new IllegalStateException(
+						"Global request index " + globals[i]
+						+ " not found in S2S ride's sorted request set");
+			}
+			locals[i] = local;
+		}
+		return locals;
+	}
+
+	private List<Ride> generateStopBasedRidesBatched(
+			List<Ride> fatRides,
+			List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> stubs,
+			org.matsim.contrib.demand_extraction.algorithm.bamas.extension.RideMaterializer materializer,
+			java.util.Map<Integer, DrtRequest> requestById) {
+
+		// Total D2D count (fat + stub rows): the S2S startIndex must follow ALL D2D rides,
+		// matching master's pre-Phase-5 index = allRides.size() after all D2D are appended.
+		int totalStubRows = 0;
+		for (org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer : stubs) {
+			totalStubRows += layer.size();
+		}
+		int totalD2DCount = fatRides.size() + totalStubRows;
+
+		if (totalD2DCount == 0) {
+			// Plan A2 Task 4: initialise stub store to empty even on the zero-ride path.
+			runS2SStubs = new ArrayList<>();
+			runStopDictionary = new StopLocationDictionary();
+			return new ArrayList<>();
+		}
+
+		// Create stop finder and generator ONCE (shared across all batches).
+		Network matsimNetwork = network.getNetwork();
+		StopFinderFactory factory = new StopFinderFactory(matsimNetwork, facilities, exMasConfig);
+		StopFinder stopFinder = factory.create();
+		WalkingDistanceCalculator walkCalculator = factory.createWalkingDistanceCalculator();
+		int algorithmProcessCount = exMasConfig.getAlgorithmProcessCount();
+		org.matsim.contrib.demand_extraction.algorithm.generation.WalkBudgetProvider walkBudgetProvider =
+				budgetToConstraints == null ? null :
+				(budget, req, tt, dist, delay) ->
+						budgetToConstraints.budgetToMaxWalkDistance(budget, null, req, tt, dist, delay);
+		StopBasedRideGenerator generator = new StopBasedRideGenerator(
+				network, stopFinder, walkCalculator, budgetValidator, exMasConfig, algorithmProcessCount,
+				walkBudgetProvider);
+
+		// Plan A2 Task 4: accumulate S2S stubs instead of full Ride objects.
+		// Key = degree; value = per-degree S2SStubColumns (one row per S2S ride produced).
+		java.util.Map<Integer, S2SStubColumns> s2sStubMap = new java.util.LinkedHashMap<>();
+		StopLocationDictionary stopDictionary = new StopLocationDictionary();
+
+		// For Phase 6 intermediate (Task 4): re-materialise from stubs so we never hold
+		// the full S2S universe as full rides while also holding the stubs.
+		// We collect stubs first, then materialise at the end of this method.
+		// (Task 5 will eliminate this re-materialisation entirely.)
+		List<Ride> allS2SRidesForPhase6 = new ArrayList<>();
+
+		// S2S indices start at totalD2DCount and are threaded across batches by actual
+		// produced count (condition 3 from the plan: not startIndex + batchSize·k).
+		int nextIndex = totalD2DCount;
+
+		// Pass 1: fat rides (singles + pairs). Singles are filtered by the generator (degree < 2).
+		// All pairs have index 0 → stable sort within this pass keeps them in input order.
+		List<Ride> fatD2DBatch = fatRides.stream()
+				.filter(r -> r.getVariant() == RideVariant.DOOR_TO_DOOR)
+				.collect(Collectors.toList());
+		if (!fatD2DBatch.isEmpty()) {
+			List<Ride> batch1S2S = generator.generateStopBasedRides(fatD2DBatch, nextIndex);
+			for (Ride s2sRide : batch1S2S) {
+				stubbifyS2SRide(s2sRide, s2sStubMap, stopDictionary);
+			}
+			allS2SRidesForPhase6.addAll(batch1S2S);
+			nextIndex += batch1S2S.size();
+		}
+
+		// Pass 2: stub layers, materialised in batches of STUB_BATCH_SIZE rows.
+		// Each materialised stub ride carries index 0 → parity condition holds (see Javadoc).
+		final int STUB_BATCH_SIZE = 100_000;
+		log.info("Plan A2 Task 4: feeding {} stub rows in batches of {} to Phase 5, stubbifying S2S output",
+				totalStubRows, STUB_BATCH_SIZE);
+		int totalMaterialized = 0;
+		for (org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer : stubs) {
+			int layerSize = layer.size();
+			for (int batchStart = 0; batchStart < layerSize; batchStart += STUB_BATCH_SIZE) {
+				int batchEnd = Math.min(batchStart + STUB_BATCH_SIZE, layerSize);
+				List<Ride> stubBatch = new ArrayList<>(batchEnd - batchStart);
+				for (int row = batchStart; row < batchEnd; row++) {
+					stubBatch.add(materializer.materialize(layer, row, requestById));
+				}
+				totalMaterialized += stubBatch.size();
+				List<Ride> batchS2S = generator.generateStopBasedRides(stubBatch, nextIndex);
+				for (Ride s2sRide : batchS2S) {
+					stubbifyS2SRide(s2sRide, s2sStubMap, stopDictionary);
+				}
+				allS2SRidesForPhase6.addAll(batchS2S);
+				nextIndex += batchS2S.size();
+			}
+		}
+		int totalS2S = allS2SRidesForPhase6.size();
+		log.info("Plan A2 Task 4: materialised {} D2D rows, stubbified {} S2S rides into {} degree layers",
+				totalMaterialized, totalS2S, s2sStubMap.size());
+
+		// Store stubs and dictionary for the export pass (HyperPoolStubRideStore).
+		runS2SStubs = new ArrayList<>(s2sStubMap.values());
+		runStopDictionary = stopDictionary;
+
+		// Return full S2S rides. In fat-mode Phase 6, these are consumed via generateHyperPooledRides.
+		// In stub-mode Phase 6 (Task 5+), generateHyperPooledRidesFromStubs reads runS2SStubs directly
+		// and never materialises the full S2S universe — but we still need this list as a no-op return
+		// value (the caller ignores it in stub mode: Phase 6 switches on runS2SStubs != null).
+		return allS2SRidesForPhase6;
+	}
+
+	/**
+	 * Plan A2 (hyperpool index canonicalization) — fat path. Stamp every S2S ride in
+	 * {@code allRides} with its FINAL post-export-sort index <em>before</em> Phase 6.
+	 *
+	 * <p>Phase 6 runs before the export sort+reindex (see {@code generateRides}), so without
+	 * this the HyperPool clustering tie-break (which keys on {@link Ride#getIndex()} via
+	 * {@code StopToStopRideWrapper}) and the emitted {@code sourceRideIndices} would consume
+	 * the PRE-FINAL Phase-5 generation index. That pre-final index is threaded differently in
+	 * the fat vs stub Phase-5 paths, so it diverges between modes even though the final export
+	 * order is identical. Stamping the final index here makes the fat Phase-6 input bit-identical
+	 * to the stub path's (which feeds the same final index via {@code computeSortPermutation}).
+	 *
+	 * <p>Sorts a COPY — {@code allRides}' own order is left untouched, so the later in-place
+	 * export sort+reindex reassigns the identical values (S2S rows land at the same positions)
+	 * and {@code exmas_rides.csv} byte-parity is preserved. The comparator ignores the ride's
+	 * own index, so re-stamping does not perturb the sort.
+	 */
+	private void stampFinalS2SIndicesForHyperPool() {
+		List<Ride> exportOrder = new ArrayList<>(allRides);
+		exportOrder.sort(EXPORT_RIDE_COMPARATOR);
+		for (int i = 0; i < exportOrder.size(); i++) {
+			Ride r = exportOrder.get(i);
+			if (r.getVariant() == RideVariant.STOP_TO_STOP) {
+				r.assignIndex(i);
+			}
+		}
+	}
+
+	/**
 	 * Generate hyper-pooled rides from stop-to-stop rides using HyperPool Stage 2.
 	 *
 	 * <p>Bundles multiple stop-to-stop rides together where passengers walk to/from
@@ -881,52 +1193,7 @@ public final class BamasEngine {
 		HyperPoolGenerator.StopRelocator stopRelocator = null;
 		if (exMasConfig.getHyperPoolEnableStopRelocation()) {
 			log.info("HyperPool: Stop relocation enabled (optimization, not in original ExMAS/HyperPool)");
-			stopRelocator = new HyperPoolGenerator.StopRelocator() {
-				@Override
-				public boolean areStopsNearby(
-						org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop1,
-						org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop2,
-						double proximityMeters) {
-					// Use Euclidean distance between stop coordinates
-					double distance = org.matsim.core.utils.geometry.CoordUtils.calcEuclideanDistance(
-							stop1.getCoord(), stop2.getCoord());
-					return distance <= proximityMeters;
-				}
-
-				@Override
-				public org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation findMergedStop(
-						org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop,
-						List<org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation> existingStops,
-						double proximityMeters,
-						double[] maxRelocDistPerPax) {
-					for (org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation existing : existingStops) {
-						if (areStopsNearby(stop, existing, proximityMeters)) {
-							// Budget-aware guard: reject merge if it would exceed any passenger's
-							// remaining walk budget (Signature A — caller pre-computes the budget).
-							if (maxRelocDistPerPax != null) {
-								double relocDist = calculateRelocationDistance(stop, existing);
-								double minBudget = Double.MAX_VALUE;
-								for (double b : maxRelocDistPerPax) {
-									if (b < minBudget) minBudget = b;
-								}
-								if (relocDist > minBudget) {
-									continue; // skip this candidate; try next existing stop
-								}
-							}
-							return existing;
-						}
-					}
-					return stop;
-				}
-
-				@Override
-				public double calculateRelocationDistance(
-						org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation originalStop,
-						org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation mergedStop) {
-					return org.matsim.core.utils.geometry.CoordUtils.calcEuclideanDistance(
-							originalStop.getCoord(), mergedStop.getCoord());
-				}
-			};
+			stopRelocator = createHyperPoolStopRelocator();
 		} else {
 			log.info("HyperPool: Stop relocation disabled (matches original ExMAS/HyperPool)");
 		}
@@ -951,6 +1218,137 @@ public final class BamasEngine {
 		generator.logStatistics();
 
 		return result;
+	}
+
+	/**
+	 * Plan A2 Task 5 — Phase 6 stub path: generate hyper-pooled rides from the S2S stub layers
+	 * accumulated during Phase 5 ({@code runS2SStubs}).
+	 *
+	 * <p>Constructs {@link StopToStopRideWrapper} instances backed by stub scalars (no full
+	 * {@link Ride} allocation) and deferred materializers.  The wrapper getters suffice for the
+	 * entire clustering phase (graph construction, compatibility checks, stop-sequence generation);
+	 * full rides are materialised lazily per cluster during bundling, keeping peak memory ≈ one
+	 * cluster's rides instead of the entire S2S universe.
+	 *
+	 * <p>The S2S start index = total D2D count (fat singles+pairs + stub rows), matching the index
+	 * assigned by {@link #generateStopBasedRidesBatched} so wrapper indices are bit-identical to
+	 * the fat path.
+	 */
+	private List<HyperPooledRide> generateHyperPooledRidesFromStubs() {
+		// S2S start index = number of D2D rides (fat + stub rows) — mirrors generateStopBasedRidesBatched
+		int fatD2DCount  = allRides.size();
+		List<org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns> d2dStubLayers =
+				runStubLayers != null ? runStubLayers : new ArrayList<>();
+		int stubD2DCount = d2dStubLayers.stream().mapToInt(
+				org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns::size).sum();
+		int s2sStartIndex = fatD2DCount + stubD2DCount;
+
+		// Plan A2 (hyperpool index canonicalization): compute the SAME export sort permutation
+		// HyperPoolStubRideStore will use at export time, BEFORE bundling. Each S2S row's final
+		// ride index is its position r in this permutation. Feed those final indices to the
+		// wrappers so clustering + sourceRideIndices match the fat path (which stamps the
+		// identical final index via stampFinalS2SIndicesForHyperPool). The three inputs here are
+		// the exact objects passed to the HyperPoolStubRideStore constructor in the same state,
+		// so the permutation — and thus every S2S final index — is identical to export.
+		int[][] perm = org.matsim.contrib.demand_extraction.algorithm.bamas.stub.HyperPoolStubRideStore
+				.computeSortPermutation(allRides, d2dStubLayers, runS2SStubs);
+		int[] sourceOf   = perm[0];
+		int[] localRowOf = perm[1];
+		int nD2DLayers = d2dStubLayers.size();
+		int[][] s2sFinalIndex = new int[runS2SStubs.size()][];
+		for (int s = 0; s < runS2SStubs.size(); s++) {
+			s2sFinalIndex[s] = new int[runS2SStubs.get(s).size()];
+		}
+		for (int r = 0; r < sourceOf.length; r++) {
+			int src = sourceOf[r];
+			if (src >= nD2DLayers) { // S2S row: src == nD2DLayers + s2sLayerIndex
+				s2sFinalIndex[src - nD2DLayers][localRowOf[r]] = r;
+			}
+		}
+
+		// Build S2SRideMaterializer (same args as in the export-pass construction)
+		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.S2SRideMaterializer s2sMat =
+				new org.matsim.contrib.demand_extraction.algorithm.bamas.stub.S2SRideMaterializer(
+						network, budgetValidator, runStopDictionary, exMasConfig);
+
+		// Create adapters for HyperPoolGenerator (same as fat-path generateHyperPooledRides)
+		StopCompatibilityChecker externalChecker = new StopCompatibilityChecker(exMasConfig);
+		HyperPoolGenerator.StopCompatibilityChecker compatibilityChecker =
+				(r1, r2) -> externalChecker.areCompatible(r1, r2);
+
+		HyperPoolGenerator.StopRelocator stopRelocator = null;
+		if (exMasConfig.getHyperPoolEnableStopRelocation()) {
+			log.info("HyperPool (stub): Stop relocation enabled");
+			stopRelocator = createHyperPoolStopRelocator();
+		} else {
+			log.info("HyperPool (stub): Stop relocation disabled");
+		}
+
+		org.matsim.contrib.demand_extraction.algorithm.generation.WalkBudgetProvider hyperPoolWalkBudgetProvider =
+				budgetToConstraints == null ? null :
+				(budget, req, tt, dist, delay) ->
+						budgetToConstraints.budgetToMaxWalkDistance(budget, null, req, tt, dist, delay);
+
+		HyperPoolGenerator generator = new HyperPoolGenerator(
+				network, stopRelocator, compatibilityChecker, exMasConfig, budgetValidator,
+				hyperPoolWalkBudgetProvider);
+
+		List<HyperPooledRide> result = generator.generateFromStubs(
+				runS2SStubs, s2sMat, runStopDictionary, runRequestById, network, s2sStartIndex,
+				s2sFinalIndex);
+
+		generator.logStatistics();
+		return result;
+	}
+
+	/**
+	 * Creates the {@link HyperPoolGenerator.StopRelocator} used by both the fat-path
+	 * {@link #generateHyperPooledRides} and the stub-path {@link #generateHyperPooledRidesFromStubs}.
+	 * Returns a Euclidean-distance-based relocator with budget-aware merge rejection.
+	 */
+	private HyperPoolGenerator.StopRelocator createHyperPoolStopRelocator() {
+		return new HyperPoolGenerator.StopRelocator() {
+			@Override
+			public boolean areStopsNearby(
+					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop1,
+					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop2,
+					double proximityMeters) {
+				return org.matsim.core.utils.geometry.CoordUtils.calcEuclideanDistance(
+						stop1.getCoord(), stop2.getCoord()) <= proximityMeters;
+			}
+
+			@Override
+			public org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation findMergedStop(
+					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation stop,
+					java.util.List<org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation> existingStops,
+					double proximityMeters,
+					double[] maxRelocDistPerPax) {
+				for (org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation existing : existingStops) {
+					if (areStopsNearby(stop, existing, proximityMeters)) {
+						if (maxRelocDistPerPax != null) {
+							double relocDist = calculateRelocationDistance(stop, existing);
+							double minBudget = Double.MAX_VALUE;
+							for (double b : maxRelocDistPerPax) {
+								if (b < minBudget) minBudget = b;
+							}
+							if (relocDist > minBudget) {
+								continue;
+							}
+						}
+						return existing;
+					}
+				}
+				return stop;
+			}
+
+			@Override
+			public double calculateRelocationDistance(
+					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation originalStop,
+					org.matsim.contrib.demand_extraction.algorithm.domain.StopLocation mergedStop) {
+				return org.matsim.core.utils.geometry.CoordUtils.calcEuclideanDistance(
+						originalStop.getCoord(), mergedStop.getCoord());
+			}
+		};
 	}
 
 	/**
