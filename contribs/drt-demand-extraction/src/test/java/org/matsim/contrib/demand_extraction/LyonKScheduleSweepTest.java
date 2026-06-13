@@ -54,7 +54,7 @@ import org.matsim.core.trafficmonitoring.FreeSpeedTravelTime;
  *
  * <p>K schedules defined in {@link #SCHEDULES}. Each key is an OUTPUT ride degree
  * (3, 4, 5, …); {@code pruningCoverageK} on the config serves as the catch-all default
- * for unspecified degrees. Degree-2 pairs are NOT subject to PostExtensionPruner —
+ * for unspecified degrees. Degree-2 pairs are NOT subject to post-extension selection —
  * they go through {@code maybePrunePairRidesAfterGraph} separately.
  *
  * <p>Required env vars (same as {@code ExMasLyonR1R2FastComparisonTest}):
@@ -92,7 +92,7 @@ class LyonKScheduleSweepTest {
 		SCHEDULES.put("flat_K50",       new KSchedule(50, Map.of()));
 		// Growing K: low K at low degrees (cheap rides), ramp up toward high-value high-degree rides.
 		// Python cascade sim: growing efficiency=0.976 vs flat_K20=0.686 (savings retained / DB size).
-		// Degree-2 pairs are NOT pruned by PostExtensionPruner — key 3 is the first active degree.
+		// Degree-2 pairs are NOT pruned by post-extension selection — key 3 is the first active degree.
 		SCHEDULES.put("growing_5_50",   new KSchedule(50, Map.of(3, 5,  4, 10, 5, 20, 6, 30)));
 		SCHEDULES.put("growing_10_50",  new KSchedule(50, Map.of(3, 10, 4, 20, 5, 30, 6, 50)));
 		// Seed-preserving: high K at low degrees keeps more extension seeds for high-degree generation.

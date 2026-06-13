@@ -190,8 +190,7 @@ public final class ExMasReferenceEngine {
 		// is removed. R1 is vanilla ExMAS by design — no pruning. Main's stock defaults (maxPerSet=0,
 		// keepTopFraction=1.0) already disabled this pass; removing the block makes that explicit and
 		// prevents accidental engagement if those config knobs ever get set on the reference side.
-		// Current branch's PostExtensionPruner uses factory methods (ratioThreshold/coverageTopK), so
-		// the old `new PostExtensionPruner(...)` constructors don't compile anyway.
+		// The BAMAS selection engine (algorithm/selection/) is never wired into this reference path.
 		int nextRideIndex = allRides.size();
 		for (int degree = 2; degree < maxDegree; degree++) {
 			ReferenceRideExtender extender = new ReferenceRideExtender(network, graph, budgetValidator,

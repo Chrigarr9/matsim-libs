@@ -23,9 +23,6 @@ class RequestResolverTest {
      * All numeric fields default to 0.0; the builder validates
      * {@code earliestDeparture (0) <= latestArrival (0) - directTravelTime (0)}
      * which holds at equality.
-     *
-     * <p>Modelled on the pattern in
-     * {@code PostExtensionPrunerTest#req(int, double)}.
      */
     private static DrtRequest req(int index) {
         return new DrtRequest.Builder()

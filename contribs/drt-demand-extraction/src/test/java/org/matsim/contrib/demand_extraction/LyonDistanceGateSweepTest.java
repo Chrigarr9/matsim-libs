@@ -28,7 +28,8 @@ import org.matsim.api.core.v01.network.Network;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasEngine;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.stub.RideStores;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
-import org.matsim.contrib.demand_extraction.algorithm.engine.PostExtensionPruner;
+import org.matsim.contrib.demand_extraction.algorithm.selection.RideSelector;
+import org.matsim.contrib.demand_extraction.algorithm.selection.SelectionRule;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCacheTestFixture;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
@@ -215,9 +216,7 @@ class LyonDistanceGateSweepTest {
 
 			// Post-hoc compression: apply coverage_topK(K) globally once
 			long compressStart = System.currentTimeMillis();
-			List<Ride> compressedRides = PostExtensionPruner
-					.coverageTopK(POST_HOC_K, PostExtensionPruner.ABS_SAVINGS)
-					.prune(rawRides);
+			List<Ride> compressedRides = coverageCompress(rawRides, POST_HOC_K);
 			long compressMs = System.currentTimeMillis() - compressStart;
 			log.info("  Post-hoc K={}: {} compressed rides in {}ms",
 					POST_HOC_K, compressedRides.size(), compressMs);
@@ -236,6 +235,41 @@ class LyonDistanceGateSweepTest {
 	}
 
 	// ── helpers ──────────────────────────────────────────────────────────────────
+
+	/**
+	 * Post-hoc COVERAGE_TOPK compression over a fat {@link Ride} list (experiment harness only;
+	 * the production path is stub-based). Groups by degree, runs {@link RideSelector} per degree
+	 * with the ABS_SAVINGS metric, and passes singles through. Only the survivor COUNT is used by
+	 * the sweep, so emission order is irrelevant here.
+	 */
+	private static List<Ride> coverageCompress(List<Ride> rides, int k) {
+		java.util.Map<Integer, List<Ride>> byDegree = new java.util.TreeMap<>();
+		for (Ride r : rides) byDegree.computeIfAbsent(r.getDegree(), d -> new ArrayList<>()).add(r);
+		List<Ride> kept = new ArrayList<>();
+		for (var entry : byDegree.entrySet()) {
+			List<Ride> group = entry.getValue();
+			if (entry.getKey() <= 1) { kept.addAll(group); continue; }
+			int n = group.size();
+			int[][] sets = new int[n][];
+			double[] metric = new double[n];
+			for (int i = 0; i < n; i++) {
+				Ride ride = group.get(i);
+				int deg = ride.getDegree();
+				int[] s = new int[deg];
+				double sumDirect = 0;
+				for (int j = 0; j < deg; j++) {
+					s[j] = ride.getRequest(j).index;
+					sumDirect += ride.getRequest(j).getDistance();
+				}
+				java.util.Arrays.sort(s); // RideSelector requires ascending request sets
+				sets[i] = s;
+				metric[i] = sumDirect - ride.getRideDistance(); // ABS_SAVINGS
+			}
+			var keptRows = RideSelector.select(sets, metric, SelectionRule.COVERAGE_TOPK, k, 0.0);
+			for (int i = 0; i < n; i++) if (keptRows.contains(i)) kept.add(group.get(i));
+		}
+		return kept;
+	}
 
 	private record SweepResult(String label, List<Ride> rawRides, List<Ride> compressedRides, long elapsedMs) {
 

@@ -18,7 +18,6 @@ import org.matsim.contrib.demand_extraction.algorithm.bamas.checkpoint.Checkpoin
 import org.matsim.contrib.demand_extraction.algorithm.bamas.checkpoint.CheckpointManager;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.checkpoint.RunFingerprint;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.graph.DegreeGraph;
-import org.matsim.contrib.demand_extraction.algorithm.engine.PostExtensionPruner;
 import org.matsim.contrib.demand_extraction.algorithm.generation.PairGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.generation.BamasSingleRideGenerator;
 import org.matsim.contrib.demand_extraction.algorithm.generation.StopBasedRideGenerator;
@@ -603,10 +602,8 @@ public final class BamasEngine {
 			org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns layer =
 					extender.getLastDegreeStubs();
 			if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.RATIO_THRESHOLD) {
-				PostExtensionPruner pruner = buildPruner(exMasConfig);
-				if (pruner != null) {
-					layer = pruner.pruneStubLayer(layer, requestById);
-				}
+				layer = org.matsim.contrib.demand_extraction.algorithm.selection.StubLayerSelection
+						.prune(layer, requestById, exMasConfig);
 			}
 			stubLayers.add(layer);
 			prevStubLayer = layer; // next degree extends this (pruned) layer
@@ -660,15 +657,13 @@ public final class BamasEngine {
 		// Post-extension COVERAGE_TOPK pruning: applied once to all extension rides after the
 		// cascade terminates, so the full cascade runs unimpeded and K compression is a final step.
 		if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.COVERAGE_TOPK) {
-			PostExtensionPruner pruner = buildPruner(exMasConfig);
-			if (pruner != null) {
-				// Prune each per-degree stub layer in place (each layer is one degree,
-				// so per-degree COVERAGE_TOPK == per-layer pruning). On the pairStubPath
-				// the degree-2 pair layer is stubLayers[0] and is skipped: master never
-				// applies COVERAGE_TOPK to pairs (they have a separate distance gate).
-				for (int i = extensionLayerStart; i < stubLayers.size(); i++) {
-					stubLayers.set(i, pruner.pruneStubLayer(stubLayers.get(i), requestById));
-				}
+			// Prune each per-degree stub layer in place (each layer is one degree,
+			// so per-degree COVERAGE_TOPK == per-layer pruning). On the pairStubPath
+			// the degree-2 pair layer is stubLayers[0] and is skipped: master never
+			// applies COVERAGE_TOPK to pairs (they have a separate distance gate).
+			for (int i = extensionLayerStart; i < stubLayers.size(); i++) {
+				stubLayers.set(i, org.matsim.contrib.demand_extraction.algorithm.selection.StubLayerSelection
+						.prune(stubLayers.get(i), requestById, exMasConfig));
 			}
 		}
 	}
@@ -1492,7 +1487,7 @@ public final class BamasEngine {
 			org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns parents,
 			java.util.Map<Integer, DrtRequest> requestById) {
 		org.matsim.contrib.demand_extraction.algorithm.bamas.stub.StubColumns filtered =
-				org.matsim.contrib.demand_extraction.algorithm.bamas.extension.ExtensionParentFilter.filter(
+				org.matsim.contrib.demand_extraction.algorithm.selection.StubLayerSelection.filterParents(
 						parents, requestById,
 						exMasConfig.getExtensionParentsTopK(),
 						exMasConfig.getExtensionParentsTopKMetric(),
@@ -1503,36 +1498,6 @@ public final class BamasEngine {
 				exMasConfig.getExtensionParentsTopK(), exMasConfig.getExtensionParentsTopKMetric(),
 				exMasConfig.getExtensionParentsSelectionRule(), exMasConfig.getExtensionParentsMmrLambda());
 		return filtered;
-	}
-
-	/**
-	 * Build the inter-degree pruner from config, or null if pruning is disabled.
-	 * RATIO_THRESHOLD with keepTopFraction >= 1.0 returns null (no-op pass-through).
-	 */
-	private static PostExtensionPruner buildPruner(org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg) {
-		switch (cfg.getPruningMode()) {
-			case RATIO_THRESHOLD:
-				double frac = cfg.getInterDegreeKeepFraction();
-				return frac < 1.0 ? PostExtensionPruner.ratioThreshold(frac) : null;
-			case COVERAGE_TOPK:
-				PostExtensionPruner.QualityMetric metric = switch (cfg.getPruningQualityMetric()) {
-					case ABS_SAVINGS -> PostExtensionPruner.ABS_SAVINGS;
-					case RATIO_SAVINGS -> PostExtensionPruner.RATIO_SAVINGS;
-					// OP_COST_PER_PAX is consumed by the extension-parents ranker (Plan B);
-					// the post-extension COVERAGE_TOPK pruner falls back to ABS_SAVINGS.
-					case OP_COST_PER_PAX -> PostExtensionPruner.ABS_SAVINGS;
-				};
-				java.util.Map<Integer, Integer> kByDegree = cfg.getPruningCoverageKByDegree();
-				if (kByDegree.isEmpty()) {
-					return PostExtensionPruner.coverageTopK(cfg.getPruningCoverageK(), metric);
-				} else {
-					int defaultK = cfg.getPruningCoverageK();
-					return PostExtensionPruner.coverageTopK(
-							d -> kByDegree.getOrDefault(d, defaultK), metric);
-				}
-			default:
-				throw new IllegalStateException("Unknown pruning mode: " + cfg.getPruningMode());
-		}
 	}
 
 	private static int[] summarizeRideCounts(List<Ride> rides) {
