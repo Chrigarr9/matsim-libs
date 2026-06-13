@@ -63,10 +63,15 @@ public final class BamasEngine {
 	private static final java.util.Comparator<Ride> EXPORT_RIDE_COMPARATOR =
 			java.util.Comparator.comparing(Ride::getVariant)
 					.thenComparingInt(Ride::getDegree)
-					.thenComparingInt(r -> {
-						int[] indices = r.getRequestIndices();
-						return indices.length > 0 ? indices[0] : Integer.MAX_VALUE;
-					});
+					// Total tie-break: the full pickup-order request-index sequence (lexicographic).
+					// Exactly one ride is retained per request set, so this sequence is a unique ride
+					// identity — making the export order (and the index stamped from it) independent of
+					// the order in which the rides were generated. The fat and stub Phase-5 paths thread
+					// that generation order differently, so without a total key tied rows (same variant,
+					// degree, first-pickup) come out permuted between the two paths. This extends the
+					// former first-pickup-only key (indices[0]) to the whole array: the primary ordering
+					// is unchanged and only formerly-tied rows are canonicalized.
+					.thenComparing(Ride::getRequestIndices, java.util.Arrays::compare);
 
 	private final MatsimNetworkCache network;
 	private final BudgetValidator budgetValidator;

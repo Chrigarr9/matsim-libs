@@ -152,9 +152,7 @@ public final class HyperPoolStubRideStore implements RideStore {
 		int fatCount = fatSingularPairs.size();
 		for (int i = 0; i < fatCount; i++) {
 			Ride r = fatSingularPairs.get(i);
-			int[] idx = r.getRequestIndices();
-			int firstPickup = idx.length > 0 ? idx[0] : Integer.MAX_VALUE;
-			refs.add(new RowRef(r.getVariant().ordinal(), r.getDegree(), firstPickup, SRC_FAT_D2D, i));
+			refs.add(new RowRef(r.getVariant().ordinal(), r.getDegree(), r.getRequestIndices(), SRC_FAT_D2D, i));
 		}
 
 		// D2D stub layers
@@ -163,9 +161,8 @@ public final class HyperPoolStubRideStore implements RideStore {
 			StubColumns layer = d2dStubLayers.get(s);
 			int degree = layer.degree();
 			for (int row = 0; row < layer.size(); row++) {
-				int firstLocal = OrderingCodec.unpack(layer.originOrder(row), degree)[0];
-				int firstPickup = layer.requestIndices(row)[firstLocal];
-				refs.add(new RowRef(RideVariant.DOOR_TO_DOOR.ordinal(), degree, firstPickup, s, row));
+				refs.add(new RowRef(RideVariant.DOOR_TO_DOOR.ordinal(), degree,
+						pickupOrder(layer.requestIndices(row), layer.originOrder(row), degree), s, row));
 			}
 		}
 
@@ -174,21 +171,22 @@ public final class HyperPoolStubRideStore implements RideStore {
 			S2SStubColumns layer = s2sStubLayers.get(s);
 			int degree = layer.degree();
 			for (int row = 0; row < layer.size(); row++) {
-				int firstLocal = OrderingCodec.unpack(layer.originOrder(row), degree)[0];
-				int firstPickup = layer.requestIndices(row)[firstLocal];
 				// Source index offset: D2D stubs occupy [0, nD2D), S2S stubs start at nD2D.
-				refs.add(new RowRef(RideVariant.STOP_TO_STOP.ordinal(), degree, firstPickup,
+				refs.add(new RowRef(RideVariant.STOP_TO_STOP.ordinal(), degree,
+						pickupOrder(layer.requestIndices(row), layer.originOrder(row), degree),
 						nD2D + s, row));
 			}
 		}
 
-		// STABLE sort by (variant, degree, firstPickup).
+		// STABLE sort by (variant, degree, full pickup-order index sequence). The pickup array
+		// is a total key (one ride per set), so the result is generation-order-independent and
+		// byte-identical to the fat export sort (BamasEngine.EXPORT_RIDE_COMPARATOR).
 		refs.sort((a, b) -> {
 			int c = Integer.compare(a.variant, b.variant);
 			if (c != 0) return c;
 			c = Integer.compare(a.degree, b.degree);
 			if (c != 0) return c;
-			return Integer.compare(a.firstPickup, b.firstPickup);
+			return java.util.Arrays.compare(a.pickup, b.pickup);
 		});
 
 		int[] sourceOf   = new int[total];
@@ -199,6 +197,16 @@ public final class HyperPoolStubRideStore implements RideStore {
 			localRowOf[r] = ref.localRow;
 		}
 		return new int[][] { sourceOf, localRowOf };
+	}
+
+	/** Pickup-order request indices for a stub row: the sorted set permuted by the origin order. */
+	private static int[] pickupOrder(int[] sortedSet, long packedOriginOrder, int degree) {
+		int[] originLocal = OrderingCodec.unpack(packedOriginOrder, degree);
+		int[] pickup = new int[degree];
+		for (int i = 0; i < degree; i++) {
+			pickup[i] = sortedSet[originLocal[i]];
+		}
+		return pickup;
 	}
 
 	/**
@@ -277,18 +285,18 @@ public final class HyperPoolStubRideStore implements RideStore {
 		return pickupOrder;
 	}
 
-	/** Lightweight per-row sort descriptor. */
+	/** Lightweight per-row sort descriptor. {@code pickup} is the full pickup-order index array. */
 	private static final class RowRef {
 		final int variant;
 		final int degree;
-		final int firstPickup;
+		final int[] pickup;
 		final int source;
 		final int localRow;
 
-		RowRef(int variant, int degree, int firstPickup, int source, int localRow) {
+		RowRef(int variant, int degree, int[] pickup, int source, int localRow) {
 			this.variant    = variant;
 			this.degree     = degree;
-			this.firstPickup = firstPickup;
+			this.pickup     = pickup;
 			this.source     = source;
 			this.localRow   = localRow;
 		}

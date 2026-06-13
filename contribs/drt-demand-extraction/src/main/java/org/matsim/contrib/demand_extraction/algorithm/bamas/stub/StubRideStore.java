@@ -129,28 +129,26 @@ public final class StubRideStore implements RideStore {
 
 		for (int i = 0; i < fatCount; i++) {
 			Ride r = fatSingularPairs.get(i);
-			int[] idx = r.getRequestIndices();
-			int firstPickup = idx.length > 0 ? idx[0] : Integer.MAX_VALUE;
-			refs.add(new RowRef(r.getVariant().ordinal(), r.getDegree(), firstPickup, SRC_FAT, i));
+			refs.add(new RowRef(r.getVariant().ordinal(), r.getDegree(), r.getRequestIndices(), SRC_FAT, i));
 		}
 		for (int s = 0; s < stubLayers.size(); s++) {
 			StubColumns layer = stubLayers.get(s);
 			int degree = layer.degree();
 			for (int row = 0; row < layer.size(); row++) {
-				int firstLocal = OrderingCodec.unpack(layer.originOrder(row), degree)[0];
-				int firstPickup = layer.requestIndices(row)[firstLocal];
-				refs.add(new RowRef(RideVariant.DOOR_TO_DOOR.ordinal(), degree, firstPickup, s, row));
+				refs.add(new RowRef(RideVariant.DOOR_TO_DOOR.ordinal(), degree,
+						pickupOrder(layer.requestIndices(row), layer.originOrder(row), degree), s, row));
 			}
 		}
 
-		// STABLE sort by (variant, degree, firstPickup). List.sort is guaranteed stable,
-		// so all-key ties keep insertion (concatenation) order — matching the old code.
+		// STABLE sort by (variant, degree, full pickup-order index sequence). The pickup array is
+		// a total key (one ride per set), so the order is generation-independent and byte-identical
+		// to the fat export sort (BamasEngine.EXPORT_RIDE_COMPARATOR).
 		refs.sort((a, b) -> {
 			int c = Integer.compare(a.variant, b.variant);
 			if (c != 0) return c;
 			c = Integer.compare(a.degree, b.degree);
 			if (c != 0) return c;
-			return Integer.compare(a.firstPickup, b.firstPickup);
+			return java.util.Arrays.compare(a.pickup, b.pickup);
 		});
 
 		for (int r = 0; r < total; r++) {
@@ -220,16 +218,26 @@ public final class StubRideStore implements RideStore {
 	private static final class RowRef {
 		final int variant;
 		final int degree;
-		final int firstPickup;
+		final int[] pickup;
 		final int source;
 		final int localRow;
 
-		RowRef(int variant, int degree, int firstPickup, int source, int localRow) {
+		RowRef(int variant, int degree, int[] pickup, int source, int localRow) {
 			this.variant = variant;
 			this.degree = degree;
-			this.firstPickup = firstPickup;
+			this.pickup = pickup;
 			this.source = source;
 			this.localRow = localRow;
 		}
+	}
+
+	/** Pickup-order request indices for a stub row: the sorted set permuted by the origin order. */
+	private static int[] pickupOrder(int[] sortedSet, long packedOriginOrder, int degree) {
+		int[] originLocal = OrderingCodec.unpack(packedOriginOrder, degree);
+		int[] pickup = new int[degree];
+		for (int i = 0; i < degree; i++) {
+			pickup[i] = sortedSet[originLocal[i]];
+		}
+		return pickup;
 	}
 }
