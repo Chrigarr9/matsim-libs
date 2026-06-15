@@ -285,7 +285,11 @@ public final class PairGenerator {
 	private List<PairCandidate> generateCandidatesForRequest(TimeFilter filter, int i, double ssspBound) {
 		List<PairCandidate> results = new ArrayList<>();
 		DrtRequest reqI = filter.getRequest(i);
-		int[] candidateIndices = filter.findCandidatesInHorizon(i, horizon);
+		// Per-request window filter (horizon used only as a floor): a lossless
+		// superset of the exact temporal-overlap check below. The flat horizon
+		// alone drops long-trip pairs whose request times differ by more than the
+		// horizon but whose departure/arrival windows still overlap.
+		int[] candidateIndices = filter.findCandidatesInWindow(i, horizon);
 
 		// Batch precompute O→O segments: one SSSP from reqI.origin covers all candidates
 		Id<Link>[] candidateOrigins = new Id[candidateIndices.length];
