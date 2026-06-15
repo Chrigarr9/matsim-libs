@@ -144,4 +144,68 @@ class PhaseOneDumpSubsetterTest {
 		assertTrue(!Files.exists(new PhaseOneDumpLayout(out).requestsCsv()),
 				"no out-dump CSV should be written when an index is missing");
 	}
+
+	/**
+	 * Fix 2: walk/wait caps survive the BIN pass-through.
+	 * Writes a superset BIN with distinct non-zero caps per request (so a swap/misalign would
+	 * be caught), subsets to {11, 13}, then reads the OUT BIN directly to assert the kept
+	 * rows carry exactly the caps that were written for those indices.
+	 */
+	@Test
+	void walkWaitCapsArePreservedThroughBinPassThrough(@TempDir Path tmp) throws IOException {
+		Path in = tmp.resolve("in");
+		Path out = tmp.resolve("out");
+		// Write CSV + meta + config via the shared helper.
+		writeSupersetDump(in);
+		PhaseOneDumpLayout inLayout = new PhaseOneDumpLayout(in);
+
+		// Overwrite the BIN with explicit rows that carry distinct non-zero caps per index.
+		// Empty activity-type table (0 types, all activity idxs = -1) is valid.
+		// Caps: index -> (maxWalkDistance, maxWaitTime) uniquely distinct so misalignment is caught.
+		double walk10 = 111.0; double wait10 = 222.0;
+		double walk11 = 333.0; double wait11 = 444.0;
+		double walk12 = 555.0; double wait12 = 666.0;
+		double walk13 = 777.0; double wait13 = 888.0;
+		try (ScoringContextsBinWriter w = new ScoringContextsBinWriter(inLayout.scoringContextsBin())) {
+			w.writeHeader(4, List.of());
+			w.writeRow(new ScoringContextsBinWriter.RequestRow(10, (byte) -1, (byte) -1, 0, 0, 0, 0, walk10, wait10));
+			w.writeRow(new ScoringContextsBinWriter.RequestRow(11, (byte) -1, (byte) -1, 0, 0, 0, 0, walk11, wait11));
+			w.writeRow(new ScoringContextsBinWriter.RequestRow(12, (byte) -1, (byte) -1, 0, 0, 0, 0, walk12, wait12));
+			w.writeRow(new ScoringContextsBinWriter.RequestRow(13, (byte) -1, (byte) -1, 0, 0, 0, 0, walk13, wait13));
+		}
+
+		PhaseOneDumpSubsetter.subsetDump(in, out, Set.of(11, 13));
+
+		// Read the OUT BIN directly (not via PhaseOneDumpReader — the reader sources caps from
+		// the CSV, not the BIN, so it cannot catch a broken BIN pass-through).
+		PhaseOneDumpLayout outLayout = new PhaseOneDumpLayout(out);
+		try (ScoringContextsBinReader r = new ScoringContextsBinReader(outLayout.scoringContextsBin())) {
+			ScoringContextsBinReader.Header h = r.readHeader();
+			assertEquals(2, h.numRequests(), "subset BIN must have 2 rows");
+
+			// Rows must appear in original dump order: 11 first, then 13.
+			ScoringContextsBinWriter.RequestRow row11 = r.readRow();
+			assertEquals(11, row11.requestIndex());
+			assertEquals(walk11, row11.maxWalkDistance(), 1e-12,
+					"maxWalkDistance for index 11 must equal the written value");
+			assertEquals(wait11, row11.maxWaitTime(), 1e-12,
+					"maxWaitTime for index 11 must equal the written value");
+
+			ScoringContextsBinWriter.RequestRow row13 = r.readRow();
+			assertEquals(13, row13.requestIndex());
+			assertEquals(walk13, row13.maxWalkDistance(), 1e-12,
+					"maxWalkDistance for index 13 must equal the written value");
+			assertEquals(wait13, row13.maxWaitTime(), 1e-12,
+					"maxWaitTime for index 13 must equal the written value");
+		}
+	}
+
+	/** Fix 3: in==out guard. */
+	@Test
+	void sameDirThrowsIllegalArgument(@TempDir Path tmp) throws IOException {
+		Path dir = tmp.resolve("dump");
+		Files.createDirectories(dir);
+		assertThrows(IllegalArgumentException.class,
+				() -> PhaseOneDumpSubsetter.subsetDump(dir, dir, Set.of(1)));
+	}
 }

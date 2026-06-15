@@ -5,11 +5,16 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Index-based subsetter for a Phase-1 demand-extraction dump. Reads a dump directory
@@ -54,6 +59,11 @@ public final class PhaseOneDumpSubsetter {
 	 */
 	public static void subsetDump(Path inDumpDir, Path outDumpDir, Set<Integer> keepIndices)
 			throws IOException {
+		// --- 0. Guard same-directory: verbatim Files.copy would truncate on Windows. ---
+		if (inDumpDir.toAbsolutePath().normalize().equals(outDumpDir.toAbsolutePath().normalize())) {
+			throw new IllegalArgumentException("out-dump must differ from in-dump");
+		}
+
 		PhaseOneDumpLayout in = new PhaseOneDumpLayout(inDumpDir);
 		PhaseOneDumpLayout out = new PhaseOneDumpLayout(outDumpDir);
 
@@ -92,8 +102,8 @@ public final class PhaseOneDumpSubsetter {
 		// --- 2. Filter the BIN: full activity-type table, surviving rows pass-through. ---
 		// Collect surviving rows keyed by index, then emit them in keptOrder (CSV order).
 		ScoringContextsBinReader.Header binHeader;
-		java.util.Map<Integer, ScoringContextsBinWriter.RequestRow> keptRows =
-				new java.util.HashMap<>(keptOrder.size() * 2);
+		Map<Integer, ScoringContextsBinWriter.RequestRow> keptRows =
+				new HashMap<>(keptOrder.size() * 2);
 		try (ScoringContextsBinReader r = new ScoringContextsBinReader(in.scoringContextsBin())) {
 			binHeader = r.readHeader();
 			if (binHeader.version() != PhaseOneDumpLayout.SCORING_CONTEXTS_VERSION) {
@@ -118,6 +128,11 @@ public final class PhaseOneDumpSubsetter {
 								+ " present in the CSV — input dump is inconsistent");
 			}
 		}
+
+		// --- Validate meta BEFORE any writes (fail-fast: a missing/malformed meta must not
+		// leave a partial out-dump). Read+rewrite now; write the result during the write phase.
+		String rewrittenMeta = rewriteNumRequests(
+				Files.readString(in.metaJson(), StandardCharsets.UTF_8), keptOrder.size());
 
 		// --- All inputs validated. Now write the out-dump. ---
 		Files.createDirectories(out.root());
@@ -144,14 +159,11 @@ public final class PhaseOneDumpSubsetter {
 		// Phase-1 runner, not PhaseOneDumpWriter); copy it when present so writer-only fixtures
 		// that omit it still subset cleanly.
 		if (Files.exists(in.configXml())) {
-			Files.copy(in.configXml(), out.configXml(),
-					java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+			Files.copy(in.configXml(), out.configXml(), StandardCopyOption.REPLACE_EXISTING);
 		}
 
-		// 4. Copy meta, rewriting only numRequests.
-		String meta = Files.readString(in.metaJson(), StandardCharsets.UTF_8);
-		String rewritten = rewriteNumRequests(meta, keptOrder.size());
-		Files.writeString(out.metaJson(), rewritten, StandardCharsets.UTF_8);
+		// 4. Write meta with rewritten numRequests (validated above).
+		Files.writeString(out.metaJson(), rewrittenMeta, StandardCharsets.UTF_8);
 	}
 
 	/** Resolve the column carrying the request index by header name {@code "index"}. */
@@ -160,7 +172,7 @@ public final class PhaseOneDumpSubsetter {
 		for (int i = 0; i < cols.length; i++) {
 			if ("index".equals(cols[i].trim())) return i;
 		}
-		throw new IllegalStateException("input dump CSV header has no 'index' column: " + header);
+		throw new IllegalArgumentException("input dump CSV header has no 'index' column: " + header);
 	}
 
 	private static int parseIndex(String line, int indexCol) {
@@ -177,9 +189,7 @@ public final class PhaseOneDumpSubsetter {
 	 * targeted regex is byte-faithful for the rest of the document.
 	 */
 	static String rewriteNumRequests(String json, int newCount) {
-		java.util.regex.Matcher m = java.util.regex.Pattern
-				.compile("(\"numRequests\"\\s*:\\s*)\\d+")
-				.matcher(json);
+		Matcher m = Pattern.compile("(\"numRequests\"\\s*:\\s*)\\d+").matcher(json);
 		if (!m.find()) {
 			throw new IllegalStateException("phase1_meta.json has no numRequests field to rewrite");
 		}
