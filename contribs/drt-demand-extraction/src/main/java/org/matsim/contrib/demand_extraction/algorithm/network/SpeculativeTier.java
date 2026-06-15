@@ -89,6 +89,23 @@ final class SpeculativeTier {
 		}
 	}
 
+	/**
+	 * Visit every SSSP mark currently live (young + old generations), deduped. Intended for the
+	 * single-threaded export/snapshot paths.
+	 */
+	void forEachSssp(it.unimi.dsi.fastutil.longs.LongConsumer action) {
+		Set<Long> y = youngMarks;
+		Set<Long> o = oldMarks;
+		for (Long key : y) {
+			action.accept(key);
+		}
+		for (Long key : o) {
+			if (!y.contains(key)) {
+				action.accept(key);
+			}
+		}
+	}
+
 	/** Drop both generations and their SSSP marks. Single-threaded call sites only. */
 	synchronized void clear() {
 		young = new ConcurrentHashMap<>();

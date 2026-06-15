@@ -105,6 +105,15 @@ public final class TieredSegmentCache {
 		});
 	}
 
+	/**
+	 * Visit every live SSSP mark, deduped. SSSP marks live only in the speculative tier (they are
+	 * never promoted to retained), so this delegates straight to it. Single-threaded
+	 * export / journal-snapshot only.
+	 */
+	public void forEachSssp(LongConsumer action) {
+		speculative.forEachSssp(action);
+	}
+
 	public long retainedSize() { return retained.size(); }
 	public long speculativeSize() { return speculative.size(); }
 	public long size() { return retainedSize() + speculativeSize(); }

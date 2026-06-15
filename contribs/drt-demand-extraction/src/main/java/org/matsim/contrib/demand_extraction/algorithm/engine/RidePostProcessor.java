@@ -61,10 +61,9 @@ public final class RidePostProcessor {
      * Packed OD/bin keys ({@link PackedKeyCodec#segmentKey}) of every handoff segment the
      * predecessor/successor pass evaluated — accepted AND rejected. This is the Task-9 "window"
      * export domain (= the lookup set of Python's {@code compute_dynamic_successors}). Populated
-     * in the parallel evaluation loop, so a {@link ConcurrentLinkedQueue} is used (mirrors
-     * {@code MatsimNetworkCache.pendingSegmentKeys}); {@link #getWindowKeys()} dedups it into a
-     * {@link LongOpenHashSet} after the pass joins. Duplicates and order are irrelevant — the
-     * export sorts deterministically.
+     * in the parallel evaluation loop, so a {@link ConcurrentLinkedQueue} is used;
+     * {@link #getWindowKeys()} dedups it into a {@link LongOpenHashSet} after the pass joins.
+     * Duplicates and order are irrelevant — the export sorts deterministically.
      */
     private final ConcurrentLinkedQueue<Long> windowKeys = new ConcurrentLinkedQueue<>();
 

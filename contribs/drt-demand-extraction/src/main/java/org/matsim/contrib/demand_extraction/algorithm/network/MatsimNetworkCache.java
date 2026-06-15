@@ -8,7 +8,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -98,17 +97,9 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	private volatile Id<Link>[] linkByIndex = null;
 
 	// ── Journaling (Plan A3 checkpoint/resume) ────────────────────────────────
-	// When disabled (default) the volatile read is the only overhead — routing paths
-	// are byte-identical to pre-journaling code.
-
-	/** When true, newly-inserted cache/sssp keys are captured in the pending queues. */
-	private volatile boolean journalingEnabled = false;
-
-	/** Packed segment keys inserted since the last drainPendingToJournal (or since enableJournaling). */
-	private final ConcurrentLinkedQueue<Long> pendingSegmentKeys = new ConcurrentLinkedQueue<>();
-
-	/** Packed SSSP keys inserted since the last drainPendingToJournal. */
-	private final ConcurrentLinkedQueue<Long> pendingSsspKeys = new ConcurrentLinkedQueue<>();
+	// The journal is snapshotted from the live cache at each checkpoint barrier
+	// (see snapshotToJournal) — there is no per-insert capture state, so routing
+	// paths carry zero journaling overhead.
 
 	// ─────────────────────────────────────────────────────────────────────────
 
@@ -210,13 +201,11 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		// computeIfAbsent fills a cache miss exactly once under normal use. The tiered cache
 		// allows a rare duplicate fill under a get/rotate race — harmless: routing is
 		// deterministic so both fills carry bit-identical values, and the speculative put is
-		// first-write-wins. Journal the key only when this call actually inserted it.
+		// first-write-wins.
 		TravelSegment cached = cache.get(key);
 		if (cached != null) return cached;
 		TravelSegment seg = computeSegment(originLinkId, destLinkId, canonicalDepartureTime);
-		if (cache.putSpeculative(key, seg) && journalingEnabled) {
-			pendingSegmentKeys.add(key);
-		}
+		cache.putSpeculative(key, seg);
 		// Re-read so all callers observe the first-write winner (in case of a concurrent fill).
 		TravelSegment winner = cache.get(key);
 		return winner != null ? winner : seg;
@@ -268,13 +257,9 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		LeastCostPathTree.StopCriterion stopCriterion =
 			new LeastCostPathTree.TravelTimeStopCriterion(maxTravelTimeSeconds);
 		tree.calculate(fromLink, canonicalDepartureTime, dummyPerson, dummyVehicle, stopCriterion);
-		// markSssp returns true only for the thread that actually inserted the mark: two threads
-		// can pass the isSsspDone gate above for the same (fromLink, timeBin) and both compute the
-		// tree; only the inserting one journals it, so the journal never accumulates duplicate
-		// SSSP records for a raced key.
-		if (cache.markSssp(ssspKey) && journalingEnabled) {
-			pendingSsspKeys.add(ssspKey);
-		}
+		// A get/rotate or two-thread race can compute the tree twice for the same (fromLink,
+		// timeBin); markSssp is idempotent (set add) so the mark is recorded once regardless.
+		cache.markSssp(ssspKey);
 		batchTreesComputed.incrementAndGet();
 
 		for (Id<Link> toLinkId : toLinkIds) {
@@ -283,18 +268,14 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 
 			if (fromLinkId.equals(toLinkId)) {
 				TravelSegment seg = computeSegment(fromLinkId, toLinkId, canonicalDepartureTime);
-				if (cache.putSpeculative(key, seg) && journalingEnabled) {
-					pendingSegmentKeys.add(key);
-				}
+				cache.putSpeculative(key, seg);
 				batchSegmentsPopulated.incrementAndGet();
 				continue;
 			}
 
 			Link toLink = network.getLinks().get(toLinkId);
 			if (toLink == null) {
-				if (cache.putSpeculative(key, TravelSegment.unreachable()) && journalingEnabled) {
-					pendingSegmentKeys.add(key);
-				}
+				cache.putSpeculative(key, TravelSegment.unreachable());
 				batchSegmentsPopulated.incrementAndGet();
 				continue;
 			}
@@ -305,10 +286,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 			// (e.g. forbidden immediate turn or only a loop-back path exists). Route
 			// these adjacent link-to-link cases point-to-point instead.
 			if (fromLink.getToNode().getId().equals(toLink.getFromNode().getId())) {
-				if (cache.putSpeculative(key, computeSegment(fromLinkId, toLinkId, canonicalDepartureTime))
-						&& journalingEnabled) {
-					pendingSegmentKeys.add(key);
-				}
+				cache.putSpeculative(key, computeSegment(fromLinkId, toLinkId, canonicalDepartureTime));
 				batchSegmentsPopulated.incrementAndGet();
 				continue;
 			}
@@ -327,9 +305,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 				double tt = interLinkTT + toLinkTT;
 				double dist = tree.getDistance(toNodeIdx) + toLink.getLength();
 				double utility = -(tree.getCost(toNodeIdx) + toLinkDisutility);
-				if (cache.putSpeculative(key, new TravelSegment(tt, dist, utility)) && journalingEnabled) {
-					pendingSegmentKeys.add(key);
-				}
+				cache.putSpeculative(key, new TravelSegment(tt, dist, utility));
 				batchSegmentsPopulated.incrementAndGet();
 			}
 			// else: SSSP stop-criterion didn't reach this node within the bound — leave the
@@ -553,56 +529,28 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	// ── Journaling API (Plan A3 checkpoint/resume) ────────────────────────────
 
 	/**
-	 * Enable journaling — from this point on, every newly-inserted cache/sssp entry
-	 * is captured in the pending queues for draining at checkpoint barriers.
+	 * Snapshot the entire live connection cache (both tiers, deduped) plus all live SSSP marks
+	 * into the journal as one barrier, then fsync. The journal is derived from the cache's CURRENT
+	 * contents at the barrier — not from a per-insert capture queue — so its size is bounded by the
+	 * (watermark-capped) live cache rather than by the number of inserts. A segment evicted from
+	 * the speculative tier is simply not snapshotted; on resume it is re-routed bit-identically
+	 * (cross-engine value identity), so omitting it is output-invariant.
 	 *
-	 * <p>Must be called before routing begins if journaling is desired.
-	 */
-	public void enableJournaling() {
-		this.journalingEnabled = true;
-	}
-
-	/**
-	 * Stop capturing newly-inserted entries and discard anything still pending. Called by the
-	 * engine once the LAST checkpoint barrier has been drained and generation is complete, so the
-	 * subsequent lazy export pass (which routes the never-cached "backstop" class — reproduced
-	 * bit-identically point-to-point on resume, no journal needed) does not grow the pending queue
-	 * unboundedly. Only safe to call when no further barrier will be written: any still-pending
-	 * entries are intentionally dropped because they will not be journaled.
-	 *
-	 * <p>Thread-safety: the engine calls this from the single coordinating thread after all
-	 * parallel generation has joined, so it is NOT concurrent with the routing threads that
-	 * enqueue into the pending queues. {@code journalingEnabled} is volatile and the queues are
-	 * concurrent, so a late stray enqueue would be memory-safe, but the contract is single-threaded
-	 * quiescence at this call: clearing here races with no live producer.
-	 */
-	public void disableJournaling() {
-		this.journalingEnabled = false;
-		pendingSegmentKeys.clear();
-		pendingSsspKeys.clear();
-	}
-
-	/**
-	 * Drain all pending (newly-inserted since the last drain or since enableJournaling)
-	 * cache and sssp entries into the journal, then write a single BARRIER marker and fsync.
-	 *
-	 * <p>Must be called from a single thread at a checkpoint barrier — no routing should
-	 * be concurrently inserting into the cache when this method runs.
+	 * <p>Must be called from a single thread at a checkpoint barrier — no routing may be
+	 * concurrently mutating the cache when this method runs.
 	 *
 	 * @param writer open journal writer (caller owns the lifecycle)
 	 * @throws IOException if writing fails
 	 */
-	public void drainPendingToJournal(ConnectionCacheJournal.Writer writer) throws IOException {
+	public void snapshotToJournal(ConnectionCacheJournal.Writer writer) throws IOException {
 		List<ConnectionCacheJournal.Segment> segments = new ArrayList<>();
 		List<ConnectionCacheJournal.Sssp> ssspKeys = new ArrayList<>();
 
 		Id<Link>[] byIndex = linkByIndex();
 
-		Long segKey;
-		while ((segKey = pendingSegmentKeys.poll()) != null) {
-			long k = segKey;
+		cache.forEachKey(k -> {
 			TravelSegment seg = cache.get(k);
-			if (seg == null) continue; // defensive: entry was removed (e.g. clearCache in tests)
+			if (seg == null) return; // raced eviction; the single-threaded barrier contract makes this unreachable
 			segments.add(new ConnectionCacheJournal.Segment(
 					linkStr(byIndex, PackedKeyCodec.origin(k)),
 					linkStr(byIndex, PackedKeyCodec.dest(k)),
@@ -610,15 +558,11 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 					seg.getTravelTime(),
 					seg.getDistance(),
 					seg.getNetworkUtility()));
-		}
+		});
 
-		Long ssspKey;
-		while ((ssspKey = pendingSsspKeys.poll()) != null) {
-			long k = ssspKey;
-			ssspKeys.add(new ConnectionCacheJournal.Sssp(
-					linkStr(byIndex, PackedKeyCodec.ssspOrigin(k)),
-					PackedKeyCodec.ssspBin(k)));
-		}
+		cache.forEachSssp(k -> ssspKeys.add(new ConnectionCacheJournal.Sssp(
+				linkStr(byIndex, PackedKeyCodec.ssspOrigin(k)),
+				PackedKeyCodec.ssspBin(k))));
 
 		writer.appendBarrier(segments, ssspKeys);
 	}

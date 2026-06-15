@@ -24,10 +24,12 @@ import org.matsim.core.router.costcalculators.OnlyTimeDependentTravelDisutility;
 import org.matsim.core.trafficmonitoring.FreeSpeedTravelTime;
 
 /**
- * Round-trip test: MatsimNetworkCache journaling capture → ConnectionCacheJournal write →
+ * Round-trip test: MatsimNetworkCache live-cache snapshot → ConnectionCacheJournal write →
  * read → bulkLoadFromJournal → verify bit-identical values.
  *
- * Also verifies that journaling disabled (knob off) captures nothing.
+ * <p>The journal is derived from the cache's current contents at each barrier (snapshot), not
+ * from a per-insert capture queue — so every entry live in the cache when the barrier is taken
+ * is journaled. An empty cache snapshots to an empty barrier.
  */
 public class ConnectionCacheJournalCacheRoundTripTest {
 
@@ -37,7 +39,7 @@ public class ConnectionCacheJournalCacheRoundTripTest {
     private static final int EXPECTED_BIN = (int)(DEPARTURE_TIME / TIME_BIN_SIZE);
 
     // -------------------------------------------------------------------------
-    // Test 1: full round-trip across two drain barriers
+    // Test 1: full round-trip across two snapshot barriers
     // -------------------------------------------------------------------------
     @Test
     @SuppressWarnings("unchecked")
@@ -49,7 +51,6 @@ public class ConnectionCacheJournalCacheRoundTripTest {
         var tt = new FreeSpeedTravelTime();
         var td = new OnlyTimeDependentTravelDisutility(tt);
         MatsimNetworkCache original = MatsimNetworkCacheTestFixture.createWithRouting(network, tt, td, TIME_BIN_SIZE);
-        original.enableJournaling();
 
         // --- Barrier 1: route a handful of OD pairs via getSegment ---
         assertTrue(linkIds.size() >= 6);
@@ -71,7 +72,7 @@ public class ConnectionCacheJournalCacheRoundTripTest {
 
         Path journalFile = tmp.resolve("cache.journal");
         try (ConnectionCacheJournal.Writer writer = ConnectionCacheJournal.Writer.openForAppend(journalFile)) {
-            original.drainPendingToJournal(writer); // barrier 1
+            original.snapshotToJournal(writer); // barrier 1
         }
 
         // --- Barrier 2: route more entries ---
@@ -83,7 +84,7 @@ public class ConnectionCacheJournalCacheRoundTripTest {
                 "ssspCompleted should contain origin3 after second batchPrecompute");
 
         try (ConnectionCacheJournal.Writer writer = ConnectionCacheJournal.Writer.openForAppend(journalFile)) {
-            original.drainPendingToJournal(writer); // barrier 2
+            original.snapshotToJournal(writer); // barrier 2 (full live snapshot — superset of barrier 1)
         }
 
         // --- Read and bulk-load into a fresh cache ---
@@ -140,40 +141,30 @@ public class ConnectionCacheJournalCacheRoundTripTest {
     }
 
     // -------------------------------------------------------------------------
-    // Test 2: knob-OFF — no enableJournaling() → drainPendingToJournal writes
-    //         empty barriers → Contents is empty after read.
+    // Test 2: snapshot of an empty cache produces one empty barrier (no segments,
+    //         no sssp keys) — the snapshot is derived from live cache contents.
     // -------------------------------------------------------------------------
     @Test
-    @SuppressWarnings("unchecked")
-    void journalingDisabled_drainProducesEmptyContents(@TempDir Path tmp) throws IOException {
+    void emptyCache_snapshotProducesEmptyContents(@TempDir Path tmp) throws IOException {
         Network network = buildGridNetwork(5, 5, 200.0, 15.0);
-        List<Id<Link>> linkIds = new ArrayList<>(network.getLinks().keySet());
-        linkIds.sort(Comparator.comparing(Id::toString));
 
         var tt = new FreeSpeedTravelTime();
         var td = new OnlyTimeDependentTravelDisutility(tt);
-        MatsimNetworkCache noJournalCache = MatsimNetworkCacheTestFixture.createWithRouting(network, tt, td, TIME_BIN_SIZE);
-        // Note: enableJournaling() NOT called
-
-        // Route some entries (they should NOT be captured)
-        Id<Link> origin = linkIds.get(0);
-        Id<Link> dest   = linkIds.get(linkIds.size() - 1);
-        TravelSegment seg = noJournalCache.getSegment(origin, dest, DEPARTURE_TIME);
-        assertTrue(seg.isReachable());
-
-        Id<Link>[] targets = new Id[] { dest, linkIds.get(1) };
-        noJournalCache.batchPrecompute(origin, DEPARTURE_TIME, targets, 600.0);
+        MatsimNetworkCache emptyCache = MatsimNetworkCacheTestFixture.createWithRouting(network, tt, td, TIME_BIN_SIZE);
+        // No routing performed → the cache is empty.
 
         Path journalFile = tmp.resolve("empty.journal");
         try (ConnectionCacheJournal.Writer writer = ConnectionCacheJournal.Writer.openForAppend(journalFile)) {
-            noJournalCache.drainPendingToJournal(writer);
+            emptyCache.snapshotToJournal(writer);
         }
 
         ConnectionCacheJournal.Contents contents = ConnectionCacheJournal.read(journalFile);
         assertTrue(contents.segments().isEmpty(),
-                "Knob-off: no segments should have been captured");
+                "empty cache: no segments should be snapshotted");
         assertTrue(contents.ssspKeys().isEmpty(),
-                "Knob-off: no sssp keys should have been captured");
+                "empty cache: no sssp keys should be snapshotted");
+        assertEquals(1, contents.committedBarrierCount(),
+                "snapshot still writes exactly one (empty) barrier");
     }
 
     // -------------------------------------------------------------------------

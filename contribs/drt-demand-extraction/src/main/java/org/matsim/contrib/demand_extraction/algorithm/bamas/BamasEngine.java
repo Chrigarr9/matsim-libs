@@ -259,7 +259,6 @@ public final class BamasEngine {
 			// Best-effort release on the failure path; the propagating exception is the real signal.
 			if (cacheJournal != null) {
 				try {
-					network.disableJournaling();
 					cacheJournal.close();
 				} catch (java.io.IOException ignored) {
 					// nothing actionable — the original throwable is rethrown below
@@ -390,12 +389,10 @@ public final class BamasEngine {
 					log.info("Plan A3 checkpointing ENABLED (fresh) -> {}", exMasConfig.getCheckpointDir());
 				}
 
-				// Journal setup. Enable capture BEFORE pair generation routes (singles, generated
-				// earlier above, route point-to-point and are regenerated identically on resume, so
-				// they need no journal). On resume, pair-gen is skipped, so the journal is the ONLY
-				// source of its SSSP cache values — bulk-load them before any routing; then reopen
-				// the same journal to append entries from any degrees this resumed run recomputes.
-				network.enableJournaling();
+				// Journal setup. The journal is snapshotted from the live cache at each checkpoint
+				// barrier (no per-insert capture). On resume, pair-gen is skipped, so the journal is
+				// the ONLY source of its SSSP cache values — bulk-load them before any routing; then
+				// reopen the same journal to append snapshots from any degrees this resumed run recomputes.
 				java.nio.file.Path journalPath = java.nio.file.Path.of(
 						exMasConfig.getCheckpointDir()).resolve("cache.journal");
 				try {
@@ -794,12 +791,11 @@ public final class BamasEngine {
 			log.info("Stub mode (streaming): exporting {} D2D rides ({} fat singles+pairs + {} stub rows) "
 					+ "via ColumnarRideStore — no batch-materialize, no fat sort/reindex",
 					totalD2D, allRides.size(), rideLayerRows);
-			// Plan A3 Task 5: all checkpoint barriers are drained. The lazy export below routes
-			// only the never-cached backstop class (point-to-point, reproduced identically on
-			// resume), so stop capturing — otherwise export-time inserts would grow the pending
-			// queue unbounded with no barrier to drain them — and close the writer.
+			// Plan A3 Task 5: all checkpoint barriers are written; close the journal writer. (The
+			// lazy export below routes only the never-cached backstop class point-to-point, which is
+			// reproduced identically on resume and needs no journal entry — and the journal is a
+			// snapshot of live cache contents anyway, so export-time fills cannot bloat it.)
 			if (cacheJournal != null) {
-				network.disableJournaling();
 				try {
 					cacheJournal.close();
 				} catch (java.io.IOException e) {
@@ -935,17 +931,17 @@ public final class BamasEngine {
 	}
 
 	/**
-	 * Plan A3 Task 5 — append the cache entries inserted since the last barrier to the connection
-	 * cache journal and fsync, at a checkpoint barrier. No-op when journaling is off
-	 * ({@code journal == null}). Wraps the checked IO as unchecked so the barrier call sites stay
-	 * uncluttered; an IO failure here aborts the run (the checkpoint contract cannot be honored).
+	 * Plan A3 Task 5 — snapshot the live connection cache to the journal as one barrier and fsync,
+	 * at a checkpoint barrier. No-op when checkpointing is off ({@code journal == null}). Wraps the
+	 * checked IO as unchecked so the barrier call sites stay uncluttered; an IO failure here aborts
+	 * the run (the checkpoint contract cannot be honored).
 	 */
 	private void drainJournalBarrier(ConnectionCacheJournal.Writer journal) {
 		if (journal == null) {
 			return;
 		}
 		try {
-			network.drainPendingToJournal(journal);
+			network.snapshotToJournal(journal);
 		} catch (java.io.IOException e) {
 			throw new java.io.UncheckedIOException("Cannot append to connection-cache journal", e);
 		}
