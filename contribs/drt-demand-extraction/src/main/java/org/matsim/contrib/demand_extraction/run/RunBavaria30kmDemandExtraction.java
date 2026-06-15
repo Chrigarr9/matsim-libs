@@ -827,11 +827,6 @@ public class RunBavaria30kmDemandExtraction {
 		exMasConfig.setInterDegreeKeepFraction(interDegreeKeep);
 		log.info("  Inter-degree pruning: keepFraction={}", interDegreeKeep);
 
-		// Defer budget validation out of the extension DFS — budget is subsumed by max-travel-time
-		// on Bavaria, so per-ordering validation is pure overhead (7-11% CPU at high degrees).
-		// BudgetValidator.populateBudgetsBatch runs once after extension completes.
-		exMasConfig.setDeferExtensionBudgetValidation(true);
-
 		log.info("ExMAS config:");
 		log.info("  DRT mode: {}", exMasConfig.getDrtMode());
 		log.info("  Commute filter: {}", exMasConfig.getCommuteFilter());

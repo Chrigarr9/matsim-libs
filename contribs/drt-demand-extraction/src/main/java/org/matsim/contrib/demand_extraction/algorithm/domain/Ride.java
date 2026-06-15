@@ -39,9 +39,7 @@ public final class Ride {
     private final double[] delays;
 	private final double[] detours; // Detour factor: passengerTravelTime / directTravelTime (1.0 = no detour, 2.0 =
 									// 100% detour)
-    // Non-final so BudgetValidator.populateBudgetsBatch can mutate in place at scale
-    // (avoids 2× peak Ride retention from toBuilder().build() rebuild on 32M+ rides).
-    private double[] remainingBudgets;  // Budget remaining after scoring (utils)
+    private double[] remainingBudgets;  // Budget remaining after scoring (utils); set via the builder
     private final double[] maxCosts; // Maximum willingness-to-pay per passenger (currency units)
     private final double[] maxCostsPerKm; // maxCosts normalized to EUR/km per passenger
 
@@ -208,14 +206,6 @@ public final class Ride {
 	}
     public double[] getRemainingBudgets() { return remainingBudgets != null ? remainingBudgets.clone() : null; }
 
-    /**
-     * In-place setter used only by {@link org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator}
-     * to populate deferred budgets at end-of-extension without rebuilding the Ride.
-     * Defensive clone matches the constructor's contract; pre/post mutation, all other fields stay identical.
-     */
-    public void setRemainingBudgets(double[] remainingBudgets) {
-        this.remainingBudgets = remainingBudgets != null ? remainingBudgets.clone() : null;
-    }
     public double[] getMaxCosts() { return maxCosts != null ? maxCosts.clone() : null; }
     public double[] getMaxCostsPerKm() { return maxCostsPerKm != null ? maxCostsPerKm.clone() : null; }
     public double[] getConnectionTravelTimes() { return connectionTravelTimes.clone(); }

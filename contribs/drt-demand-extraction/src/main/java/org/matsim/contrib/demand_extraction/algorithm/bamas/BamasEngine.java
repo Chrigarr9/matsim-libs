@@ -736,9 +736,8 @@ public final class BamasEngine {
 
 		// Seam (c): remainingBudgets is populated inline by RideMaterializer.validateAndPopulateBudgets
 		// — the streaming path does it lazily during forEachMaterialized, the stop-based path (Plan A2)
-		// does it per-batch inside generateStopBasedRidesBatched. Either way the stub layers carry NO
-		// budgets, so there is no separate deferred-budget batch pass (the old fat populateBudgetsBatch
-		// is gone with the fat path).
+		// does it per-batch inside generateStopBasedRidesBatched. The stub layers carry NO budgets;
+		// budget validation is always inline during extension (no deferred batch pass exists).
 
 		// True D2D total: fat singles+pairs already in allRides, plus stub-layer rows (which
 		// in the streaming path have NOT been added to allRides). Log-only — for traceability.

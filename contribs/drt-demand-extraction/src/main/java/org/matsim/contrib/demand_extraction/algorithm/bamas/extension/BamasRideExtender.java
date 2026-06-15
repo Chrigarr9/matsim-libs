@@ -716,21 +716,20 @@ public final class BamasRideExtender {
 		}
 		stats.ridesPassedConstraints++;
 
-		Ride validated;
-		if (exMasConfig.isDeferExtensionBudgetValidation()) {
-			// Defer budget validation to a single batch step after extension completes.
-			// ride.remainingBudgets stays null; BudgetValidator.populateBudgetsBatch fills it later.
-			validated = ride;
-		} else {
-			long tBudget0 = System.nanoTime();
-			validated = budgetValidator.validateAndPopulateBudgets(ride);
-			stats.timeBudgetValidation += System.nanoTime() - tBudget0;
-			stats.budgetValidations++;
-			if (validated == null) {
-				return;
-			}
-			stats.budgetPassed++;
+		// Budget validation is always inline (per ordering): the extension DFS keeps the
+		// shortest budget-FEASIBLE ordering for each set, falling back to a longer feasible
+		// ordering when the shortest fails budget. (The former deferExtensionBudgetValidation
+		// shortcut — keep shortest reachable, validate once at the end — was removed 2026-06-15:
+		// it silently dropped feasible sets / hard-crashed at export on any scenario where
+		// budget binds, e.g. rural Lyon, and saved little once the scoring-context cache landed.)
+		long tBudget0 = System.nanoTime();
+		Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
+		stats.timeBudgetValidation += System.nanoTime() - tBudget0;
+		stats.budgetValidations++;
+		if (validated == null) {
+			return;
 		}
+		stats.budgetPassed++;
 
 		double dist = validated.getRideDistance();
 		if (dist < bestValidDist[0]) {

@@ -272,7 +272,6 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 		exMas.setPruningDistanceSavingsMinDegree(2);
 
 		exMas.setMaxSuccessors(50);
-		exMas.setDeferExtensionBudgetValidation(true);
 
 		// Post-extension pruning (Pareto-minimal coverage TopK; cascade analysis
 		// 2026-04-17). Algorithm configurators applied after this method may override.

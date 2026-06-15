@@ -491,12 +491,6 @@ public class RunBavariaEqasimDemandExtraction {
 		// Cap successor list (ported from 30km — major perf lever)
 		exMasConfig.setMaxSuccessors(50);
 
-		// Defer per-ordering budget validation out of the extension DFS.
-		// Budget is subsumed by max-travel-time on Bavaria, so per-ordering check is
-		// pure overhead (7-11% CPU at high degrees). BudgetValidator.populateBudgetsBatch
-		// runs once after extension completes.
-		exMasConfig.setDeferExtensionBudgetValidation(true);
-
 		// Inter-degree pruning default — may be overridden by CLI sweep flag below
 		exMasConfig.setInterDegreeKeepFraction(0.10);
 

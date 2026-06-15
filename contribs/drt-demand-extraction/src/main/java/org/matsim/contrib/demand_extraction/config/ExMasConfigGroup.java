@@ -183,13 +183,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// CrossEngineRoutingDeterminismTest (403,785 shared cache ODs, 0 value diffs at 1%).
 	private double cacheEvictionWatermark = 0.7;
 
-	// If true, BamasRideExtender skips per-ordering budget validation and BudgetValidator.populateBudgetsBatch
-	// is called once after the extension loop. Safe ONLY when budget validation never rejects on the
-	// scenario (e.g. Bavaria, where budget is subsumed by max-travel-time). On scenarios where budget
-	// actually rejects, this can drop sets whose shortest ordering fails budget but a longer feasible
-	// ordering exists. Default: false (preserve per-ordering behavior).
-	private boolean deferExtensionBudgetValidation = false;
-
 	// ExMAS algorithm parameters
 
 	// ===========================================
@@ -879,16 +872,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter("networkTimeBinSize")
 	public void setNetworkTimeBinSize(int networkTimeBinSize) {
 		this.networkTimeBinSize = networkTimeBinSize;
-	}
-
-	@StringGetter("deferExtensionBudgetValidation")
-	public boolean isDeferExtensionBudgetValidation() {
-		return deferExtensionBudgetValidation;
-	}
-
-	@StringSetter("deferExtensionBudgetValidation")
-	public void setDeferExtensionBudgetValidation(boolean deferExtensionBudgetValidation) {
-		this.deferExtensionBudgetValidation = deferExtensionBudgetValidation;
 	}
 
 	// Max detour factor getter/setter
@@ -1646,11 +1629,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("negativeFlexibilityRelativeMap", "Map for negative relative flexibility (value:factor,value:factor). Single value sets default. Default: default:0.5");
 		map.put("networkTimeBinSize",
 				"Time bin size for network travel time caching (seconds). Queries within same bin reuse cached values. Default: 900 (15 min)");
-		map.put("deferExtensionBudgetValidation",
-				"If true, BamasRideExtender skips per-ordering budget validation and BudgetValidator " +
-				"populates remainingBudgets once after the extension loop. Safe ONLY when budget " +
-				"validation never rejects (e.g. Bavaria). May drop feasible sets on scenarios " +
-				"where budget actively rejects orderings. Default: false");
 		map.put("checkpointDir",
 			"Directory for per-degree stub checkpoints + connection-cache journal (Plan A3). " +
 			"Empty (\"\") = checkpointing OFF. When set, a crashed week-long exact 100% extraction " +

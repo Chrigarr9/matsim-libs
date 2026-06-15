@@ -437,13 +437,6 @@ class LyonPruningAblationTest {
 		}
 
 		@Override
-		public Ride populateBudgetsInPlace(Ride ride) {
-			double[] budgets = Arrays.stream(ride.getRequests()).mapToDouble(r -> r.budget).toArray();
-			ride.setRemainingBudgets(budgets);
-			return ride;
-		}
-
-		@Override
 		public double[] calculateRemainingBudgets(Ride ride) {
 			return Arrays.stream(ride.getRequests()).mapToDouble(r -> r.budget).toArray();
 		}

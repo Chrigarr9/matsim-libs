@@ -85,10 +85,11 @@ public final class RideMaterializer {
 	/**
 	 * Materialize one stub row into a full {@link Ride}.
 	 *
-	 * <p>NON-DEFERRED contract: this always populates {@code remainingBudgets} via
-	 * {@link BudgetValidator#validateAndPopulateBudgets}, matching the gate scenario
-	 * ({@code deferExtensionBudgetValidation=false}). The winning ordering already
-	 * passed budget validation during extension, so the result is non-null.
+	 * <p>This always populates {@code remainingBudgets} via
+	 * {@link BudgetValidator#validateAndPopulateBudgets}. Budget validation is always inline
+	 * during extension, so every stored (winning) ordering already passed budget validation
+	 * and the result here is non-null; a null is a hard error (a stored ordering should never
+	 * be budget-infeasible).
 	 *
 	 * @param cols         the per-degree layer
 	 * @param row          row index within {@code cols}
