@@ -567,11 +567,7 @@ public final class BamasEngine {
 				generatedSum += resumeManifest.generatedFor(d);
 			}
 			if (highest >= 3) {
-				List<int[]> sets = new ArrayList<>(prevRideLayer.size());
-				for (int row = 0; row < prevRideLayer.size(); row++) {
-					sets.add(prevRideLayer.requestIndices(row));
-				}
-				prevDegreeGraph = DegreeGraph.buildFromRequestSets(sets, highest);
+				prevDegreeGraph = degreeGraphFromLayer(prevRideLayer, highest);
 			}
 			nextRideIndex = allRides.size() + (int) generatedSum;
 			loopStart = highest;
@@ -677,6 +673,21 @@ public final class BamasEngine {
 			nextRideIndex += generatedCount; // index space reserved for all generated rides
 		}
 		return rideLayers;
+	}
+
+	/**
+	 * Build the degree-{@code degree} {@link DegreeGraph} from a slim {@link RideLayer}'s request
+	 * sets. {@link DegreeGraph#buildFromRequestSets} is order-independent, so this reproduces the
+	 * old fat {@code buildDegreeGraph(degree)} output exactly. Single source of truth for both the
+	 * resume rebuild and the in-loop next-degree graph (no duplicated graph-build code).
+	 */
+	private static DegreeGraph degreeGraphFromLayer(
+			org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer layer, int degree) {
+		List<int[]> sets = new ArrayList<>(layer.size());
+		for (int row = 0; row < layer.size(); row++) {
+			sets.add(layer.requestIndices(row));
+		}
+		return DegreeGraph.buildFromRequestSets(sets, degree);
 	}
 
 	/**
