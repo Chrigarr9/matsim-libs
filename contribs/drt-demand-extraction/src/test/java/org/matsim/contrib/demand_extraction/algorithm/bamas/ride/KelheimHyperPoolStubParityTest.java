@@ -56,9 +56,18 @@ import org.matsim.examples.ExamplesUtils;
  * <p>Single-threaded and deterministic network routing for byte reproducibility (documented
  * in plan A2). The population is duplicated 2x to create spatial overlap for hyper-pooling.
  *
+ * <p><b>Re-baselined 2026-06-16</b> after {@code 8348b736} (PairGenerator: per-request
+ * flexibility window replacing the flat search horizon). That change is a provable lossless
+ * superset of the old flat-600s candidate set with the exact temporal-overlap check unchanged,
+ * so it only adds genuinely-feasible pairs the flat horizon was wrongly pre-dropping; Kelheim's
+ * flexibility windows exceed 600 s, so the ride count grew 13,223 → 66,521. Attribution was
+ * confirmed by toggling only that one PairGenerator line back to the flat horizon on the
+ * current tree, which reproduced the previous goldens exactly — so the window is the sole
+ * delta (defer-validation removal, the ride/layer rename, tier2 and fork are all inert here).
+ *
  * <h3>Golden strategy</h3>
- * The {@code exmas_rides.csv} is ~10 MB (13 k rows incl. ~1 k S2S), so rather than commit the
- * blob we pin its SHA-256 — and the 139 KB {@code hyperpool_rides.csv}'s — as constants below.
+ * The {@code exmas_rides.csv} is ~58 MB (66,521 rows incl. S2S), so rather than commit the
+ * blob we pin its SHA-256 — and the 103 KB {@code hyperpool_rides.csv}'s — as constants below.
  * Both are byte-deterministic under the single-threaded + deterministic-routing config. If an
  * intentional output change flips a SHA, re-capture it from the {@code actual CSV} path the
  * failure prints (e.g. {@code sha256sum <path>}).
@@ -72,10 +81,10 @@ class KelheimHyperPoolStubParityTest {
     private static final String RUN_ID = "kelheim-mini";
     /** SHA-256 of the frozen kelheim-mini exmas_rides.csv (D2D + S2S rows), single-threaded. */
     private static final String RIDES_GOLDEN_SHA =
-            "d04ff09246be85ded90752c15771660899eae57c2bfc1e01995a266ee6d58ae6";
+            "3e02d6a111a12710f4232974f621450ea157d04b52394b61e034b5c56588edb2";
     /** SHA-256 of the frozen kelheim-mini hyperpool_rides.csv (Phase-6 bundles), single-threaded. */
     private static final String HYPERPOOL_GOLDEN_SHA =
-            "0f071fd09b7103bdaa06ee206ad5a9b773874107021ab818156e64199b3e1e14";
+            "68d2577e2f877f379330f1c1eccb3eaf4ad9dfb8a76ed9b4dde032c848b77ce1";
 
     @Test
     void kelheimHyperPoolOutputMatchesFrozenGoldens() throws IOException, NoSuchAlgorithmException {
