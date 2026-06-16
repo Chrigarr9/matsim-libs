@@ -62,15 +62,6 @@ public final class BamasRideExtender {
 
 	// DegreeGraph from previous degree for candidate generation (null at degree 3)
 	private final DegreeGraph prevDegreeGraph;
-	// Stored after extendRides completes: valid rides by set hash, used for graph building
-	private ConcurrentHashMap<Long, Ride> lastResultBySetHash;
-	// Stub-mode shadow: compact SoA container for the last degree's winning rides,
-	// sorted in the same lex order as the fat results list. Null when stub mode is off.
-	// Task 11: the engine captures this via getLastDegreeRows() and feeds it as the next
-	// degree's parents (degree 3→4+) and as the per-degree layer to materialize at the end.
-	// buildDegreeGraph still consumes the fat resultBySetHash (populated unconditionally and
-	// order-independent → identical graph); Task 12 migrates the graph build to stubs.
-	private RideLayer lastDegreeRows;
 
 	public BamasRideExtender(MatsimNetworkCache network, ShareabilityGraph graph, BudgetValidator budgetValidator,
 						RequestResolver resolver, ExMasConfigGroup exMasConfig) {
@@ -91,30 +82,6 @@ public final class BamasRideExtender {
 		this.prevDegreeGraph = prevDegreeGraph;
 	}
 
-	/** Build a DegreeGraph from the valid rides produced by the last extendRides call. */
-	public DegreeGraph buildDegreeGraph(int degree) {
-		if (lastResultBySetHash == null || lastResultBySetHash.isEmpty()) return null;
-		return DegreeGraph.buildFromRides(lastResultBySetHash.values(), degree);
-	}
-
-	/** Returns the number of feasible sets from the last extendRides call. */
-	public int getFeasibleSetCount() {
-		return lastResultBySetHash != null ? lastResultBySetHash.size() : 0;
-	}
-
-	/**
-	 * Stub-mode shadow container for the last degree's winning rides, sorted in the
-	 * same lex order as the fat result list. Null when stub mode is off or no
-	 * {@code extendRides} call has run yet.
-	 *
-	 * <p>Task 11: the engine captures this after each {@code extendRides} and feeds it
-	 * as the next degree's parents (degree 3→4 and up). It is also the per-degree layer
-	 * accumulated for end-of-run batch materialization.
-	 */
-	public RideLayer getLastDegreeRows() {
-		return lastDegreeRows;
-	}
-
 	/**
 	 * Extend rides from degree D to degree D+1 using ordering-based enumeration.
 	 *
@@ -127,14 +94,13 @@ public final class BamasRideExtender {
 	 * deterministic regardless of worker completion order.
 	 *
 	 * @param ridesToExtend degree-D rides (1 per request set)
-	 * @param nextRideIndex starting index for new rides
-	 * @return list of degree-(D+1) rides, one per feasible set
+	 * @return the degree-(D+1) winning rides as a slim {@link RideLayer}, one row per feasible set
 	 */
-	public List<Ride> extendRides(List<Ride> ridesToExtend, int nextRideIndex) {
+	public RideLayer extendRides(List<Ride> ridesToExtend) {
 		int targetDegree = ridesToExtend.isEmpty() ? 0 : ridesToExtend.get(0).getDegree() + 1;
 		List<ParentView> parentViews = new ArrayList<>(ridesToExtend.size());
 		for (Ride r : ridesToExtend) parentViews.add(new RideParentView(r));
-		return extendParents(parentViews, targetDegree, nextRideIndex);
+		return extendParents(parentViews, targetDegree);
 	}
 
 	/**
@@ -149,16 +115,15 @@ public final class BamasRideExtender {
 	 *
 	 * @param parentRows  degree-D winning rides as a SoA container (sorted lex)
 	 * @param requestTable global request array indexed by {@link DrtRequest#index}
-	 * @param nextRideIndex starting index for new rides
-	 * @return list of degree-(D+1) rides, one per feasible set
+	 * @return the degree-(D+1) winning rides as a slim {@link RideLayer}, one row per feasible set
 	 */
-	public List<Ride> extendRides(RideLayer parentRows, DrtRequest[] requestTable, int nextRideIndex) {
+	public RideLayer extendRides(RideLayer parentRows, DrtRequest[] requestTable) {
 		int targetDegree = parentRows.size() == 0 ? 0 : parentRows.degree() + 1;
 		List<ParentView> parentViews = new ArrayList<>(parentRows.size());
 		for (int row = 0; row < parentRows.size(); row++) {
 			parentViews.add(new RowParentView(parentRows, row));
 		}
-		return extendParents(parentViews, targetDegree, nextRideIndex);
+		return extendParents(parentViews, targetDegree);
 	}
 
 	/**
@@ -174,12 +139,11 @@ public final class BamasRideExtender {
 	 *
 	 * @param parentRows   degree-D rides as a SoA container (sorted lex)
 	 * @param requestTable global request array indexed by {@link DrtRequest#index}
-	 * @param nextRideIndex starting index for new rides
 	 * @param markedRows   original row indices of the EXTEND-marked parents (cap 0)
 	 * @param tier2NodeCap first-valid node cap applied to unmarked rows ({@code > 0})
-	 * @return list of degree-(D+1) rides, one per feasible set
+	 * @return the degree-(D+1) winning rides as a slim {@link RideLayer}, one row per feasible set
 	 */
-	public List<Ride> extendRides(RideLayer parentRows, DrtRequest[] requestTable, int nextRideIndex,
+	public RideLayer extendRides(RideLayer parentRows, DrtRequest[] requestTable,
 			IntSet markedRows, long tier2NodeCap) {
 		int targetDegree = parentRows.size() == 0 ? 0 : parentRows.degree() + 1;
 		List<ParentView> parentViews = new ArrayList<>(parentRows.size());
@@ -187,10 +151,10 @@ public final class BamasRideExtender {
 			long cap = markedRows.contains(row) ? 0L : tier2NodeCap;
 			parentViews.add(new RowParentView(parentRows, row, cap));
 		}
-		return extendParents(parentViews, targetDegree, nextRideIndex);
+		return extendParents(parentViews, targetDegree);
 	}
 
-	List<Ride> extendParents(List<ParentView> ridesToExtend, int targetDegree, int nextRideIndex) {
+	RideLayer extendParents(List<ParentView> ridesToExtend, int targetDegree) {
 		log.info("Extending {} sets from degree {} to {} ...",
 				ridesToExtend.size(), targetDegree - 1, targetDegree);
 		long phaseStartTime = System.currentTimeMillis();
@@ -251,7 +215,9 @@ public final class BamasRideExtender {
 		// map materialized ~64M entries at deg-4/25% (~6-8 GB). Here the only
 		// dedup state is a LongOpenHashSet of claimed hashes (~1 GB at the
 		// same scale, ~3x leaner than HashSet<Long>) plus a bounded queue of at most 4 * parallelism tasks.
-		ConcurrentHashMap<Long, Ride> resultBySetHash = new ConcurrentHashMap<>();
+		// Task 12: production is slim-only — the winning ride per set is written straight to a
+		// per-thread RideLayer (rowBuffers) and the transient fat Ride is dropped, so there is no
+		// per-degree fat result map (the ~360M-Ride heap hog removed).
 		AtomicInteger setsProcessed = new AtomicInteger();
 		AtomicInteger resultsFound = new AtomicInteger();
 		AtomicInteger totalEnqueued = new AtomicInteger(0);
@@ -294,7 +260,8 @@ public final class BamasRideExtender {
 					int done = setsProcessed.incrementAndGet();
 					Ride bestRide = processSet(task.newSet, task.newSetHash, targetDegree, task.parentRide);
 					if (bestRide != null) {
-						resultBySetHash.put(task.newSetHash, bestRide);
+						// Project the transient winning ride to a slim row, then let it be GC'd —
+						// no fat accumulation (Task 12). Each thread writes only to its own buffer.
 						resultsFound.incrementAndGet();
 						RideRow s = RideRow.fromRide(bestRide);
 						rowBuffers.computeIfAbsent(Thread.currentThread().getId(),
@@ -405,41 +372,25 @@ public final class BamasRideExtender {
 			threadStatsMap.values().forEach(EnumerationStats::clear);
 		}
 
-		// Store results for graph building (accessed by buildDegreeGraph)
-		this.lastResultBySetHash = resultBySetHash;
-
-		// Merge per-worker stub buffers into one sorted RideLayer — the degree-(D+1)
-		// layer the engine carries forward (BamasEngine.getLastDegreeRows). Fat-overload
-		// callers (the MissingTriple regression tests) simply ignore it.
-		this.lastDegreeRows = rowBuffers.isEmpty()
+		// Merge per-worker stub buffers into the degree-(D+1) layer — the only result of an
+		// extension pass. RideLayer.mergeSorted produces a deterministic lex order over the
+		// request sets (independent of ConcurrentHashMap iteration / worker completion order),
+		// so parallel runs are byte-identical. The engine carries this layer forward as the next
+		// degree's parents, the source of the next DegreeGraph, and the per-degree export layer.
+		// Ride indices are assigned at export by layer position + the manifest's reserved offset,
+		// so no per-ride index stamp is needed here (the slim layer has no index column).
+		RideLayer layer = rowBuffers.isEmpty()
 				? new RideLayer(targetDegree > 0 ? targetDegree : 1)
 				: RideLayer.mergeSorted(rowBuffers.values());
 
-		// Deterministic output order: sort by sorted-request-indices lex.
-		// Required because resultBySetHash.values() iteration is not deterministic
-		// on ConcurrentHashMap — without this sort, parallel runs produce
-		// byte-different CSVs even though the ride set is identical.
-		List<Ride> results = new ArrayList<>(resultBySetHash.values());
-		results.sort((a, b) -> compareSortedIntArrays(sortedRequestIndices(a), sortedRequestIndices(b)));
-
-		// Assign sequential indices after sort so ride indices are deterministic.
-		// Stamp in place rather than rebuilding: a toBuilder().build() clone deep-copies
-		// every array, and because the originals stay pinned in resultBySetHash (retained
-		// via lastResultBySetHash for the degree-graph build), the clones doubled per-degree
-		// Ride retention and OOM'd at 100%. Mutating index keeps the result list and the
-		// map sharing the same Ride instances (1x retention); output is byte-identical.
-		for (int i = 0; i < results.size(); i++) {
-			results.get(i).assignIndex(nextRideIndex + i);
-		}
-
 		long elapsed = System.currentTimeMillis() - phaseStartTime;
 		log.info("Extension complete: {} rides at degree {} in {}s ({} candidate sets, {} threads, {} skipped dedup, {} base sets)",
-				results.size(), targetDegree, String.format("%.1f", elapsed / 1000.0),
+				layer.size(), targetDegree, String.format("%.1f", elapsed / 1000.0),
 				canonicalCount, parallelism, dedupSkipped, uniqueBaseSets.size());
 		org.matsim.contrib.demand_extraction.algorithm.profiling.MemoryProfiler
-				.snapshotAtEndOfDegree(targetDegree, results.size());
+				.snapshotAtEndOfDegree(targetDegree, layer.size());
 
-		return results;
+		return layer;
 	}
 
 	/** Return a freshly allocated sorted copy of a ride's request indices. */

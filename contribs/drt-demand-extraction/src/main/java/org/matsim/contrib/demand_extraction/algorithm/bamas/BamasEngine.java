@@ -519,12 +519,10 @@ public final class BamasEngine {
 		log.info("PHASE 4: Iterative Ride Extension");
 		log.info("======================================================================");
 		int nextRideIndex = allRides.size();
-		// Stub mode (Task 11): degree-3+ extension rides are held as per-degree RideLayer,
-		// NOT appended to allRides as fat Ride objects. We accumulate the per-degree layers
-		// here and batch-materialize them once at the end, concatenating with the still-fat
-		// singles + pairs already in allRides. The fat `extended` list returned by extendRides
-		// is still produced (Task 10 is additive) but used only for control flow + degree-graph;
-		// it is not retained past each iteration. Task 12 makes export streaming.
+		// Stub mode (Task 11 + 12): degree-3+ extension rides are held ONLY as per-degree
+		// RideLayer — extendRides returns the slim layer directly and there is no fat Ride
+		// accumulation. We collect the per-degree layers here and batch-materialize them once
+		// at the end, concatenating with the still-fat singles + pairs already in allRides.
 		List<org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer> rideLayers =
 				new ArrayList<>();
 		this.runRideLayers = rideLayers; // Plan A2: expose to Phase 5 outside the try block
@@ -588,7 +586,7 @@ public final class BamasEngine {
 					&& (degree + 1) >= exMasConfig.getExtensionParentsTopKMinDegree()
 					&& prevRideLayer.degree() >= 3;
 			long tier2NodeCap = exMasConfig.getExtensionParentsTier2NodeCap();
-			List<Ride> extended;
+			org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer extended;
 			if (topKGate && tier2NodeCap > 0) {
 				// Tier-2 second chance (Task A4): instead of hard-dropping unmarked parents,
 				// feed the FULL parent layer with marked rows uncapped (cap 0) and unmarked rows
@@ -605,32 +603,32 @@ public final class BamasEngine {
 						prevRideLayer.degree(), prevRideLayer.size(), marked.size(), prevRideLayer.size(),
 						tier2NodeCap, exMasConfig.getExtensionParentsTopK(), exMasConfig.getExtensionParentsTopKMetric(),
 						exMasConfig.getExtensionParentsSelectionRule(), exMasConfig.getExtensionParentsMmrLambda());
-				extended = extender.extendRides(prevRideLayer, runReqArray, nextRideIndex, marked, tier2NodeCap);
+				extended = extender.extendRides(prevRideLayer, runReqArray, marked, tier2NodeCap);
 			} else {
 				// OFF path (tier2NodeCap == 0) — byte-identical to today: marked-only hard filter.
 				org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer extensionParents = prevRideLayer;
 				if (topKGate) {
 					extensionParents = filterExtensionParents(prevRideLayer, requestById);
 				}
-				extended = extender.extendRides(extensionParents, runReqArray, nextRideIndex);
+				extended = extender.extendRides(extensionParents, runReqArray);
 			}
+			// The next degree's graph is built from THIS degree's full (pre-prune) layer — the slim
+			// equivalent of the old fat buildDegreeGraph, via the shared helper (Task 12).
 			long graphBuildStart = System.currentTimeMillis();
-			prevDegreeGraph = extender.buildDegreeGraph(degree + 1);
+			prevDegreeGraph = degreeGraphFromLayer(extended, degree + 1);
 			long graphBuildMs = System.currentTimeMillis() - graphBuildStart;
 			log.info("  Degree-{} graph: {} feasible sets, built in {}ms",
-					degree + 1, extender.getFeasibleSetCount(), graphBuildMs);
+					degree + 1, extended.size(), graphBuildMs);
 
-			if (extended.isEmpty()) {
+			if (extended.size() == 0) {
 				log.info("No extensions possible at degree {}. Stopping.", (degree + 1));
 				break;
 			}
 
 			int generatedCount = extended.size();
-			// Capture this degree's compact layer (sorted lex, same total order as the
-			// fat `extended` list). RATIO_THRESHOLD inter-degree pruning, when active,
-			// runs over the stub layer (seam b); COVERAGE_TOPK runs once post-loop.
-			org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer layer =
-					extender.getLastDegreeRows();
+			// RATIO_THRESHOLD inter-degree pruning, when active, runs over the stub layer
+			// (seam b); COVERAGE_TOPK runs once post-loop.
+			org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer layer = extended;
 			if (exMasConfig.getPruningMode() == org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.PruningMode.RATIO_THRESHOLD) {
 				layer = org.matsim.contrib.demand_extraction.algorithm.selection.RideLayerSelection
 						.prune(layer, requestById, exMasConfig);

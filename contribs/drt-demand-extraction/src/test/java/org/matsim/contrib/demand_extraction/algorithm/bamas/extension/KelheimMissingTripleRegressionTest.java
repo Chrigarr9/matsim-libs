@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.population.Person;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
@@ -48,7 +49,7 @@ class KelheimMissingTripleRegressionTest {
 				setup.config);
 
 		List<Ride> referenceExtended = reference.extendRides(setup.pairRides, 100);
-		List<Ride> bamasExtended = bamas.extendRides(setup.pairRides, 100);
+		RideLayer bamasExtended = bamas.extendRides(setup.pairRides);
 
 		assertTrue(
 				containsRequestSet(referenceExtended, 0, 1, 2),
@@ -64,6 +65,20 @@ class KelheimMissingTripleRegressionTest {
 		Arrays.sort(expected);
 		for (Ride ride : rides) {
 			int[] actual = ride.getRequestIndices();
+			Arrays.sort(actual);
+			if (Arrays.equals(expected, actual)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** BAMAS now returns the slim degree layer; assert on its request sets (rows are sorted). */
+	private static boolean containsRequestSet(RideLayer layer, int... requestIndices) {
+		int[] expected = requestIndices.clone();
+		Arrays.sort(expected);
+		for (int row = 0; row < layer.size(); row++) {
+			int[] actual = layer.requestIndices(row).clone();
 			Arrays.sort(actual);
 			if (Arrays.equals(expected, actual)) {
 				return true;

@@ -103,12 +103,12 @@ class ExtensionParentTier2SeamTest {
 			TestSetup s = buildKelheimMissingTripleSetup();
 			RideLayer layer = pairLayer(s);
 
-			List<Ride> threeArg = newExtender(s).extendRides(layer, reqArray(s), 100);
+			RideLayer threeArg = newExtender(s).extendRides(layer, reqArray(s));
 
 			IntOpenHashSet allMarked = new IntOpenHashSet();
 			for (int row = 0; row < layer.size(); row++) allMarked.add(row);
-			List<Ride> allMarkedOut = newExtender(s).extendRides(
-					layer, reqArray(s), 100, allMarked, /* cap */ 1L);
+			RideLayer allMarkedOut = newExtender(s).extendRides(
+					layer, reqArray(s), allMarked, /* cap */ 1L);
 
 			assertEquals(setContents(threeArg), setContents(allMarkedOut),
 					"all-rows-marked (cap 0) must equal the 3-arg all-cap-0 output");
@@ -121,13 +121,13 @@ class ExtensionParentTier2SeamTest {
 			TestSetup s = buildKelheimMissingTripleSetup();
 			RideLayer layer = pairLayer(s);
 
-			List<Ride> capped = newExtender(s).extendRides(
-					layer, reqArray(s), 100, IntSets.emptySet(), /* tiny cap */ 1L);
+			RideLayer capped = newExtender(s).extendRides(
+					layer, reqArray(s), IntSets.emptySet(), /* tiny cap */ 1L);
 
 			assertFalse(containsRequestSet(capped, 0, 1, 2),
 					"no row marked + cap=1 below nodes-to-first-valid ⇒ triple drops");
 			// Belt-and-suspenders: capped output strictly differs from the uncapped 3-arg run.
-			List<Ride> threeArg = newExtender(s).extendRides(layer, reqArray(s), 100);
+			RideLayer threeArg = newExtender(s).extendRides(layer, reqArray(s));
 			assertNotEquals(setContents(threeArg), setContents(capped),
 					"empty-marked tiny-cap output must differ from the uncapped run");
 		}
@@ -195,21 +195,21 @@ class ExtensionParentTier2SeamTest {
 				new RequestResolver(s.requests), s.config);
 	}
 
-	private static Set<String> setContents(List<Ride> rides) {
+	private static Set<String> setContents(RideLayer layer) {
 		Set<String> out = new HashSet<>();
-		for (Ride ride : rides) {
-			int[] idx = ride.getRequestIndices().clone();
+		for (int row = 0; row < layer.size(); row++) {
+			int[] idx = layer.requestIndices(row).clone();
 			Arrays.sort(idx);
 			out.add(Arrays.toString(idx));
 		}
 		return out;
 	}
 
-	private static boolean containsRequestSet(List<Ride> rides, int... requestIndices) {
+	private static boolean containsRequestSet(RideLayer layer, int... requestIndices) {
 		int[] expected = requestIndices.clone();
 		Arrays.sort(expected);
-		for (Ride ride : rides) {
-			int[] actual = ride.getRequestIndices().clone();
+		for (int row = 0; row < layer.size(); row++) {
+			int[] actual = layer.requestIndices(row).clone();
 			Arrays.sort(actual);
 			if (Arrays.equals(expected, actual)) return true;
 		}

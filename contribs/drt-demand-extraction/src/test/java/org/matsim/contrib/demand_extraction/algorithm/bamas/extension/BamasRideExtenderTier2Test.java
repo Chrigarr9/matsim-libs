@@ -15,6 +15,7 @@ import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.extension.BamasRideExtender.ParentView;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.extension.BamasRideExtender.RideParentView;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.domain.RideKind;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
@@ -75,8 +76,8 @@ class BamasRideExtenderTier2Test {
 		assertTrue(markedTight.rideDistance() < unmarkedLoose.rideDistance(),
 				"precondition: marked parent must be the distance-tighter seeder");
 
-		List<Ride> extended = newExtender(s).extendParents(
-				new ArrayList<>(List.of(markedTight, unmarkedLoose)), 3, 100);
+		RideLayer extended = newExtender(s).extendParents(
+				new ArrayList<>(List.of(markedTight, unmarkedLoose)), 3);
 
 		assertTrue(containsRequestSet(extended, 0, 1, 2),
 				"marked cap-0 parent claims and runs unbounded → triple produced");
@@ -96,8 +97,8 @@ class BamasRideExtenderTier2Test {
 		{
 			TestSetup nc = buildKelheimMissingTripleSetup();
 			ParentView unmarkedTightAlone = parent(nc.pairSmallest, 1L);
-			List<Ride> none = newExtender(nc).extendParents(
-					new ArrayList<>(List.of(unmarkedTightAlone)), 3, 100);
+			RideLayer none = newExtender(nc).extendParents(
+					new ArrayList<>(List.of(unmarkedTightAlone)), 3);
 			assertFalse(containsRequestSet(none, 0, 1, 2),
 					"negative control: cap=1 must abandon the set (proves the cap bites)");
 		}
@@ -112,8 +113,8 @@ class BamasRideExtenderTier2Test {
 				"precondition: the UNMARKED parent must be the distance-tighter seeder "
 						+ "(else marked-first is never exercised — marked would win on distance alone)");
 
-		List<Ride> extended = newExtender(s).extendParents(
-				new ArrayList<>(List.of(unmarkedTight, markedLoose)), 3, 100);
+		RideLayer extended = newExtender(s).extendParents(
+				new ArrayList<>(List.of(unmarkedTight, markedLoose)), 3);
 
 		assertTrue(containsRequestSet(extended, 0, 1, 2),
 				"marked-first: looser marked cap-0 parent must win the claim and produce the triple");
@@ -125,8 +126,8 @@ class BamasRideExtenderTier2Test {
 		TestSetup s = buildKelheimMissingTripleSetup();
 		ParentView unmarkedOnly = parent(s.pairSmallest, 1L); // cap=1 only parent for {0,1,2}
 
-		List<Ride> extended = newExtender(s).extendParents(
-				new ArrayList<>(List.of(unmarkedOnly)), 3, 100);
+		RideLayer extended = newExtender(s).extendParents(
+				new ArrayList<>(List.of(unmarkedOnly)), 3);
 
 		assertFalse(containsRequestSet(extended, 0, 1, 2),
 				"unmarked-only set with cap=1 below nodes-to-first-valid → no ride");
@@ -181,11 +182,11 @@ class BamasRideExtenderTier2Test {
 		return new RideParentView(pairRide, cap);
 	}
 
-	private static boolean containsRequestSet(List<Ride> rides, int... requestIndices) {
+	private static boolean containsRequestSet(RideLayer layer, int... requestIndices) {
 		int[] expected = requestIndices.clone();
 		Arrays.sort(expected);
-		for (Ride ride : rides) {
-			int[] actual = ride.getRequestIndices().clone();
+		for (int row = 0; row < layer.size(); row++) {
+			int[] actual = layer.requestIndices(row).clone();
 			Arrays.sort(actual);
 			if (Arrays.equals(expected, actual)) {
 				return true;
