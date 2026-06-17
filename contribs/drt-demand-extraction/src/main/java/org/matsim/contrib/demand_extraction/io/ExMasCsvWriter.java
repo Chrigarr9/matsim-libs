@@ -185,6 +185,12 @@ public final class ExMasCsvWriter {
 				.toList();
 
 		for (Ride ride : sortedRides) {
+			writeRideRow(writer, ride);
+		}
+	}
+
+	/** Write exactly one ride as one CSV line. Caller controls ordering and buffering. */
+	static void writeRideRow(BufferedWriter writer, Ride ride) throws IOException {
 				// Flatten request attributes using direct object references
 				DrtRequest[] requests = ride.getRequests();
 
@@ -288,8 +294,7 @@ public final class ExMasCsvWriter {
 						requestTags, hubIds,
 						ride.getPeakPax(), ride.getReposTimeMeanOutgoing()));
 				writer.newLine();
-			}
-		}
+	}
 
 	/**
 	 * Format integer array for CSV output: [1, 2, 3] -> [1 | 2 | 3]
