@@ -196,8 +196,14 @@ public final class BamasEngine {
 		// compact RideLayer layer (never a fat List<Ride>), then carried as rideLayers[0] and
 		// extended. The stop-based path consumes the same pair-stub layer through Phase 5 (Pass 2
 		// of generateStopBasedRidesBatched materializes it first, before the degree-3+ layers).
-		// Only the maxDegree<=2 early exit keeps a fat pair flow (no extension cascade).
-		this.runPairPath = maxDegree > 2;
+		//
+		// maxDegree==2 is on the SAME stub path (no special fat early-exit): the pair universe is
+		// built (or loaded from a base checkpoint on resume), the extension loop runs zero times,
+		// and the streaming ColumnarRideStore exports the degree-2 layer. This is the general
+		// "load checkpoint, you're already at maxDegree, stream the stubs to CSV" behaviour — it
+		// needs no dump-mode flag, and a resume from a degree-2 checkpoint skips pair-gen entirely
+		// (readBase) instead of re-enumerating it.
+		this.runPairPath = maxDegree >= 2;
 		final boolean pairPath = runPairPath;
 
 		ResumeState resume = resumeStateOrFresh();
@@ -218,14 +224,6 @@ public final class BamasEngine {
 		this.runPairGen = new PairGenerator(network, budgetValidator, horizon,
 				exMasConfig.getAlgorithmProcessCount(),
 				exMasConfig.isEnableBudgetAwareConstraints());
-
-		if (!pairPath) {
-			// maxDegree == 2 (maxDegree < 2 already returned above): no extension cascade,
-			// so there is no stub layer to build — emit the fat pair universe and finish.
-			List<Ride> pairRides = runPairGen.generatePairs(runReqArray);
-			allRides.addAll(pairRides);
-			return completeEarly(runAlgorithmStartTime, "maxDegree <= 2");
-		}
 
 		org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer allPairs =
 				generatePairUniverse(resume);
@@ -402,13 +400,15 @@ public final class BamasEngine {
 									+ journalPath + " but it is missing — the checkpoint is incomplete; "
 									+ "delete the dir and rerun.");
 						}
-						ConnectionCacheJournal.Contents journalContents =
-								ConnectionCacheJournal.read(journalPath);
-						// Plan A3 Task 6: refuse a journal truncated/damaged below the completed-degree
-						// high-water mark (a torn tail beyond the last barrier is fine; missing a whole
-						// completed barrier is not).
-						checkpointMgr.requireJournalCoversCompletedDegrees(journalContents.committedBarrierCount());
-						network.bulkLoadFromJournal(journalContents);
+						// STREAMING load (not read()+bulkLoadFromJournal): a multi-GB pair-gen journal is
+						// too large to materialize as a full Contents list alongside the cache it fills
+						// (that doubles peak heap and OOMs — the documented 10% dump failure). The
+						// streaming loader inserts each route as it is read, so peak heap is just the
+						// cache. It returns the committed barrier count for the Task-6 integrity gate
+						// below (refuse a journal truncated below the completed-degree high-water mark;
+						// a torn tail beyond the last barrier is fine).
+						int barriers = network.bulkLoadStreamingFromJournal(journalPath);
+						checkpointMgr.requireJournalCoversCompletedDegrees(barriers);
 					}
 					cacheJournal = ConnectionCacheJournal.Writer.openForAppend(journalPath);
 				} catch (java.io.IOException e) {
@@ -416,10 +416,6 @@ public final class BamasEngine {
 							"Cannot open/read connection-cache journal " + journalPath
 							+ " — corrupt or unreadable checkpoint; delete the dir and rerun.", e);
 				}
-			} else {
-				log.warn("checkpointDir is set but checkpointing is only supported on the streaming "
-						+ "pair-stub D2D path (stub mode + stop-based OFF + maxDegree>2). "
-						+ "Running WITHOUT checkpoints.");
 			}
 		}
 		return new ResumeState(checkpointMgr, resuming, resumeManifest, cacheJournal);

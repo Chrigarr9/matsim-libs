@@ -209,6 +209,41 @@ class BamasCheckpointResumeDeterminismTest {
 				"resume from a complete checkpoint must reproduce rides AND routed values");
 	}
 
+	@Test
+	void maxDegree2UsesStubPathAndResumesStreaming(@TempDir Path dir) throws IOException {
+		// Baseline: fresh maxDegree=2, no checkpoint. After unification this is the stub + streaming
+		// pair-layer path (ColumnarRideStore), NOT the old fat generatePairs early-exit.
+		ExMasConfigGroup baseCfg = config();
+		baseCfg.setMaxPoolingDegree(2);
+		List<Ride> golden = RideStores.toList(engine(freshCache(), baseCfg).run(requests()));
+		assertTrue(golden.stream().anyMatch(r -> r.getDegree() == 2), "must produce degree-2 pairs");
+		assertFalse(golden.stream().anyMatch(r -> r.getDegree() > 2),
+				"maxDegree=2 must not pool beyond degree 2");
+
+		// Fresh maxDegree=2 WITH checkpointing: the stub path checkpoints the base pair universe and
+		// writes a non-empty journal (the fat early-exit did neither).
+		ExMasConfigGroup writeCfg = config();
+		writeCfg.setMaxPoolingDegree(2);
+		writeCfg.setCheckpointDir(dir.toString());
+		List<Ride> written = RideStores.toList(engine(freshCache(), writeCfg).run(requests()));
+		assertEquals(valueSignature(golden), valueSignature(written),
+				"checkpoint-writing maxDegree=2 run must match the no-checkpoint baseline (values included)");
+		assertTrue(Files.exists(dir.resolve("pair_stubs_preprune.bin")),
+				"maxDegree=2 must checkpoint the base pair universe");
+		assertTrue(journalNonEmpty(dir.resolve("cache.journal")),
+				"a maxDegree=2 checkpoint run must write a non-empty connection-cache journal");
+
+		// Resume maxDegree=2 from the degree-2 checkpoint (fresh cold cache): readBase loads the
+		// universe, the extension loop runs zero times (loopStart==highest==2), the journal repopulates
+		// the cache, and the streaming export reproduces the structure AND routed values bit-for-bit.
+		ExMasConfigGroup resumeCfg = config();
+		resumeCfg.setMaxPoolingDegree(2);
+		resumeCfg.setCheckpointDir(dir.toString());
+		List<Ride> resumed = RideStores.toList(engine(freshCache(), resumeCfg).run(requests()));
+		assertEquals(valueSignature(golden), valueSignature(resumed),
+				"maxDegree=2 resume must stream the same degree-2 universe AND routed values");
+	}
+
 	/** True if a cache.journal exists and holds more than the 8-byte header (i.e. has real data). */
 	private static boolean journalNonEmpty(Path journal) throws IOException {
 		// 8L == the fixed file header ConnectionCacheJournal writes once: MAGIC (int, 4B) + VERSION
