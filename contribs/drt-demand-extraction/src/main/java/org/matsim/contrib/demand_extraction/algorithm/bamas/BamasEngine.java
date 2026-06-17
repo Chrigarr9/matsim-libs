@@ -370,6 +370,16 @@ public final class BamasEngine {
 					boolean fork = exMasConfig.isCheckpointForkBelowMinDegree();
 					if (!RunFingerprint.matchesForResume(m, exMasConfig,
 							fpRequestsPath, fpTravelTimesPath, fpNetworkPath, "bamas", fork)) {
+						if (exMasConfig.isTrustCheckpointJournal()) {
+							log.warn("Plan A3 RESUME: fingerprint MISMATCH for {} but --trust-checkpoint-journal "
+									+ "is set — resuming on the OPERATOR'S ASSERTION that the routing inputs "
+									+ "(network / travel-times / requests dump) are identical and the config differs "
+									+ "only in routing-irrelevant ways (e.g. a checkpoint written by an older jar with "
+									+ "a different fingerprint param set). WARNING: the checkpointed stubs + journalled "
+									+ "routes are used AS-IS (NOT re-validated) — if from different routing inputs the "
+									+ "output will be CORRUPT. Only set this flag when reusing a checkpoint from the same "
+									+ "scenario's run.", exMasConfig.getCheckpointDir());
+						} else
 						throw new IllegalStateException(
 								"Checkpoint in " + exMasConfig.getCheckpointDir()
 								+ " is for a different config/requests (fingerprint mismatch) — "

@@ -331,6 +331,25 @@ class BamasCheckpointResumeDeterminismTest {
 				() -> engine(freshCache(), changed).run(requests()));
 	}
 
+	@Test
+	void fingerprintMismatchWithTrustJournalResumes(@TempDir Path dir) {
+		ExMasConfigGroup writeCfg = config();
+		writeCfg.setCheckpointDir(dir.toString());
+		RideStores.toList(engine(freshCache(), writeCfg).run(requests()));
+
+		// Same fingerprint-affecting change as fingerprintMismatchRefusesResume, but the operator sets
+		// --trust-checkpoint-journal to assert the routing inputs are identical (e.g. reusing a
+		// checkpoint written by an older jar with a different fingerprint param set). Resume must then
+		// PROCEED instead of refusing — the bypass the unified maxDegree>=2 resume path provides.
+		ExMasConfigGroup changed = config();
+		changed.setCheckpointDir(dir.toString());
+		changed.setPruningDistanceSavingsLogScale(0.25);
+		changed.setTrustCheckpointJournal(true);
+		List<Ride> resumed = RideStores.toList(engine(freshCache(), changed).run(requests()));
+		assertFalse(resumed.isEmpty(),
+				"trusted resume must complete and produce rides despite the fingerprint mismatch");
+	}
+
 	// -------------------------------------------------------------------------
 	// Plan A3 Task 6 — journal integrity gate tests.
 	// -------------------------------------------------------------------------
