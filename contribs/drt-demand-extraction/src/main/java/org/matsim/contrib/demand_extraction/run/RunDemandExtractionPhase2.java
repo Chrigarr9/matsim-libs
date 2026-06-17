@@ -67,8 +67,10 @@ public final class RunDemandExtractionPhase2 {
 				case "--extension-parents-top-k", "--extension-parents-top-k-min-degree",
 				     "--extension-parents-top-k-metric", "--extension-parents-selection-rule",
 				     "--extension-parents-mmr-lambda", "--checkpoint-dir",
-				     "--algorithm-process-count", "--heuristics-process-count" -> i++; // applied via applyPhase2KnobOverrides
-				case "--checkpoint-fork-below-min-degree" -> { } // valueless boolean flag — applied via applyPhase2KnobOverrides
+				     "--algorithm-process-count", "--heuristics-process-count",
+				     "--max-degree", "--calc-predecessors", "--calc-shapley-values",
+				     "--cache-eviction-watermark" -> i++; // applied via applyPhase2KnobOverrides
+				case "--checkpoint-fork-below-min-degree", "--trust-checkpoint-journal" -> { } // valueless boolean flags — applied via applyPhase2KnobOverrides
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -125,6 +127,31 @@ public final class RunDemandExtractionPhase2 {
 				// rebuilds ExMasConfigGroup from phase1_config.xml (which never serialises this
 				// flag), so CLI is the only way to enable it in a fresh Phase-2 JVM.
 				case "--checkpoint-fork-below-min-degree" -> cfg.setCheckpointForkBelowMinDegree(true);
+				// Valueless boolean flag: trust an existing routing journal for the maxDegree<=2 dump even
+				// under a fingerprint mismatch (warn, don't refuse). Only for reusing a journal from the
+				// SAME routing inputs under a routing-irrelevant config change (e.g. degree bound /
+				// post-processing flags off a checkpoint written by an older build). See BamasEngine warm-load.
+				case "--trust-checkpoint-journal" -> cfg.setTrustCheckpointJournal(true);
+				// Cap the maximum pooling degree. With --max-degree 2 the engine emits the degree-2
+				// pair universe and finishes (no extension), writing exmas_rides.csv straight from the
+				// base checkpoint. Combined with --checkpoint-fork-below-min-degree this reuses an
+				// existing pair-gen checkpoint (written below minDegree) to dump the degree-2 rides —
+				// WITH per-passenger delays — without re-running the multi-hour pair generation.
+				case "--max-degree" -> cfg.setMaxPoolingDegree(Integer.parseInt(args[++i]));
+				// Post-processing toggles. For a degree-2 universe dump these are switched OFF to skip
+				// the predecessor/Shapley passes (the predecessor pass' boxed-Long window queue is the
+				// documented OOM at 16.4M rides). Sound to vary under a fork resume: post-processing
+				// runs on the materialized rides and never shapes a stub/cache/journal value, so they
+				// are excluded from the resume hash (RunFingerprint.FORKABLE_POSTPROCESS_PARAMS).
+				case "--calc-predecessors" -> cfg.setCalcPredecessors(Boolean.parseBoolean(args[++i]));
+				case "--calc-shapley-values" -> cfg.setCalcShapleyValues(Boolean.parseBoolean(args[++i]));
+				// Speculative-tier eviction watermark (fraction of max heap). 1.0 DISABLES eviction.
+				// For a warm-loaded degree-2 dump set this to 1.0: the journal is loaded as one big
+				// speculative tier, and the default 0.7 watermark would otherwise evict it as fast as
+				// it loads (the Contents list is pinned during bulk-load, so eviction frees the cache,
+				// not the transient), thrashing without preserving the warm cache. No extension cascade
+				// runs at maxDegree<=2, so the cache needs no bounding.
+				case "--cache-eviction-watermark" -> cfg.setCacheEvictionWatermark(Double.parseDouble(args[++i]));
 				default -> { }
 			}
 		}
@@ -193,30 +220,40 @@ public final class RunDemandExtractionPhase2 {
 		AlgorithmResult result = algorithm.run(requests);
 		log.info("PHASE 2 STEP 3: algorithm produced {} rides", result.rides().size());
 
-		log.info("PHASE 2 STEP 4: post-processing (maxCost + Shapley + predecessors)");
+		log.info("PHASE 2 STEP 4/5: post-processing + writing outputs");
 		RidePostProcessor postProcessor = injector.getInstance(RidePostProcessor.class);
-		// result.rides() is a RideStore (streaming or materialized); process through it.
-		List<Ride> rides = postProcessor.process(result.rides());
-
-		log.info("PHASE 2 STEP 5: writing outputs");
 		String runId = dump.meta().runId();
 		ExtractionDataManager dataManager = ExtractionDataManager.forOutputDir(a.outputDir, runId, exMasCfg);
 
-		Path ridesCsv = dataManager.writeRides(rides);
-		log.info("PHASE 2 STEP 5: wrote {} rides to {}", rides.size(), ridesCsv);
+		int rideCount = result.rides().size();
+		Path ridesCsv;
+		if (postProcessor.isStreamingPostProcessSupported()) {
+			// No cross-ride passes (Shapley/predecessors off): stream one materialized ride at a time —
+			// the fat universe is never buffered. This is the memory-safe path for the stub->fat export
+			// (e.g. the degree-2 flexibility dump) and any end-of-run stub fattening. Shapley/predecessor
+			// streaming (later plan stages) will extend this branch; until then those passes fall back
+			// to the materializing process() below.
+			log.info("PHASE 2 STEP 4/5: streaming write (per-ride maxCost; Shapley/predecessors off)");
+			ridesCsv = dataManager.writeRidesStreaming(result.rides(), postProcessor.streamingPerRideEnricher());
+		} else {
+			log.info("PHASE 2 STEP 4: post-processing (maxCost + Shapley + predecessors)");
+			List<Ride> rides = postProcessor.process(result.rides());
+			log.info("PHASE 2 STEP 5: writing outputs");
+			ridesCsv = dataManager.writeRides(rides);
+			if (exMasCfg.isCalcPredecessors()) {
+				MatsimNetworkCache networkCache = injector.getInstance(MatsimNetworkCache.class);
+				Path connectionCacheCsv = dataManager.writeConnectionCache(
+						rides, networkCache, postProcessor.getWindowKeys());
+				if (connectionCacheCsv != null) {
+					log.info("PHASE 2 STEP 5: wrote connection cache to {}", connectionCacheCsv);
+				}
+				networkCache.logRoutingStatistics();
+			}
+		}
+		log.info("PHASE 2 STEP 5: wrote {} rides to {}", rideCount, ridesCsv);
 
 		Path publishedRequests = dataManager.publishCanonicalRequests(a.phase1Dir);
 		log.info("PHASE 2 STEP 5: published canonical requests CSV to {}", publishedRequests);
-
-		if (exMasCfg.isCalcPredecessors()) {
-			MatsimNetworkCache networkCache = injector.getInstance(MatsimNetworkCache.class);
-			Path connectionCacheCsv = dataManager.writeConnectionCache(
-					rides, networkCache, postProcessor.getWindowKeys());
-			if (connectionCacheCsv != null) {
-				log.info("PHASE 2 STEP 5: wrote connection cache to {}", connectionCacheCsv);
-			}
-			networkCache.logRoutingStatistics();
-		}
 
 		long overallElapsedMs = System.currentTimeMillis() - overallStartMs;
 		long peakHeapBytes = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
@@ -224,7 +261,7 @@ public final class RunDemandExtractionPhase2 {
 		log.info("======================================================================");
 		log.info("PHASE 2 COMPLETE");
 		log.info("  Requests:        {}", requests.size());
-		log.info("  Rides:           {}", rides.size());
+		log.info("  Rides:           {}", rideCount);
 		log.info("  Phase-2 wall:    {}s", String.format("%.1f", overallElapsedMs / 1000.0));
 		log.info("  Phase-2 peak:    {} MB", peakHeapBytes / (1024L * 1024L));
 		log.info("======================================================================");

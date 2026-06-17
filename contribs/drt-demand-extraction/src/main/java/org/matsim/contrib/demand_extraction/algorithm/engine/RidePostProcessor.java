@@ -16,6 +16,7 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntConsumer;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -156,28 +157,75 @@ public final class RidePostProcessor {
     private Map<Integer, MaxCostResult> computeMaxCosts(List<Ride> rides) {
         Map<Integer, MaxCostResult> maxCostByRide = new HashMap<>(rides.size());
         for (Ride ride : rides) {
-            double[] remainingBudgets = ride.getRemainingBudgets();
-            double[] maxCosts = new double[ride.getDegree()];
-            double[] maxCostsPerKm = new double[ride.getDegree()];
-            DrtRequest[] requests = ride.getRequests();
-            double[] travelTimes = ride.getPassengerTravelTimes();
-            double[] distances = ride.getPassengerDistances();
-
-            for (int i = 0; i < ride.getDegree(); i++) {
-                DrtRequest request = requests[i];
-                double budget = (remainingBudgets != null && remainingBudgets.length > i) ? remainingBudgets[i] : 0.0;
-
-                maxCosts[i] = maxCostResolver.maxCost(budget, request, travelTimes[i], distances[i]);
-
-                // Derive per-km cost (source of truth for Python optimization pipeline)
-                maxCostsPerKm[i] = distances[i] > 0
-                    ? maxCosts[i] / (distances[i] / 1000.0)
-                    : Double.MAX_VALUE;
-            }
-
-            maxCostByRide.put(ride.getIndex(), new MaxCostResult(maxCosts, maxCostsPerKm));
+            maxCostByRide.put(ride.getIndex(), computeMaxCostsForRide(ride));
         }
         return maxCostByRide;
+    }
+
+    /**
+     * Per-ride maxCosts/maxCostsPerKm — the inner loop of {@link #computeMaxCosts}, factored out so
+     * the streaming enricher ({@link #streamingPerRideEnricher()}) computes the SAME values one ride
+     * at a time without materializing the full list. maxCost is a pure function of the ride's own
+     * budget/travel-time/distance, so this is cross-ride independent (unlike Shapley/predecessors).
+     */
+    private MaxCostResult computeMaxCostsForRide(Ride ride) {
+        double[] remainingBudgets = ride.getRemainingBudgets();
+        double[] maxCosts = new double[ride.getDegree()];
+        double[] maxCostsPerKm = new double[ride.getDegree()];
+        DrtRequest[] requests = ride.getRequests();
+        double[] travelTimes = ride.getPassengerTravelTimes();
+        double[] distances = ride.getPassengerDistances();
+
+        for (int i = 0; i < ride.getDegree(); i++) {
+            DrtRequest request = requests[i];
+            double budget = (remainingBudgets != null && remainingBudgets.length > i) ? remainingBudgets[i] : 0.0;
+
+            maxCosts[i] = maxCostResolver.maxCost(budget, request, travelTimes[i], distances[i]);
+
+            // Derive per-km cost (source of truth for Python optimization pipeline)
+            maxCostsPerKm[i] = distances[i] > 0
+                ? maxCosts[i] / (distances[i] / 1000.0)
+                : Double.MAX_VALUE;
+        }
+
+        return new MaxCostResult(maxCosts, maxCostsPerKm);
+    }
+
+    /**
+     * True when no cross-ride pass is enabled (Shapley off AND predecessors off). Only then can the
+     * Stage-1 output be streamed one ride at a time via {@link #streamingPerRideEnricher()} instead
+     * of materializing the full fat list in {@link #process}. Shapley needs the global
+     * {@code subsetDistance} map and predecessors need the all-rides windowed search, so neither is
+     * a pure per-ride function (those streaming passes are added in later plan stages).
+     */
+    public boolean isStreamingPostProcessSupported() {
+        return !config.isCalcShapleyValues() && !config.isCalcPredecessors();
+    }
+
+    /**
+     * A per-ride enrichment equivalent to {@link #process} when {@link #isStreamingPostProcessSupported()}:
+     * computes this ride's maxCosts/maxCostsPerKm and leaves Shapley/predecessors/successors empty.
+     * Stateless over the shared resolver; intended for {@code ExMasCsvWriter.writeRidesStreaming}.
+     *
+     * @throws IllegalStateException if a cross-ride pass is enabled (then the full {@link #process} is required)
+     */
+    public UnaryOperator<Ride> streamingPerRideEnricher() {
+        if (!isStreamingPostProcessSupported()) {
+            throw new IllegalStateException(
+                    "streamingPerRideEnricher requires calcShapleyValues=false AND calcPredecessors=false; "
+                    + "those passes are cross-ride and cannot be streamed per ride. Use process() instead.");
+        }
+        return ride -> {
+            MaxCostResult mc = computeMaxCostsForRide(ride);
+            return ride.toBuilder()
+                    .maxCosts(mc.maxCosts())
+                    .maxCostsPerKm(mc.maxCostsPerKm())
+                    .shapleyValues(null)
+                    .predecessors(new int[0])
+                    .successors(new int[0])
+                    .reposTimeMeanOutgoing(-1.0)
+                    .build();
+        };
     }
 
     private Map<Integer, double[]> computeShapleyValues(List<Ride> rides) {

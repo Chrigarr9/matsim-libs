@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.function.UnaryOperator;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -111,6 +112,19 @@ public final class ExtractionDataManager {
 	public Path writeRides(List<Ride> rides) {
 		Path out = path("exmas_rides.csv");
 		ExMasCsvWriter.writeRides(out.toString(), new MaterializedRideStore(rides));
+		return out;
+	}
+
+	/**
+	 * Stream the Stage-1 rides to {@code <runId>.exmas_rides.csv} one ride at a time (no full fat
+	 * list), applying {@code enrich} per ride. Mirrors {@link #writeRides(List)} for the streaming
+	 * path; the {@code store} must emit in {@link Ride#getIndex()} order (the streaming RideStores do).
+	 */
+	public Path writeRidesStreaming(
+			org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideStore store,
+			UnaryOperator<Ride> enrich) {
+		Path out = path("exmas_rides.csv");
+		ExMasCsvWriter.writeRidesStreaming(out.toString(), store, enrich);
 		return out;
 	}
 
