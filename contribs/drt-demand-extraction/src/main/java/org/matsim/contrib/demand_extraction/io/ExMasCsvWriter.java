@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.UnaryOperator;
 
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
@@ -134,6 +135,39 @@ public final class ExMasCsvWriter {
 		List<Ride> rides = new ArrayList<>(store.size());
 		store.forEachMaterialized(rides::add);
 		writeRideBatches(filename, rides);
+	}
+
+	/**
+	 * Stream a {@link RideStore} to {@code exmas_rides.csv}, materializing and writing one ride at a
+	 * time — the full fat list is never held. {@code enrich} is applied to each freshly materialized
+	 * ride before it is written (per-ride maxCosts, Shapley-from-map, attached successors); pass
+	 * {@link UnaryOperator#identity()} for none.
+	 *
+	 * <p>NO sort is applied: the caller guarantees the store emits rows in {@link Ride#getIndex()}
+	 * order. {@link org.matsim.contrib.demand_extraction.algorithm.bamas.ride.ColumnarRideStore} and
+	 * {@code HyperPoolRideStore} both assign {@code index = row position} during
+	 * {@link RideStore#forEachMaterialized}, so their output is already index-ordered. Do not use this
+	 * for a store whose emission order differs from index order — use {@link #writeRides(String,
+	 * RideStore)} (which sorts) instead.
+	 *
+	 * @param filename output file path
+	 * @param store    RideStore to stream from (must emit in index order)
+	 * @param enrich   applied to each ride before writing; {@link UnaryOperator#identity()} for none
+	 * @throws RuntimeException if writing fails
+	 */
+	public static void writeRidesStreaming(String filename, RideStore store, UnaryOperator<Ride> enrich) {
+		try (BufferedWriter writer = IOUtils.getBufferedWriter(filename)) {
+			writeRidesHeader(writer);
+			store.forEachMaterialized(ride -> {
+				try {
+					writeRideRow(writer, enrich.apply(ride));
+				} catch (IOException e) {
+					throw new java.io.UncheckedIOException(e);
+				}
+			});
+		} catch (IOException | java.io.UncheckedIOException e) {
+			throw new RuntimeException("Could not write rides CSV: " + filename, e);
+		}
 	}
 
 	@SafeVarargs
