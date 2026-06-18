@@ -332,6 +332,14 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private double extensionParentsMmrLambda = 0.0;           // diversity penalty; 0 == plain TOP_K
 	private long extensionParentsTier2NodeCap = 0L;          // 0 = hard filter; >0 = PER-unmarked-parent nodes-to-first-valid cap (per-parent ⇒ deterministic, no shared budget)
 
+	// ── pairgen_top_k knob — degree-2 partner cap applied DURING pair generation,
+	// before the shareability graph is built. 0 = off = byte-identical to pre-knob.
+	// Each request keeps its top-K partners by absolute distance saving. Being a
+	// @StringGetter param it is included in RunFingerprint.getParams() (changes the
+	// degree-2 universe, so it is intentionally NOT forkable). See
+	// docs/plans/2026-06-18-degree2-topk-pairgen-design.md.
+	private int pairgenTopK = 0;
+
 	// ── checkpoint/resume (Plan A3). Directory for per-degree stub checkpoints + the
 	// connection-cache journal. Empty string ("") = checkpointing OFF (no code path active).
 	// When set, every degree barrier persists its RideLayer + (at loop entry) the pre-prune
@@ -353,6 +361,15 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// otherwise it would perturb the hash and defeat its own purpose. Default false = today's strict
 	// guard.
 	private boolean checkpointForkBelowMinDegree = false;
+
+	// ── trust an existing routing journal for the maxDegree<=2 universe dump. When true, the fat
+	// early-exit path WARM-LOADS the checkpoint's cache.journal even if the fingerprint does not match,
+	// downgrading the mismatch to a warning. Use ONLY when pointing at a journal produced from the SAME
+	// routing inputs (network, travel-times, requests dump) as the current run — the operator then
+	// asserts the cached routes are valid; the config differences that break the fingerprint
+	// (maxPoolingDegree, post-processing flags) do not affect routing. PLAIN field on purpose (a
+	// resume-time decision; must not enter the fingerprint). Default false = strict.
+	private boolean trustCheckpointJournal = false;
 
 	// Calculate Shapley values for rides (distance contribution per passenger)
 
@@ -1188,6 +1205,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.extensionParentsTopKMetric = extensionParentsTopKMetric;
 	}
 
+	@StringGetter("pairgenTopK")
+	public int getPairgenTopK() {
+		return pairgenTopK;
+	}
+
+	@StringSetter("pairgenTopK")
+	public void setPairgenTopK(int pairgenTopK) {
+		this.pairgenTopK = Math.max(0, pairgenTopK);
+	}
+
 	@StringGetter("extensionParentsSelectionRule")
 	public ExtensionParentsSelectionRule getExtensionParentsSelectionRule() {
 		return extensionParentsSelectionRule;
@@ -1240,6 +1267,22 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	/** @see #isCheckpointForkBelowMinDegree() */
 	public void setCheckpointForkBelowMinDegree(boolean checkpointForkBelowMinDegree) {
 		this.checkpointForkBelowMinDegree = checkpointForkBelowMinDegree;
+	}
+
+	/**
+	 * When true, the maxDegree&lt;=2 fat path warm-loads an existing checkpoint's routing journal even
+	 * under a fingerprint mismatch (downgraded to a warning). For reusing a journal from the SAME
+	 * routing inputs under a config that legitimately differs only in routing-irrelevant ways
+	 * (degree bound, post-processing flags) — e.g. a degree-2 universe dump off a checkpoint written by
+	 * an older build whose baseFingerprint hashed those params. PLAIN getter (out of the fingerprint).
+	 */
+	public boolean isTrustCheckpointJournal() {
+		return trustCheckpointJournal;
+	}
+
+	/** @see #isTrustCheckpointJournal() */
+	public void setTrustCheckpointJournal(boolean trustCheckpointJournal) {
+		this.trustCheckpointJournal = trustCheckpointJournal;
 	}
 
 	@StringSetter("extensionParentsTier2NodeCap")
