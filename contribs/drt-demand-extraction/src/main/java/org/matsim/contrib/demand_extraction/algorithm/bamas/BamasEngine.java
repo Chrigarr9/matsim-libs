@@ -223,7 +223,8 @@ public final class BamasEngine {
 		log.info("======================================================================");
 		this.runPairGen = new PairGenerator(network, budgetValidator, horizon,
 				exMasConfig.getAlgorithmProcessCount(),
-				exMasConfig.isEnableBudgetAwareConstraints());
+				exMasConfig.isEnableBudgetAwareConstraints(),
+				exMasConfig.getPairgenTopK());
 
 		org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer allPairs =
 				generatePairUniverse(resume);

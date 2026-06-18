@@ -39,19 +39,25 @@ public final class PairGenerator {
 	private final double horizon;
 	private final boolean useParallel;
 	private final boolean budgetAwareConstraints;
+	private final int pairgenTopK;
 	private static final double EPSILON = 1e-9;
 	private final AtomicLong beelineRejected = new AtomicLong();
 
 	public PairGenerator(MatsimNetworkCache network, BudgetValidator budgetValidator, double horizon, int algorithmProcessCount) {
-		this(network, budgetValidator, horizon, algorithmProcessCount, false);
+		this(network, budgetValidator, horizon, algorithmProcessCount, false, 0);
 	}
 
 	public PairGenerator(MatsimNetworkCache network, BudgetValidator budgetValidator, double horizon, int algorithmProcessCount, boolean budgetAwareConstraints) {
+		this(network, budgetValidator, horizon, algorithmProcessCount, budgetAwareConstraints, 0);
+	}
+
+	public PairGenerator(MatsimNetworkCache network, BudgetValidator budgetValidator, double horizon, int algorithmProcessCount, boolean budgetAwareConstraints, int pairgenTopK) {
 		this.network = network;
 		this.budgetValidator = budgetValidator;
 		this.horizon = horizon;
 		this.useParallel = algorithmProcessCount != 1;
 		this.budgetAwareConstraints = budgetAwareConstraints;
+		this.pairgenTopK = Math.max(0, pairgenTopK);
 	}
 
 	/**
@@ -363,7 +369,35 @@ public final class PairGenerator {
 			}
 		}
 
-		return results;
+		return capToTopKPartners(results);
+	}
+
+	/**
+	 * Apply the degree-2 top-K partner cap to one request's routed candidate rows.
+	 * Saving is fully known here (post-routing), so the cap runs before the Phase-3
+	 * budget validation — yielding ≤ K budget-valid partners (top-K rows may still be
+	 * budget-rejected; we do not backfill). When {@code pairgenTopK == 0} this is a no-op.
+	 */
+	private List<PairCandidate> capToTopKPartners(List<PairCandidate> results) {
+		if (pairgenTopK <= 0 || results.isEmpty()) {
+			return results;
+		}
+		int m = results.size();
+		int[] partnerIndex = new int[m];
+		double[] saving = new double[m];
+		for (int r = 0; r < m; r++) {
+			PairCandidate c = results.get(r);
+			double rideDist = 0.0;
+			for (double d : c.connectionDistances) rideDist += d;
+			partnerIndex[r] = c.reqJ.index;
+			saving[r] = c.reqI.directDistance + c.reqJ.directDistance - rideDist;
+		}
+		boolean[] keep = keepMask(partnerIndex, saving, pairgenTopK);
+		List<PairCandidate> capped = new ArrayList<>();
+		for (int r = 0; r < m; r++) {
+			if (keep[r]) capped.add(results.get(r));
+		}
+		return capped;
 	}
 
 	/**
