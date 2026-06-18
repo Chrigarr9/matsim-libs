@@ -101,7 +101,7 @@ public final class PairGenerator {
 			Ride validated = budgetValidator.validateAndPopulateBudgets(ride);
 			if (validated != null) {
 				pairs.add(validated);
-				promotePairChainSegments(c);
+				retainPairChainSegments(c);
 				nextRideIndex++;
 				if (c.kind == RideKind.FIFO) fifoCreated++;
 				else lifoCreated++;
@@ -178,7 +178,7 @@ public final class PairGenerator {
 					positions[k] = pos;
 				}
 				pairs.addRow(s.sortedSet, s.originPacked, s.destPacked, s.distDm, s.ttDs, s.flags, positions);
-				promotePairChainSegments(c);
+				retainPairChainSegments(c);
 				nextRideIndex++;
 				if (c.kind == RideKind.FIFO) fifoCreated++;
 				else lifoCreated++;
@@ -410,28 +410,40 @@ public final class PairGenerator {
 	}
 
 	/**
-	 * Promote the chain segments an accepted pair was routed from into the never-evicted retained
-	 * tier (design 2026-06-12 §3, Task 7). A feasible FIFO/LIFO pair reads a fixed set of segments
-	 * at the single fixed bin {@code reqI.requestTime}; these are exactly the {@code (from, to)}
-	 * triples {@link #tryFifoCandidate}/{@link #tryLifoCandidate} routed, re-derived here from the
-	 * candidate's requests and kind. Promotion is purely additive — it never routes a new OD, so it
-	 * adds no cache keys (the segments are already cached from candidate evaluation); it only shields
-	 * them from a later watermark eviction so degree-3+ extension and export re-read them as hits.
+	 * Retain the chain segments an accepted pair was routed from into the never-evicted retained
+	 * tier (design 2026-06-12 §3, Task 7), so degree-3+ extension and the export materializer re-read
+	 * them as cache hits instead of re-routing.
+	 *
+	 * <p><b>Why retain the stored value, not {@code promoteSegment}.</b> The previous implementation
+	 * called {@link MatsimNetworkCache#promoteSegment}, which is a <em>no-op on a cache miss</em>. But
+	 * a chain segment is routed during the parallel candidate collection, and {@code checkWatermark()}
+	 * evicts the speculative tier per origin-batch <em>during</em> that same collection — so by the
+	 * time this single-threaded Phase-3 loop runs, an early pair's segments may already be evicted,
+	 * the promote no-ops, and the segment is absent from the checkpoint journal. On resume the
+	 * materializer then re-routes every such ride (the observed export bottleneck). Here we instead
+	 * retain the candidate's STORED connection values directly: {@link #tryFifoCandidate}/
+	 * {@link #tryLifoCandidate} captured {@code (tt, dist, util)} for each chain leg at routing time,
+	 * and value-source determinism (cross-engine identity) makes the stored value bit-identical to a
+	 * later re-route — so retention is complete regardless of eviction timing, and output is unchanged.
 	 */
-	private void promotePairChainSegments(PairCandidate c) {
+	private void retainPairChainSegments(PairCandidate c) {
 		DrtRequest i = c.reqI;
 		DrtRequest j = c.reqJ;
 		double t = i.requestTime;
-		// O_i → O_j (shared by both kinds).
-		network.promoteSegment(i.originLinkId, j.originLinkId, t);
+		double[] tt = c.connectionTravelTimes;
+		double[] ds = c.connectionDistances;
+		double[] ut = c.connectionNetworkUtilities;
+		// Leg 0 is O_i -> O_j for both kinds; legs 1,2 differ by FIFO/LIFO exactly as the candidate
+		// builders routed and stored them (FIFO: {oo, od, dd}; LIFO: {oo, oj, jd}).
+		network.retainSegment(i.originLinkId, j.originLinkId, t, tt[0], ds[0], ut[0]);
 		if (c.kind == RideKind.FIFO) {
-			// O_j → D_i, D_i → D_j (mirrors tryFifoCandidate).
-			network.promoteSegment(j.originLinkId, i.destinationLinkId, t);
-			network.promoteSegment(i.destinationLinkId, j.destinationLinkId, t);
+			// O_j -> D_i, D_i -> D_j (mirrors tryFifoCandidate).
+			network.retainSegment(j.originLinkId, i.destinationLinkId, t, tt[1], ds[1], ut[1]);
+			network.retainSegment(i.destinationLinkId, j.destinationLinkId, t, tt[2], ds[2], ut[2]);
 		} else {
-			// O_j → D_j, D_j → D_i (mirrors tryLifoCandidate).
-			network.promoteSegment(j.originLinkId, j.destinationLinkId, t);
-			network.promoteSegment(j.destinationLinkId, i.destinationLinkId, t);
+			// O_j -> D_j, D_j -> D_i (mirrors tryLifoCandidate).
+			network.retainSegment(j.originLinkId, j.destinationLinkId, t, tt[1], ds[1], ut[1]);
+			network.retainSegment(j.destinationLinkId, i.destinationLinkId, t, tt[2], ds[2], ut[2]);
 		}
 	}
 
@@ -629,5 +641,43 @@ public final class PairGenerator {
 		}
 
 		return adjusted;
+	}
+
+	/**
+	 * Top-K partner cap mask: keep the rows whose partner is among the {@code k} partners
+	 * with the highest per-partner best saving. Pure and deterministic — partners are
+	 * ranked by best saving descending, ties broken by partner index ascending.
+	 *
+	 * @param partnerIndex per-row partner global index (length = row count)
+	 * @param saving       per-row absolute distance saving (same length)
+	 * @param k            partner cap; {@code k <= 0} or "<= k distinct partners" ⇒ keep all
+	 * @return per-row boolean keep mask
+	 */
+	static boolean[] keepMask(int[] partnerIndex, double[] saving, int k) {
+		int n = partnerIndex.length;
+		boolean[] mask = new boolean[n];
+		if (k <= 0) {
+			java.util.Arrays.fill(mask, true);
+			return mask;
+		}
+		java.util.Map<Integer, Double> best = new java.util.HashMap<>();
+		for (int r = 0; r < n; r++) {
+			best.merge(partnerIndex[r], saving[r], Math::max);
+		}
+		if (best.size() <= k) {
+			java.util.Arrays.fill(mask, true);
+			return mask;
+		}
+		java.util.List<Integer> partners = new java.util.ArrayList<>(best.keySet());
+		partners.sort((a, b) -> {
+			int c = Double.compare(best.get(b), best.get(a)); // saving descending
+			if (c != 0) return c;
+			return Integer.compare(a, b);                      // tie: index ascending
+		});
+		java.util.Set<Integer> keep = new java.util.HashSet<>(partners.subList(0, k));
+		for (int r = 0; r < n; r++) {
+			mask[r] = keep.contains(partnerIndex[r]);
+		}
+		return mask;
 	}
 }
