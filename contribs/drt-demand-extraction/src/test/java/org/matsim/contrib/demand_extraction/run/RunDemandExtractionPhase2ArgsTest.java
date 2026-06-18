@@ -134,6 +134,99 @@ class RunDemandExtractionPhase2ArgsTest {
 		assertEquals(java.nio.file.Path.of("/tmp/net.xml.gz"), parsed.networkXml());
 	}
 
+	// ------------------------------------------------------------------ //
+	// --max-degree CLI wiring (degree-2 universe dump)                     //
+	// ------------------------------------------------------------------ //
+
+	@Test
+	void applyPhase2KnobOverridesSetsMaxDegree() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		RunDemandExtractionPhase2.applyPhase2KnobOverrides(
+				new String[]{"--max-degree", "2"}, cfg);
+		assertEquals(2, cfg.getMaxPoolingDegree(),
+				"--max-degree 2 should cap maxPoolingDegree at 2");
+	}
+
+	@Test
+	void parseArgsToleratesMaxDegreeWithoutMisreadingNext() {
+		// --max-degree takes a value; parseArgs must skip both tokens and still find --network.
+		String[] args = {
+				"--phase1-dir", "/tmp/dump",
+				"--max-degree", "2",
+				"--network", "/tmp/net.xml.gz",
+				"--travel-times", "/tmp/tt.tsv",
+				"--output-dir", "/tmp/out"
+		};
+		RunDemandExtractionPhase2.Phase2Args parsed = RunDemandExtractionPhase2.parseArgs(args);
+		assertEquals(java.nio.file.Path.of("/tmp/net.xml.gz"), parsed.networkXml());
+	}
+
+	@Test
+	void applyPhase2KnobOverridesSetsTrustJournalFlag() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		RunDemandExtractionPhase2.applyPhase2KnobOverrides(
+				new String[]{"--trust-checkpoint-journal"}, cfg);
+		assertTrue(cfg.isTrustCheckpointJournal(),
+				"--trust-checkpoint-journal should flip trustCheckpointJournal to true");
+	}
+
+	@Test
+	void parseArgsToleratesTrustJournalFlagWithoutConsuming() {
+		String[] args = {
+				"--phase1-dir", "/tmp/dump",
+				"--trust-checkpoint-journal",
+				"--network", "/tmp/net.xml.gz",
+				"--travel-times", "/tmp/tt.tsv",
+				"--output-dir", "/tmp/out"
+		};
+		RunDemandExtractionPhase2.Phase2Args parsed = RunDemandExtractionPhase2.parseArgs(args);
+		assertEquals(java.nio.file.Path.of("/tmp/net.xml.gz"), parsed.networkXml());
+	}
+
+	@Test
+	void applyPhase2KnobOverridesTogglesPostProcessFlags() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		cfg.setCalcPredecessors(true);
+		cfg.setCalcShapleyValues(true);
+		RunDemandExtractionPhase2.applyPhase2KnobOverrides(
+				new String[]{"--calc-predecessors", "false", "--calc-shapley-values", "false"}, cfg);
+		org.junit.jupiter.api.Assertions.assertFalse(cfg.isCalcPredecessors(),
+				"--calc-predecessors false should disable predecessors");
+		org.junit.jupiter.api.Assertions.assertFalse(cfg.isCalcShapleyValues(),
+				"--calc-shapley-values false should disable Shapley");
+	}
+
+	// ------------------------------------------------------------------ //
+	// --pairgen-top-k CLI wiring (degree-2 partner cap)                    //
+	// ------------------------------------------------------------------ //
+
+	@Test
+	void pairgenTopKOverrideAppliesToConfig() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		RunDemandExtractionPhase2.applyPhase2KnobOverrides(
+				new String[]{"--pairgen-top-k", "32"}, cfg);
+		assertEquals(32, cfg.getPairgenTopK(),
+				"--pairgen-top-k 32 should set pairgenTopK on the config");
+	}
+
+	@Test
+	void parseArgsToleratesPairgenTopKWithoutMisreadingNext() {
+		// --pairgen-top-k takes a value; parseArgs must skip both tokens and still find --network.
+		String[] args = {
+				"--phase1-dir", "/tmp/dump",
+				"--pairgen-top-k", "32",
+				"--network", "/tmp/net.xml.gz",
+				"--travel-times", "/tmp/tt.tsv",
+				"--output-dir", "/tmp/out"
+		};
+		RunDemandExtractionPhase2.Phase2Args parsed = RunDemandExtractionPhase2.parseArgs(args);
+		assertEquals(java.nio.file.Path.of("/tmp/net.xml.gz"), parsed.networkXml());
+	}
+
 	// Canonical-requests publishing moved to ExtractionDataManager.publishCanonicalRequests;
 	// its behavior is covered by ExtractionDataManagerTest.
 }

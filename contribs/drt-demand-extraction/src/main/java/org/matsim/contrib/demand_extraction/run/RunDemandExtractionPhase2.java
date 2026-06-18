@@ -69,7 +69,7 @@ public final class RunDemandExtractionPhase2 {
 				     "--extension-parents-mmr-lambda", "--checkpoint-dir",
 				     "--algorithm-process-count", "--heuristics-process-count",
 				     "--max-degree", "--calc-predecessors", "--calc-shapley-values",
-				     "--cache-eviction-watermark" -> i++; // applied via applyPhase2KnobOverrides
+				     "--cache-eviction-watermark", "--pairgen-top-k" -> i++; // applied via applyPhase2KnobOverrides
 				case "--checkpoint-fork-below-min-degree", "--trust-checkpoint-journal" -> { } // valueless boolean flags — applied via applyPhase2KnobOverrides
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
@@ -112,6 +112,7 @@ public final class RunDemandExtractionPhase2 {
 				case "--extension-parents-top-k-metric" -> cfg.setExtensionParentsTopKMetric(ExMasConfigGroup.PruningQualityMetric.valueOf(args[++i].toUpperCase()));
 				case "--extension-parents-selection-rule" -> cfg.setExtensionParentsSelectionRule(ExMasConfigGroup.ExtensionParentsSelectionRule.valueOf(args[++i].toUpperCase()));
 				case "--extension-parents-mmr-lambda" -> cfg.setExtensionParentsMmrLambda(Double.parseDouble(args[++i]));
+				case "--pairgen-top-k" -> cfg.setPairgenTopK(Integer.parseInt(args[++i]));
 				// Plan A3: per-degree checkpoint/resume. Set ⇒ the engine writes stubs +
 				// pair universe + connection-cache journal at each barrier, and resumes from
 				// the dir if a matching manifest is already present. Off ("") reproduces master.
@@ -233,8 +234,16 @@ public final class RunDemandExtractionPhase2 {
 			// (e.g. the degree-2 flexibility dump) and any end-of-run stub fattening. Shapley/predecessor
 			// streaming (later plan stages) will extend this branch; until then those passes fall back
 			// to the materializing process() below.
-			log.info("PHASE 2 STEP 4/5: streaming write (per-ride maxCost; Shapley/predecessors off)");
-			ridesCsv = dataManager.writeRidesStreaming(result.rides(), postProcessor.streamingPerRideEnricher());
+			// Resolve worker count exactly as BamasRideExtender does (config override, else all cores).
+			// The streaming materialize re-routes pair-chain segments the resumed journal lacks; that
+			// re-route is the dominant cost and is thread-safe (same calls the parallel extender runs),
+			// so fan it across all cores. Output is byte-identical to the single-threaded write.
+			int exportParallelism = exMasCfg.getAlgorithmProcessCount();
+			if (exportParallelism <= 0) exportParallelism = Runtime.getRuntime().availableProcessors();
+			log.info("PHASE 2 STEP 4/5: streaming write (per-ride maxCost; Shapley/predecessors off; {} threads)",
+					exportParallelism);
+			ridesCsv = dataManager.writeRidesStreaming(
+					result.rides(), postProcessor.streamingPerRideEnricher(), exportParallelism);
 		} else {
 			log.info("PHASE 2 STEP 4: post-processing (maxCost + Shapley + predecessors)");
 			List<Ride> rides = postProcessor.process(result.rides());
