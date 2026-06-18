@@ -45,6 +45,48 @@ class RunFingerprintTest {
 				RunFingerprint.compute(c2, null, null, null, "bamas-v1"));
 	}
 
+	/**
+	 * Under the fork-below-minDegree path, {@code maxPoolingDegree} is excluded: a degree-2 base
+	 * checkpoint (highestDegree=2 &lt; default minDegree=4) may be resumed with a different
+	 * maxPoolingDegree (e.g. capped to 2 to dump the degree-2 universe). The 5-arg full-hash path
+	 * still distinguishes it (see {@link #maxDegreeChangesFingerprint()}), so non-fork resumes stay
+	 * strict.
+	 */
+	@Test
+	void maxPoolingDegreeExcludedUnderForkBelowMinDegree() {
+		ExMasConfigGroup c2 = config();
+		c2.setMaxPoolingDegree(2);
+		int resumeHighestDegree = 2; // strictly below default minDegree (4) ⇒ fork skip active
+		assertEquals(
+				RunFingerprint.compute(config(), null, null, null, "bamas-v1", resumeHighestDegree),
+				RunFingerprint.compute(c2, null, null, null, "bamas-v1", resumeHighestDegree));
+	}
+
+	/**
+	 * Under the fork-below-minDegree path, the post-processing flags ({@code calcPredecessors},
+	 * {@code calcShapleyValues}) are excluded: they run after generation and shape no stub/cache, so a
+	 * degree-2 dump may switch them off. The 5-arg full-hash path still distinguishes them.
+	 */
+	@Test
+	void postProcessFlagsExcludedUnderForkBelowMinDegree() {
+		ExMasConfigGroup c2 = config();
+		c2.setCalcPredecessors(false);
+		c2.setCalcShapleyValues(false);
+		int resumeHighestDegree = 2; // strictly below default minDegree (4) ⇒ fork skip active
+		assertEquals(
+				RunFingerprint.compute(config(), null, null, null, "bamas-v1", resumeHighestDegree),
+				RunFingerprint.compute(c2, null, null, null, "bamas-v1", resumeHighestDegree));
+	}
+
+	@Test
+	void calcPredecessorsChangesFullFingerprint() {
+		ExMasConfigGroup c2 = config();
+		c2.setCalcPredecessors(false);
+		assertNotEquals(
+				RunFingerprint.compute(config(), null, null, null, "bamas-v1"),
+				RunFingerprint.compute(c2, null, null, null, "bamas-v1"));
+	}
+
 	/** Review addendum F4: Plan-B knobs MUST be in the fingerprint (the filter is recomputed). */
 	@Test
 	void extensionParentsTopKChangesFingerprint() {
@@ -53,6 +95,29 @@ class RunFingerprintTest {
 		assertNotEquals(
 				RunFingerprint.compute(config(), null, null, null, "bamas-v1"),
 				RunFingerprint.compute(c2, null, null, null, "bamas-v1"));
+	}
+
+	@Test
+	void pairgenTopKChangesFingerprint() {
+		ExMasConfigGroup c2 = config();
+		c2.setPairgenTopK(32);
+		assertNotEquals(
+				RunFingerprint.compute(config(), null, null, null, "bamas-v1"),
+				RunFingerprint.compute(c2, null, null, null, "bamas-v1"));
+	}
+
+	/**
+	 * pairgenTopK changes the degree-2 universe, so it is NOT forkable: it must still differ
+	 * even on the fork-below-minDegree path (resumeHighestDegree=2 < default minDegree=4).
+	 */
+	@Test
+	void pairgenTopKStaysInFingerprintUnderForkBelowMinDegree() {
+		ExMasConfigGroup c2 = config();
+		c2.setPairgenTopK(32);
+		int resumeHighestDegree = 2;
+		assertNotEquals(
+				RunFingerprint.compute(config(), null, null, null, "bamas-v1", resumeHighestDegree),
+				RunFingerprint.compute(c2, null, null, null, "bamas-v1", resumeHighestDegree));
 	}
 
 	@Test
