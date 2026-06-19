@@ -2,12 +2,23 @@ package org.matsim.contrib.demand_extraction.io;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.UnaryOperator;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideStore;
@@ -28,6 +39,8 @@ import org.matsim.core.utils.io.IOUtils;
  * structure of other ride attributes (delays, travel times, etc.).
  */
 public final class ExMasCsvWriter {
+
+	private static final Logger log = LogManager.getLogger(ExMasCsvWriter.class);
 
 	// Separator for array values within CSV fields: ' | '
 	private static final String ARRAY_SEPARATOR = " | ";
@@ -168,6 +181,106 @@ public final class ExMasCsvWriter {
 		} catch (IOException | java.io.UncheckedIOException e) {
 			throw new RuntimeException("Could not write rides CSV: " + filename, e);
 		}
+	}
+
+	/**
+	 * Parallel variant of {@link #writeRidesStreaming}: splits the store's index range into
+	 * {@code parallelism} contiguous chunks, materializes + renders each chunk on its own worker
+	 * thread into a per-chunk shard file, then concatenates the shards in chunk order into
+	 * {@code filename}. Output is byte-identical to {@link #writeRidesStreaming} — same rows in the
+	 * same {@link Ride#getIndex()} order, same writer encoding — only the work is fanned out.
+	 *
+	 * <p><b>Why this is safe.</b> {@link RideStore#materialize(int)} stamps the post-sort sequential
+	 * index on each row independently (no shared write state), and the per-row work it performs —
+	 * the cache re-route plus {@code BudgetValidator.validateAndPopulateBudgets} — is the SAME call
+	 * sequence {@code BamasRideExtender} already runs across a fixed thread pool, with the byte-golden
+	 * determinism gate green. The routing cache is never watermark-evicted during export, so it fills
+	 * monotonically and repeated ODs converge to cache hits; the residual cost is re-routing the
+	 * segments a resumed journal does not contain (those evicted before pair-chain promotion).
+	 *
+	 * <p>Shards are written with the same {@link IOUtils#getBufferedWriter} encoding as the
+	 * single-threaded path and concatenated by raw byte copy, so the bytes are identical to writing
+	 * the whole file on one thread. Chunk 0 emits the header; the rest emit rows only.
+	 *
+	 * @param filename     output file path (plain CSV; must NOT be gzip — shards are byte-concatenated)
+	 * @param store        RideStore providing random-access {@link RideStore#materialize(int)}
+	 * @param enrich       applied to each ride before writing; MUST be thread-safe / stateless
+	 * @param parallelism  worker thread count; clamped to {@code [1, size]}. {@code <= 1} (or an empty
+	 *                     store) falls back to {@link #writeRidesStreaming}.
+	 * @throws RuntimeException if any worker fails or the concatenation fails
+	 */
+	public static void writeRidesStreamingParallel(String filename, RideStore store,
+			UnaryOperator<Ride> enrich, int parallelism) {
+		int total = store.size();
+		int p = Math.max(1, Math.min(parallelism, Math.max(1, total)));
+		if (p <= 1 || total == 0) {
+			writeRidesStreaming(filename, store, enrich);
+			return;
+		}
+
+		Path finalPath = Paths.get(filename);
+		List<Path> shards = new ArrayList<>(p);
+		for (int c = 0; c < p; c++) {
+			shards.add(finalPath.resolveSibling(finalPath.getFileName() + ".shard" + c));
+		}
+
+		log.info("Parallel rides export: {} rows across {} worker threads", total, p);
+		AtomicLong written = new AtomicLong();
+		ExecutorService pool = Executors.newFixedThreadPool(p);
+		try {
+			List<Future<?>> futures = new ArrayList<>(p);
+			for (int c = 0; c < p; c++) {
+				final int chunk = c;
+				final int lo = (int) ((long) total * chunk / p);
+				final int hi = (int) ((long) total * (chunk + 1) / p);
+				final Path shard = shards.get(c);
+				futures.add(pool.submit(() -> {
+					try (BufferedWriter w = IOUtils.getBufferedWriter(shard.toString())) {
+						if (chunk == 0) {
+							writeRidesHeader(w);
+						}
+						for (int row = lo; row < hi; row++) {
+							writeRideRow(w, enrich.apply(store.materialize(row)));
+							long n = written.incrementAndGet();
+							if (n % 1_000_000 == 0) {
+								log.info("  parallel rides export: {} / {} rows written", n, total);
+							}
+						}
+					} catch (IOException e) {
+						throw new java.io.UncheckedIOException(e);
+					}
+				}));
+			}
+			for (Future<?> f : futures) {
+				f.get(); // surface any worker exception (materialize self-check, IO, etc.)
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new RuntimeException("Parallel rides export interrupted: " + filename, e);
+		} catch (ExecutionException e) {
+			throw new RuntimeException("Parallel rides export failed: " + filename,
+					e.getCause() != null ? e.getCause() : e);
+		} finally {
+			pool.shutdownNow();
+		}
+
+		// Concatenate shards in chunk order via raw byte copy (header-bearing chunk 0 first), then
+		// delete them. Raw copy preserves the exact shard bytes, so the result equals a one-thread write.
+		try (OutputStream out = Files.newOutputStream(finalPath)) {
+			for (Path shard : shards) {
+				Files.copy(shard, out);
+			}
+		} catch (IOException e) {
+			throw new RuntimeException("Could not concatenate ride shards into: " + filename, e);
+		}
+		for (Path shard : shards) {
+			try {
+				Files.deleteIfExists(shard);
+			} catch (IOException ignored) {
+				// best-effort cleanup; a leftover shard is harmless
+			}
+		}
+		log.info("Parallel rides export complete: {} rows -> {}", total, filename);
 	}
 
 	@SafeVarargs

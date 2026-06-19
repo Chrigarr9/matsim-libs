@@ -129,6 +129,21 @@ public final class ExtractionDataManager {
 	}
 
 	/**
+	 * Parallel variant of {@link #writeRidesStreaming(org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideStore, UnaryOperator)}:
+	 * fans the materialize+write over {@code parallelism} worker threads (byte-identical output). The
+	 * dominant per-row cost on the resume path is re-routing pair-chain segments absent from the warm
+	 * journal, so the fan-out turns a single-threaded re-route into an N-core one. {@code enrich} must
+	 * be thread-safe.
+	 */
+	public Path writeRidesStreaming(
+			org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideStore store,
+			UnaryOperator<Ride> enrich, int parallelism) {
+		Path out = path("exmas_rides.csv");
+		ExMasCsvWriter.writeRidesStreamingParallel(out.toString(), store, enrich, parallelism);
+		return out;
+	}
+
+	/**
 	 * Write the HyperPool Stage-2 rides to {@code <runId>.hyperpool_rides.csv}, or do nothing and
 	 * return {@code null} when there are none (the distinct multi-stop schema gets its own CSV).
 	 */
