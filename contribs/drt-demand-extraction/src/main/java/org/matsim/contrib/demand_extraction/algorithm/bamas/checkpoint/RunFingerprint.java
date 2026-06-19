@@ -94,6 +94,35 @@ public final class RunFingerprint {
 			"extensionParentsMmrLambda",
 			"extensionParentsTier2NodeCap");
 
+	/**
+	 * Degree-bound knobs that can be varied across forks of the same checkpoint, under the same
+	 * fork-below-minDegree condition as {@link #FORKABLE_PARENT_PRUNING_PARAMS}.
+	 * <p>{@code maxPoolingDegree} is purely a STOPPING bound on the extension loop: it decides when
+	 * the algorithm halts, never the byte-content of any committed stub at a lower degree. A checkpoint
+	 * written entirely below {@code minDegree} therefore cannot have been influenced by it, so a resume
+	 * that caps the degree (e.g. 7→2 to dump the degree-2 universe straight to CSV, reusing the pair-gen)
+	 * is sound. Gated on {@code resumeHighestDegree < minDegree} like the parent-pruning set: it relaxes
+	 * only for a strictly-below-minDegree checkpoint and stays strict (over-refuses) otherwise.
+	 * <p>The full-hash 5-arg {@link #compute} path never skips these, so the existing
+	 * "maxPoolingDegree changes the fingerprint" guard still holds for non-fork resumes.
+	 */
+	public static final Set<String> FORKABLE_DEGREE_BOUND_PARAMS = Set.of(
+			"maxPoolingDegree");
+
+	/**
+	 * Post-processing-only knobs that can be varied across forks of the same checkpoint, under the same
+	 * fork-below-minDegree condition. {@code calcPredecessors} and {@code calcShapleyValues} drive the
+	 * {@code RidePostProcessor} passes that run AFTER ride generation, on the materialized rides — they
+	 * never touch a stub, a cache value, or the routing journal at any degree. A checkpoint therefore
+	 * cannot have been influenced by them, so a fork resume may toggle them (e.g. switch predecessors
+	 * OFF for a degree-2 universe dump, whose 16.4M rides would otherwise drive the predecessor pass'
+	 * boxed-Long window queue into the documented OOM). Gated on {@code resumeHighestDegree < minDegree}
+	 * for consistency; the full-hash 5-arg path keeps hashing them, so non-fork resumes stay strict.
+	 */
+	public static final Set<String> FORKABLE_POSTPROCESS_PARAMS = Set.of(
+			"calcPredecessors",
+			"calcShapleyValues");
+
 	private RunFingerprint() {}
 
 	/**
@@ -150,7 +179,9 @@ public final class RunFingerprint {
 			if (EXCLUDED_PARAMS.contains(e.getKey())) {
 				continue;
 			}
-			if (forkableSkipActive && FORKABLE_PARENT_PRUNING_PARAMS.contains(e.getKey())) {
+			if (forkableSkipActive && (FORKABLE_PARENT_PRUNING_PARAMS.contains(e.getKey())
+					|| FORKABLE_DEGREE_BOUND_PARAMS.contains(e.getKey())
+					|| FORKABLE_POSTPROCESS_PARAMS.contains(e.getKey()))) {
 				continue;
 			}
 			update(md, e.getKey() + "=" + e.getValue() + ";");
