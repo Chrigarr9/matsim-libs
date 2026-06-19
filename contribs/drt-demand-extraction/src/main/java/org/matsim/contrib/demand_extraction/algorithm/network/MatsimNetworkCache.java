@@ -258,6 +258,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	 * @param maxTravelTimeSeconds early termination bound — Dijkstra stops exploring nodes
 	 *        beyond this travel time from the source
 	 */
+	@Override
 	@SuppressWarnings("unchecked")
 	public void batchPrecompute(Id<Link> fromLinkId, double departureTime, Id<Link>[] toLinkIds,
 	                            double maxTravelTimeSeconds) {
@@ -279,6 +280,8 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		long ssspKey = PackedKeyCodec.ssspKey(fromLinkId.index(), timeBin);
 		if (cache.isSsspDone(ssspKey)) {
 			batchTreesSkipped.incrementAndGet();
+			// Skipped: an earlier call already ran the SSSP for this (from, bin). The cache holds that
+			// call's targets; a later getSegment miss on a different target just routes point-to-point.
 			return;
 		}
 
@@ -323,7 +326,22 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 			int toNodeIdx = toLink.getFromNode().getId().index();
 			OptionalTime time = tree.getTime(toNodeIdx);
 
-			if (time.isDefined()) {
+			// Cache ONLY nodes whose label is settled-optimal, i.e. interLinkTT <= bound. A node with
+			// interLinkTT STRICTLY > bound may still hold a suboptimal TENTATIVE label from an earlier
+			// relaxation; caching that is the truncation-divergence bug — it differs from the unbounded
+			// point-to-point route, so it is NOT eviction-invariant (an evicted-then-rerouted key would
+			// change value with non-deterministic eviction timing). So we keep only the within-bound,
+			// known-optimal values here.
+			//
+			// IMPORTANT — this does NOT cache every time-feasible handoff. The PQ pops in increasing
+			// COST (generalized disutility), not time, and TravelTimeStopCriterion breaks on the first
+			// pop whose arrival exceeds the bound. When the disutility is distance-aware (DRT: margUtilDist
+			// != 0), cost order != time order, so a target within the time bound but on a higher-disutility
+			// path can be popped only AFTER the break fires and is left unsettled/absent. Callers must
+			// therefore treat a cache miss as "route it point-to-point" (getSegment), never as
+			// "infeasible". (Pair-gen / extension already do: a miss routes; the global-max invariant
+			// means they only ever USE within-bound segments.)
+			if (time.isDefined() && (time.seconds() - canonicalDepartureTime) <= maxTravelTimeSeconds) {
 				// Mirror the convention in computeSegment: add toLink's traversal so each
 				// cache value represents "drive from fromLink.toNode to toLink.toNode".
 				double interLinkTT = time.seconds() - canonicalDepartureTime;
@@ -337,8 +355,8 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 				cache.putSpeculative(key, new TravelSegment(tt, dist, utility));
 				batchSegmentsPopulated.incrementAndGet();
 			}
-			// else: SSSP stop-criterion didn't reach this node within the bound — leave the
-			// key absent so a later point-to-point getSegment computes the true path on demand.
+			// else: node unreached, or reached only with a beyond-bound / tentative label — leave the
+			// key absent so a later point-to-point getSegment computes the true optimal path on demand.
 			// Caching unreachable here would be a false negative (path exists, just beyond bound)
 			// and silently breaks downstream extenders that need the segment at higher degree.
 		}
@@ -515,6 +533,7 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	 * retained/promoted segments are never touched. Call only from single-threaded generation
 	 * barriers, never concurrently with routing.
 	 */
+	@Override
 	public void checkWatermark() {
 		watermark.checkAndMaybeEvict();
 	}
@@ -534,6 +553,22 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		return network;
 	}
 	
+	/**
+	 * Snapshot of the cumulative routing counters for per-phase measurement (see
+	 * {@link TravelSegmentLookup#routingCountersSnapshot()}). Layout:
+	 * {@code [getSegmentCalls, speedyAltMisses, treesComputed, treesSkipped, segmentsPopulated]}.
+	 */
+	@Override
+	public long[] routingCountersSnapshot() {
+		return new long[] {
+			cacheGetAttempts.get(),
+			totalRoutingAttempts.get(),
+			batchTreesComputed.get(),
+			batchTreesSkipped.get(),
+			batchSegmentsPopulated.get()
+		};
+	}
+
 	/**
 	 * Log routing statistics summary.
 	 * Call this after demand extraction to get an overview of routing success/failure rates.

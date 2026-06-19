@@ -37,6 +37,12 @@ public interface TravelSegmentLookup {
 	 * which remains correct.  {@link MatsimNetworkCache} overrides this with
 	 * the full SSSP implementation (3-4x speedup on large scenarios).
 	 *
+	 * <p>The tree is bounded by {@code maxTravelTimeSeconds} and caches only nodes settled within that
+	 * bound (eviction-invariance — see {@link MatsimNetworkCache#batchPrecompute}). It does NOT
+	 * guarantee that every time-feasible target is cached: the SSSP is ordered by generalized
+	 * disutility, not time, so a time-feasible target on a higher-disutility path can be left absent.
+	 * Callers therefore treat a later cache miss as "route it point-to-point", never as "infeasible".
+	 *
 	 * @param fromLinkId          origin link for the SSSP tree
 	 * @param departureTime       departure time in seconds since midnight
 	 * @param toLinkIds           candidate destination links to precompute
@@ -106,5 +112,27 @@ public interface TravelSegmentLookup {
 	 */
 	default void compactRetained() {
 		// no-op: stubs have no retained tier
+	}
+
+	/**
+	 * Sample heap usage and, if it is above the configured eviction watermark, rotate the older
+	 * speculative generation out. Cheap (a heap sample + a synchronized check) and a no-op below the
+	 * watermark; called per work unit inside the parallel passes so a large scenario evicts the dead
+	 * speculative fills instead of OOMing. Output-invariant — an evicted segment re-routes to a
+	 * bit-identical value, and retained handoffs are never touched. The default is a no-op; stubs
+	 * have no tiers. {@link MatsimNetworkCache} overrides it.
+	 */
+	default void checkWatermark() {
+		// no-op: stubs have no speculative tier to evict
+	}
+
+	/**
+	 * Snapshot of the cumulative routing counters, for measuring the routing done by a single phase
+	 * (snapshot before, snapshot after, subtract). Layout:
+	 * {@code [getSegmentCalls, speedyAltMisses, treesComputed, treesSkipped, segmentsPopulated]}.
+	 * The default returns {@code null} — stubs have no counters and callers must null-check.
+	 */
+	default long[] routingCountersSnapshot() {
+		return null;
 	}
 }

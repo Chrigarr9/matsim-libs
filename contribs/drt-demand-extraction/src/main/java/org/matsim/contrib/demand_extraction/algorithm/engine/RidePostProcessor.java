@@ -59,14 +59,18 @@ public final class RidePostProcessor {
     private final MaxCostResolver maxCostResolver;
 
     /**
-     * Packed OD/bin keys ({@link PackedKeyCodec#segmentKey}) of every handoff segment the
-     * predecessor/successor pass evaluated — accepted AND rejected. This is the Task-9 "window"
-     * export domain (= the lookup set of Python's {@code compute_dynamic_successors}). Populated
-     * in the parallel evaluation loop, so a {@link ConcurrentLinkedQueue} is used;
-     * {@link #getWindowKeys()} dedups it into a {@link LongOpenHashSet} after the pass joins.
+     * Deduplicated packed OD/bin keys ({@link PackedKeyCodec#segmentKey}) of every handoff segment
+     * the predecessor/successor pass evaluated — accepted AND rejected. This is the Task-9 "window"
+     * export domain (= the lookup set of Python's {@code compute_dynamic_successors}).
+     *
+     * <p>Populated once at the end of {@link #computePredecessors} by merging the per-thread primitive
+     * key buffers (see there). The old design appended a <em>boxed</em> {@link Long} per evaluated pair
+     * onto a single shared {@link ConcurrentLinkedQueue} — billions of boxed Longs through one
+     * contended tail-CAS, the documented OOM/serialization hot spot. Per-thread {@code long[]} buffers
+     * merged at the join carry the same keys with no boxing and no cross-thread contention.
      * Duplicates and order are irrelevant — the export sorts deterministically.
      */
-    private final ConcurrentLinkedQueue<Long> windowKeys = new ConcurrentLinkedQueue<>();
+    private volatile LongOpenHashSet windowKeys = new LongOpenHashSet();
 
     /**
      * Production constructor — wires a full {@link MatsimNetworkCache}.
@@ -344,12 +348,30 @@ public final class RidePostProcessor {
 
         // One-shot barrier eviction (single-threaded, before any routing): drop the speculative tier
         // left over from enumeration. Those within-ride segments are never re-read here — the pass
-        // routes ride-to-ride handoffs — so they are dead weight that would otherwise stay
-        // frozen-resident (no per-unit eviction fires during post-processing). Dropping them here,
-        // at a barrier rather than during the parallel loop, reclaims the memory without ever racing
-        // a getSegment into a divergent point-to-point recompute. The handoffs this pass produces are
-        // retained by value below; the retained tier (enumeration survivor legs for export) is kept.
+        // routes ride-to-ride handoffs — so they are dead weight. Clearing them at this barrier (no
+        // routing in flight) also resets the SSSP marks, so the predecessor pass re-routes its
+        // handoffs fresh under its own filterTime bound instead of inheriting enumeration's truncated
+        // global-max tree. Memory is then kept in check during the parallel loop by the per-ride
+        // checkWatermark() below (the speculative batch fills are output-invariant under eviction);
+        // the handoffs this pass produces are retained by value, and the retained tier (enumeration
+        // survivor legs for export) is kept.
         networkCache.dropSpeculativeTier();
+
+        // Window keys (the export domain) are recorded into per-thread primitive buffers, NOT a single
+        // shared concurrent queue: every evaluated pair appends one packed long, so a shared structure
+        // would serialize all workers on one lock/CAS and box billions of Longs (the documented OOM).
+        // Each worker thread lazily creates its own LongArrayList and registers it here; the buffers
+        // are merged into the deduped windowKeys set once, after the parallel pass joins.
+        ConcurrentLinkedQueue<it.unimi.dsi.fastutil.longs.LongArrayList> windowKeyBuffers = new ConcurrentLinkedQueue<>();
+        ThreadLocal<it.unimi.dsi.fastutil.longs.LongArrayList> windowKeyBuffer = ThreadLocal.withInitial(() -> {
+            it.unimi.dsi.fastutil.longs.LongArrayList buf = new it.unimi.dsi.fastutil.longs.LongArrayList();
+            windowKeyBuffers.add(buf);
+            return buf;
+        });
+
+        // Measure the routing this pass alone performs (cumulative counters are dominated by pair-gen /
+        // extension): snapshot before the loop, snapshot after the join, report the delta.
+        long[] routingBefore = networkCache.routingCountersSnapshot();
 
         // Forward search: For each ride i, find successors j
         runIndexedParallel(total, parallelism, i -> {
@@ -417,22 +439,29 @@ public final class RidePostProcessor {
                     continue;
                 }
 
-                // Network routing
+                // Cache-first lookup. batchPrecompute above populated the cache for the bulk of
+                // in-window candidates (~99% hit at Kelheim scale), so this resolves without routing;
+                // getSegment routes point-to-point only on a miss. We must NOT treat a cache miss as
+                // "infeasible and skip it": the bounded SSSP tree is cost-ordered (least generalized
+                // disutility) but stopped on a TIME bound, and DRT disutility is distance-aware (not
+                // time-proportional), so a time-FEASIBLE handoff lying on a higher-disutility path is
+                // popped only after the time-bound break fires and is therefore left unsettled/uncached.
+                // Skipping such a miss silently drops feasible successors (confirmed at Kelheim scale:
+                // a single ride losing 41 of 50 successors). getSegment routes the true optimal on
+                // demand — correct, eviction-invariant, and only ~1% of lookups.
                 TravelSegment connection = networkCache.getSegment(from, to, endTime);
-                // Cache-memory tiers: pin every evaluated handoff segment (accepted OR rejected
-                // below) into the never-evicted retained tier. This window domain — the lookup set
-                // of Python's compute_dynamic_successors — must survive watermark eviction so the
-                // connection_cache export is stable. We retain BY VALUE (the segment just routed),
-                // NOT promoteSegment (a spec→retained move): this pass now evicts the speculative
-                // tier *during* the parallel routing (checkWatermark below), so a move-based promote
-                // could find the entry already evicted and silently drop the handoff from the export.
+                // Cache-memory tiers: pin this evaluated handoff into the never-evicted retained tier.
+                // This window domain — the lookup set of Python's compute_dynamic_successors — must
+                // survive watermark eviction so the connection_cache export is stable. We retain BY
+                // VALUE (the cached segment), NOT promoteSegment (a spec→retained move): this pass
+                // evicts the speculative tier *during* the parallel routing (checkWatermark at the end
+                // of each ride), so a move-based promote could find the entry already evicted and
+                // silently drop the handoff from the export, whereas a by-value retain always lands it.
                 networkCache.retainSegment(from, to, endTime,
                         connection.getTravelTime(), connection.getDistance(), connection.getNetworkUtility());
-                // Task 9: record this evaluated handoff in the "window" export domain — accepted
-                // AND rejected. If it was looked up, it is in the window (the rejection reasons
-                // below do not matter). Pack with the same time-bin convention promoteSegment /
-                // getSegment use, so the export's cache.get(key) resolves the pinned value.
-                windowKeys.add(PackedKeyCodec.segmentKey(
+                // Record this evaluated handoff in the "window" export domain. Pack with the same
+                // time-bin convention getSegment uses, so the export's cache.get(key) resolves it.
+                windowKeyBuffer.get().add(PackedKeyCodec.segmentKey(
                         from.index(), to.index(), (int) (endTime / config.getNetworkTimeBinSize())));
                 if (!connection.isReachable()) continue;
 
@@ -478,7 +507,46 @@ public final class RidePostProcessor {
 
             List<Integer> succIds = candidates.stream().map(c -> c.rideId).collect(Collectors.toList());
             successors.put(sortedByStart.get(i).getIndex(), succIds);
+
+            // Per-ride barrier: sample heap and rotate the older speculative generation under
+            // pressure, so a large scenario evicts this ride's (and earlier rides') dead batch fills
+            // instead of letting the speculative tier grow until OOM. Output-invariant: an evicted
+            // segment re-routes bit-identically (a feasible handoff is within filterTime, so the
+            // bounded batch tree settled it optimally = the unbounded point-to-point value), and the
+            // evaluated handoffs are already retained by value, so eviction never drops an export key.
+            // HeapWatermark is synchronized (safe under the parallel pass) and a no-op below the
+            // watermark; at watermark 1.0 (tests) it never fires, keeping them bit-reproducible.
+            networkCache.checkWatermark();
         });
+
+        // Per-phase routing report: what the predecessor pass alone routed (the cumulative cache
+        // statistics are dominated by pair-gen / extension and cannot answer this on their own).
+        long[] routingAfter = networkCache.routingCountersSnapshot();
+        if (routingBefore != null && routingAfter != null) {
+            long lookups = routingAfter[0] - routingBefore[0]; // peekSegment calls (present + absent)
+            long routed = routingAfter[1] - routingBefore[1];  // SpeedyALT point-to-point on peek miss
+            long hits = lookups - routed;                      // present-in-cache (batch-populated) handoffs
+            long trees = routingAfter[2] - routingBefore[2];
+            long treesSkipped = routingAfter[3] - routingBefore[3];
+            long segsPopulated = routingAfter[4] - routingBefore[4];
+            log.info("    Predecessor-pass routing: {} cache lookups ({} hits = {}%, "
+                    + "{} SpeedyALT point-to-point on miss); {} SSSP trees ({} skipped) -> {} segments populated",
+                    String.format("%,d", lookups),
+                    String.format("%,d", hits),
+                    lookups > 0 ? String.format("%.1f", 100.0 * hits / lookups) : "n/a",
+                    String.format("%,d", routed),
+                    String.format("%,d", trees),
+                    String.format("%,d", treesSkipped),
+                    String.format("%,d", segsPopulated));
+        }
+
+        // Merge the per-thread window-key buffers into the deduped export set (single-threaded; the
+        // parallel pass has joined). Same keys as the old shared queue, no boxing, no contention.
+        LongOpenHashSet mergedWindowKeys = new LongOpenHashSet();
+        for (it.unimi.dsi.fastutil.longs.LongArrayList buf : windowKeyBuffers) {
+            mergedWindowKeys.addAll(buf);
+        }
+        this.windowKeys = mergedWindowKeys;
 
         // Single-threaded barrier (the parallel pass has joined): freeze the retained overlay of
         // pinned handoffs into a compact snapshot before export.
@@ -519,15 +587,12 @@ public final class RidePostProcessor {
     /**
      * Packed OD/bin keys of the handoff segments evaluated by the predecessor/successor pass
      * (accepted AND rejected) — the Task-9 {@code "window"} connection-cache export domain.
-     * Valid after {@link #process(RideStore)} has run; deduplicates the concurrent collection
-     * queue into a {@link LongOpenHashSet}. Empty when predecessor computation is disabled.
+     * Valid after {@link #process(RideStore)} has run: {@link #computePredecessors} merges the
+     * per-thread key buffers into this deduped {@link LongOpenHashSet} at the join. Empty when
+     * predecessor computation is disabled.
      */
     public LongOpenHashSet getWindowKeys() {
-        LongOpenHashSet keys = new LongOpenHashSet(windowKeys.size());
-        for (Long k : windowKeys) {
-            keys.add(k.longValue());
-        }
-        return keys;
+        return windowKeys;
     }
 
     private record ConnectionCandidate(int rideId, Id<Link> toLink, double distance, double idlingTime, double travelTime) {

@@ -176,11 +176,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	// ── cache eviction watermark (design 2026-06-12-connection-cache-memory-design §3).
 	// Fraction of -Xmx above which the speculative routing-cache tier rotates a generation out.
-	// 1.0 = never evict (memory-rich boxes); lower = more aggressive. Output-invariant by
-	// construction: an evicted segment that is later re-routed reproduces bit-identical values,
-	// because SpeedyALT (point-to-point fills) and LeastCostPathTree (batch SSSP fills) agree
-	// bit-for-bit on every OD — the cross-engine value identity guarded by
-	// CrossEngineRoutingDeterminismTest (403,785 shared cache ODs, 0 value diffs at 1%).
+	// 1.0 = never evict (memory-rich boxes); lower = more aggressive. Eviction in pair-gen /
+	// extension is output-invariant — an evicted segment routed within the global-max SSSP bound is
+	// settled optimally, so a later re-route reproduces bit-identical values (SpeedyALT ==
+	// LeastCostPathTree on every shared OD, CrossEngineRoutingDeterminismTest, 403,785 ODs / 0 diffs).
+	// The predecessor pass — the one consumer that needs values beyond global-max — does NOT rely on
+	// this: it drops the speculative tier at its barrier and re-routes its handoffs fresh under its
+	// own bound.
 	private double cacheEvictionWatermark = 0.7;
 
 	// ExMAS algorithm parameters
