@@ -52,6 +52,25 @@ public final class DegreeGraph {
      * elements. This preserves the BAMAS downward-closure invariant: a feasible
      * (k+1)-set is generated only when all of its k-subsets were feasible.
      *
+     * <p><b>KNOWN METHODOLOGY LIMITATION (deliberate, kept for tractability).</b>
+     * Downward closure is <i>not sound</i> for ExMAS reachability: vanilla ExMAS
+     * (the {@code ReferenceRideExtender}) can emit a feasible degree-(k+1) ride whose
+     * k-subface is <i>infeasible</i>, because feasibility is ordering/routing dependent.
+     * The schedule is rigid (a single global departure offset via {@code optimizeDelays},
+     * no mid-route dwell), so a passenger with a tight delay window can be infeasible in
+     * the bare k-set yet feasible in the (k+1)-set once another passenger's via-stops
+     * re-space the route and slide every window into a common intersection. Requiring all
+     * k-subfaces feasible therefore drops some genuinely-feasible higher-degree rides that
+     * vanilla ExMAS would keep. Measured on the Kelheim mini-fixture (no-pruning ExMAS vs
+     * BAMAS): ~4.55% of rides overall, ~8.4% of rides at degree>=4, rising 4.3%->17.3%
+     * from d4 to d7. We accept this loss: dropping closure means falling back to pairwise
+     * candidate generation at every degree, which reintroduces the combinatorial explosion
+     * DegreeGraph exists to bound. The loss concentrates at high degree where rides are
+     * rare and heavily pruned downstream anyway. Full root-cause analysis (brute-forced,
+     * confirmed physical and not a budget/routing bug):
+     * {@code .project-memory/r1r2-parity-degreegraph-downward-closure-2026-06-16.md};
+     * quantified by {@code ExMasR1R2LossReportTest}.
+     *
      * @param baseSet sorted request indices of size {@code degree}
      * @return sorted extension request indices (may be empty)
      */
