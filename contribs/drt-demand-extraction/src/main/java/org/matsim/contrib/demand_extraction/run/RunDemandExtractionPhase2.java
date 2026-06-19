@@ -19,6 +19,8 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 import org.matsim.contrib.demand_extraction.io.ExtractionDataManager;
 import org.matsim.contrib.demand_extraction.io.lowmem.PhaseOneDumpLayout;
 import org.matsim.contrib.demand_extraction.io.lowmem.PhaseOneDumpReader;
+import org.matsim.core.config.Config;
+import org.matsim.core.config.ConfigWriter;
 
 import com.google.inject.Guice;
 import com.google.inject.Injector;
@@ -158,6 +160,21 @@ public final class RunDemandExtractionPhase2 {
 		}
 	}
 
+	/**
+	 * Persist the effective Phase-2 config (dump config + CLI overrides) as MATSim XML into the
+	 * output dir, so every run is self-documenting: the degree-2 / extension knobs
+	 * ({@code --pairgen-top-k}, {@code --extension-parents-*}, {@code --max-degree}, ...) live in a
+	 * durable artifact next to the results rather than only in the shell command / log. The same
+	 * params are in {@link org.matsim.contrib.demand_extraction.algorithm.bamas.checkpoint.RunFingerprint};
+	 * this is the human-readable companion. Creates {@code outputDir} if missing.
+	 */
+	static void writeEffectiveConfig(Config config, Path outputDir) throws IOException {
+		Files.createDirectories(outputDir);
+		Path out = outputDir.resolve("phase2_effective_config.xml");
+		new ConfigWriter(config).write(out.toString());
+		log.info("PHASE 2: wrote effective config snapshot -> {}", out.toAbsolutePath());
+	}
+
 	public static void main(String[] args) throws IOException {
 		LoggingSetup.configure();
 		long overallStartMs = System.currentTimeMillis();
@@ -198,6 +215,10 @@ public final class RunDemandExtractionPhase2 {
 		ExMasConfigGroup exMasCfg = injector.getInstance(ExMasConfigGroup.class);
 		assertDumpSupportsConfig(dump.scoringContextsVersion(), exMasCfg);
 		applyPhase2KnobOverrides(args, exMasCfg);
+		// Provenance: persist the effective config (dump config + CLI overrides) next to the
+		// outputs. exMasCfg is the same module instance inside the injected Config, so the
+		// overrides above are already reflected. Same XML format as the dump's phase1_config.xml.
+		writeEffectiveConfig(injector.getInstance(Config.class), a.outputDir);
 
 		log.info("PHASE 2 STEP 3: running {} algorithm", exMasCfg.getAlgorithm());
 		ExMasAlgorithm algorithm = injector.getInstance(ExMasAlgorithm.class);
