@@ -64,6 +64,24 @@ public final class TieredSegmentCache {
 	}
 
 	/**
+	 * Insert a KNOWN segment value straight into the never-evicted retained tier (first-write-wins).
+	 *
+	 * <p>Unlike {@link #promote}, this does NOT require the key to already be cached in the
+	 * speculative tier — the caller supplies the value. Use it when a generator already holds the
+	 * exact segment a later phase will re-read (e.g. an accepted pair's stored chain segments): the
+	 * value is value-source deterministic (cross-engine identity), so retaining the stored value is
+	 * bit-identical to a later re-route, and completeness no longer depends on the speculative
+	 * segment surviving a watermark eviction that ran between routing and this call.
+	 *
+	 * <p>Thread-safe: {@link CompactSegmentStore#put} appends to a {@link java.util.concurrent.ConcurrentHashMap}
+	 * overlay (first-write-wins), so this may be called from the parallel collection or the
+	 * single-threaded Phase-3 loop. Only {@link #compactRetained}/{@link #clear} remain barrier-only.
+	 */
+	public void retain(long key, TravelSegment seg) {
+		retained.put(key, seg);
+	}
+
+	/**
 	 * Mark an SSSP cone complete in the speculative tier.
 	 *
 	 * @return {@code true} iff this call newly recorded the mark.
@@ -89,6 +107,15 @@ public final class TieredSegmentCache {
 	/** Wipe both tiers and all SSSP marks. Single-threaded call sites only. */
 	public void clear() {
 		retained.clear();
+		speculative.clear();
+	}
+
+	/**
+	 * Drop the entire speculative tier (both generations + SSSP marks), leaving the retained tier
+	 * intact. Single-threaded call sites only (a barrier, never concurrently with routing). Used by
+	 * the predecessor pass to reclaim the dead enumeration fills before it starts routing.
+	 */
+	public void clearSpeculative() {
 		speculative.clear();
 	}
 

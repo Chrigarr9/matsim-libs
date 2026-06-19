@@ -53,6 +53,14 @@ public class ConnectionCacheJournalTest {
 
         ConnectionCacheJournal.Contents c = ConnectionCacheJournal.read(file);
 
+        // streamCommitted must yield exactly the same records, in the same order, as read().
+        java.util.List<ConnectionCacheJournal.Segment> streamedSegs = new java.util.ArrayList<>();
+        java.util.List<ConnectionCacheJournal.Sssp> streamedSssp = new java.util.ArrayList<>();
+        int streamedBarriers = ConnectionCacheJournal.streamCommitted(file, streamedSegs::add, streamedSssp::add);
+        assertEquals(c.committedBarrierCount(), streamedBarriers, "streamed barrier count == read()");
+        assertEquals(c.segments(), streamedSegs, "streamed segments == read() segments");
+        assertEquals(c.ssspKeys(), streamedSssp, "streamed sssp == read() sssp");
+
         // Segments: both barriers, in order
         List<ConnectionCacheJournal.Segment> segs = c.segments();
         assertEquals(3, segs.size());
@@ -232,6 +240,12 @@ public class ConnectionCacheJournalTest {
         var c = ConnectionCacheJournal.read(file);
         assertEquals(1, c.segments().size());
         assertEquals("X", c.segments().get(0).fromLink());
+
+        // streamCommitted must also stop at the last barrier and never visit the torn tail.
+        java.util.List<ConnectionCacheJournal.Segment> streamed = new java.util.ArrayList<>();
+        int barriers = ConnectionCacheJournal.streamCommitted(file, streamed::add, s -> {});
+        assertEquals(1, barriers, "one committed barrier before the torn tail");
+        assertEquals(c.segments(), streamed, "streamed committed region == read(), torn tail ignored");
 
         // openForAppend must truncate torn tail and allow new appends
         var seg2 = new ConnectionCacheJournal.Segment("A", "B", 1, 5.0, 6.0, 7.0);

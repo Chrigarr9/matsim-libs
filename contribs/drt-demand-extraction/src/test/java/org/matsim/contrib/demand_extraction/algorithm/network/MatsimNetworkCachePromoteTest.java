@@ -61,4 +61,36 @@ class MatsimNetworkCachePromoteTest {
 		cache.promoteSegment(a, b, 8 * 3600);
 		assertNull(cache.peekForTesting(a, b, 0));
 	}
+
+	/**
+	 * The pair-generation bug, reproduced at the cache API level: a chain segment is routed during
+	 * the parallel collection and then watermark-evicted BEFORE the single-threaded promotion loop
+	 * runs. {@link MatsimNetworkCache#promoteSegment} would no-op (nothing cached) and the segment
+	 * would be absent from the checkpoint journal, forcing a re-route at export. {@code retainSegment}
+	 * writes the value the accepted candidate already holds straight into the never-evicted retained
+	 * tier, so it survives and resume/export reads it as a hit.
+	 */
+	@Test
+	void retainSegmentSurvivesEvictionWithoutPriorCacheEntry() {
+		MatsimNetworkCache cache = MatsimNetworkCache.forTesting();
+		Id<Link> a = Id.createLinkId("a");
+		Id<Link> b = Id.createLinkId("b");
+
+		// Routed-then-evicted before promotion could run.
+		cache.putForTesting(a, b, new TravelSegment(12.5, 340.0, -1.25));
+		cache.evictSpeculativeForTesting();
+		cache.evictSpeculativeForTesting();
+		assertNull(cache.peekForTesting(a, b, 0), "precondition: evicted before promotion");
+
+		// promoteSegment here would no-op; retainSegment writes the held value into retained.
+		cache.retainSegment(a, b, 8 * 3600, 12.5, 340.0, -1.25);
+		cache.evictSpeculativeForTesting();
+		cache.evictSpeculativeForTesting();
+
+		TravelSegment seg = cache.peekForTesting(a, b, 0);
+		assertNotNull(seg, "retained segment must survive eviction");
+		assertEquals(12.5, seg.getTravelTime());
+		assertEquals(340.0, seg.getDistance());
+		assertEquals(-1.25, seg.getNetworkUtility());
+	}
 }

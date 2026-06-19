@@ -64,4 +64,47 @@ public interface TravelSegmentLookup {
 	default void promoteSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime) {
 		// no-op: stubs have no retained tier
 	}
+
+	/**
+	 * Retain a KNOWN segment value into the never-evicted retained tier, keyed exactly as
+	 * {@link #getSegment} keys it. Unlike {@link #promoteSegment} (a spec→retained <em>move</em> that
+	 * no-ops if the entry was already evicted), this carries the value the caller already routed, so it
+	 * survives a watermark eviction racing the call. The predecessor pass uses this — instead of
+	 * {@code promoteSegment} — precisely because it now evicts the speculative tier <em>during</em> the
+	 * parallel routing (via {@link #checkWatermark()}), so a move-based promote would silently lose
+	 * handoffs from the connection-cache export.
+	 *
+	 * <p>The default implementation is a no-op — test stubs and simple implementations have no tiers.
+	 * {@link MatsimNetworkCache} overrides this with the real retention.
+	 */
+	@SuppressWarnings("unused")
+	default void retainSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime,
+			double travelTime, double distance, double networkUtility) {
+		// no-op: stubs have no retained tier
+	}
+
+	/**
+	 * Drop the entire speculative tier (both generations) in one single-threaded call. The
+	 * predecessor pass calls this once at its start — before any parallel routing — to reclaim the
+	 * dead enumeration segments that are never re-read here and would otherwise stay frozen-resident
+	 * through post-processing (the cause of the predecessor-pass OOM).
+	 *
+	 * <p>Unlike per-unit watermark eviction, this runs at a barrier (no routing in flight), so it can
+	 * never race a {@code getSegment} and force a divergent point-to-point recompute — the same
+	 * eviction discipline the degree-barrier extension uses. The retained tier (enumeration survivor
+	 * legs) is untouched. The default implementation is a no-op; {@link MatsimNetworkCache} overrides it.
+	 */
+	default void dropSpeculativeTier() {
+		// no-op: stubs have no speculative tier
+	}
+
+	/**
+	 * Freeze the retained-tier overlay into a compact snapshot. Called once from a single-threaded
+	 * barrier (after the predecessor pass joins) so the retained handoffs are stored compactly rather
+	 * than as boxed overlay entries. The default implementation is a no-op;
+	 * {@link MatsimNetworkCache} overrides it.
+	 */
+	default void compactRetained() {
+		// no-op: stubs have no retained tier
+	}
 }

@@ -327,6 +327,76 @@ public final class ConnectionCacheJournal {
         }
     }
 
+    /**
+     * Stream the committed region of the journal, invoking {@code onSegment}/{@code onSssp} for each
+     * record as it is read — WITHOUT materializing the full {@link Contents} lists. For a large
+     * journal (e.g. a 100%-pair-gen base barrier holding hundreds of millions of segments) this keeps
+     * peak heap to just the consumer's sink (the cache being filled) instead of holding a second full
+     * copy in {@code List<Segment>}/{@code List<Sssp>} — the difference between fitting and OOM when
+     * warm-loading a multi-GB journal into an already-large cache.
+     *
+     * <p>Correctness matches {@link #read}: a first lightweight pass ({@link #scanCommittedRegion})
+     * finds the offset just past the LAST complete BARRIER; this pass then re-reads from the start and
+     * stops there, so every record handed to a consumer lies before that barrier (i.e. is committed)
+     * and a torn tail after it is never visited. A single base barrier covers the whole pair-gen, so
+     * records cannot be buffered per-barrier (that would reproduce the full-list memory cost) — they
+     * are emitted immediately, which is why the offset bound (not a barrier count) is used.
+     *
+     * @return the number of complete BARRIER markers in the committed region (== committed barriers).
+     */
+    public static int streamCommitted(Path journalFile,
+            java.util.function.Consumer<Segment> onSegment,
+            java.util.function.Consumer<Sssp> onSssp) throws IOException {
+        ScanResult scan = scanCommittedRegion(journalFile);
+        final long limit = scan.lastBarrierOffset();
+        if (limit < 0L) {
+            return 0; // no complete barrier — nothing committed
+        }
+        int barriers = 0;
+        try (InputStream raw = Files.newInputStream(journalFile);
+             DataInputStream in = new DataInputStream(new BufferedInputStream(raw))) {
+            readHeader(in);
+            long pos = 8L;
+            Map<Integer, String> idToLink = new HashMap<>();
+            while (pos < limit) {
+                int tagInt = in.read();
+                if (tagInt == -1) break;
+                byte tag = (byte) tagInt;
+                pos += 1;
+                switch (tag) {
+                    case TAG_DICT -> {
+                        int id = in.readInt();
+                        String link = readUtf8(in);
+                        pos += 4 + 2 + link.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+                        idToLink.put(id, link);
+                    }
+                    case TAG_SEGMENT -> {
+                        int fromId = in.readInt();
+                        int toId   = in.readInt();
+                        int bin    = in.readInt();
+                        double tt  = in.readDouble();
+                        double dist= in.readDouble();
+                        double u   = in.readDouble();
+                        pos += 36;
+                        onSegment.accept(new Segment(resolveLink(idToLink, fromId),
+                                resolveLink(idToLink, toId), bin, tt, dist, u));
+                    }
+                    case TAG_SSSP -> {
+                        int fromId = in.readInt();
+                        int bin    = in.readInt();
+                        pos += 8;
+                        onSssp.accept(new Sssp(resolveLink(idToLink, fromId), bin));
+                    }
+                    case TAG_BARRIER -> barriers++;
+                    default ->
+                        throw new IOException(String.format(
+                                "ConnectionCacheJournal: unknown tag 0x%02X within committed region — corrupt", tag));
+                }
+            }
+        }
+        return barriers;
+    }
+
     // =========================================================================
     // Private helpers
     // =========================================================================

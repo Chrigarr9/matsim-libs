@@ -43,4 +43,36 @@ class TieredSegmentCacheTest {
 		cache.promote(42L); // nothing cached for 42 — must not throw, must not invent
 		assertNull(cache.get(42L));
 	}
+
+	@Test
+	void retainStoresKnownValueWithoutPriorSpeculativeEntry() {
+		TieredSegmentCache cache = new TieredSegmentCache();
+		// retain a value for a key that was NEVER putSpeculative — the promote() path would no-op
+		// here, but retain() writes the caller's value straight into the retained tier.
+		cache.retain(7L, seg(7.0));
+		assertEquals(7.0, cache.get(7L).getTravelTime());
+		assertEquals(1, cache.retainedSize());
+		assertEquals(0, cache.speculativeSize());
+	}
+
+	@Test
+	void retainedValueSurvivesSpeculativeEviction() {
+		TieredSegmentCache cache = new TieredSegmentCache();
+		// Simulate the bug scenario: a segment routed-then-evicted before promotion. promote() would
+		// no-op (value already gone from speculative); retain() with the known value is complete.
+		cache.putSpeculative(5L, seg(5.0));
+		cache.evictSpeculative(); cache.evictSpeculative(); // segment dropped before we could promote
+		assertNull(cache.get(5L), "precondition: evicted from speculative");
+		cache.retain(5L, seg(5.0)); // caller still holds the value (from the accepted candidate)
+		cache.evictSpeculative(); cache.evictSpeculative();
+		assertEquals(5.0, cache.get(5L).getTravelTime(), "retained value is never evicted");
+	}
+
+	@Test
+	void retainIsFirstWriteWins() {
+		TieredSegmentCache cache = new TieredSegmentCache();
+		cache.retain(3L, seg(3.0));
+		cache.retain(3L, seg(99.0)); // ignored — value-source determinism makes overwrites pointless
+		assertEquals(3.0, cache.get(3L).getTravelTime());
+	}
 }

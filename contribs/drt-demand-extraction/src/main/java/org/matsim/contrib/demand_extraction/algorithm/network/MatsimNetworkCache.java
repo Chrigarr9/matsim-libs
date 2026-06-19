@@ -170,7 +170,36 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 		this.threadLocalTree = ThreadLocal.withInitial(() ->
 			new LeastCostPathTree(speedyGraph, this.travelTime, this.travelDisutility));
 
-		this.watermark = HeapWatermark.forRuntime(config.getCacheEvictionWatermark(), cache::evictSpeculative);
+		this.watermark = HeapWatermark.forRuntime(resolveEvictionWatermark(config), cache::evictSpeculative);
+	}
+
+	/**
+	 * Resolve the speculative-tier eviction watermark fraction. A {@code -Dbamas.cacheEvictionWatermark}
+	 * system property, when present and valid in [0,1], OVERRIDES {@link ExMasConfigGroup#getCacheEvictionWatermark()}.
+	 * <p>This exists because the network cache is built during Guice injector construction — before the
+	 * Phase-2 CLI knob overrides ({@code applyPhase2KnobOverrides}) mutate the config singleton — so a
+	 * {@code --cache-eviction-watermark} CLI arg would be read too late. A JVM property is set before the
+	 * JVM starts and is therefore honoured regardless of construction order. Used to keep a large warm-loaded
+	 * routing journal resident for a {@code --max-degree 2} universe dump (raise toward 1.0 = no eviction).
+	 */
+	private static double resolveEvictionWatermark(ExMasConfigGroup config) {
+		String prop = System.getProperty("bamas.cacheEvictionWatermark");
+		if (prop != null) {
+			try {
+				double v = Double.parseDouble(prop.trim());
+				if (v >= 0.0 && v <= 1.0) {
+					log.info("Cache eviction watermark OVERRIDDEN by -Dbamas.cacheEvictionWatermark={} (config was {})",
+							v, config.getCacheEvictionWatermark());
+					return v;
+				}
+				log.warn("Ignoring -Dbamas.cacheEvictionWatermark={} (out of [0,1]); using config {}",
+						v, config.getCacheEvictionWatermark());
+			} catch (NumberFormatException e) {
+				log.warn("Ignoring unparseable -Dbamas.cacheEvictionWatermark='{}'; using config {}",
+						prop, config.getCacheEvictionWatermark());
+			}
+		}
+		return config.getCacheEvictionWatermark();
 	}
 
 	/**
@@ -444,12 +473,39 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	}
 
 	/**
+	 * Retain a KNOWN segment value into the never-evicted retained tier, keyed exactly as
+	 * {@link #getSegment} keys it (same {@code departureTime}-to-bin mapping). Unlike
+	 * {@link #promoteSegment}, this does not depend on the segment still being cached — the caller
+	 * passes the value it already routed. Used by the pair generator to retain an accepted pair's
+	 * chain segments from the candidate's stored connection arrays, so a watermark eviction that ran
+	 * during candidate collection cannot drop them before the checkpoint snapshot. The retained value
+	 * equals a later re-route bit-for-bit (cross-engine value identity), so export/resume reads it as
+	 * a cache hit with no routing and the materializer self-check still holds.
+	 */
+	public void retainSegment(Id<Link> originLinkId, Id<Link> destLinkId, double departureTime,
+			double travelTime, double distance, double networkUtility) {
+		int timeBin = (int) (departureTime / timeBinSize);
+		cache.retain(PackedKeyCodec.segmentKey(originLinkId.index(), destLinkId.index(), timeBin),
+				new TravelSegment(travelTime, distance, networkUtility));
+	}
+
+	/**
 	 * Merge the retained-tier overlay into a fresh frozen snapshot (~40 B/entry). Call only from
 	 * the single-threaded generation barriers (after pair generation completes, at each degree
 	 * barrier) — never concurrently with routing.
 	 */
 	public void compactRetained() {
 		cache.compactRetained();
+	}
+
+	/**
+	 * Drop the whole speculative tier (both generations + SSSP marks), keeping the retained tier.
+	 * Call only from a single-threaded barrier — never concurrently with routing. The predecessor
+	 * pass uses this once at its start to free the dead enumeration fills before it routes handoffs,
+	 * so they do not stay frozen-resident through post-processing.
+	 */
+	public void dropSpeculativeTier() {
+		cache.clearSpeculative();
 	}
 
 	/**
@@ -587,6 +643,30 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 			Id<Link> from = Id.createLinkId(sssp.fromLink());
 			cache.markSssp(PackedKeyCodec.ssspKey(from.index(), sssp.bin()));
 		}
+	}
+
+	/**
+	 * Streaming equivalent of {@link #bulkLoadFromJournal}: reads the journal record-by-record via
+	 * {@link ConnectionCacheJournal#streamCommitted} and inserts each entry directly, WITHOUT first
+	 * materializing the full {@code Contents} lists. Use this when warm-loading a large journal — the
+	 * non-streaming path holds a second full copy of every segment in memory while the cache fills,
+	 * which OOMs for a multi-GB pair-gen journal loaded into an already-large cache. Same cache state
+	 * as {@link #bulkLoadFromJournal}; only the transient memory differs.
+	 *
+	 * @return the number of committed barriers streamed (== {@code Contents.committedBarrierCount()}).
+	 */
+	public int bulkLoadStreamingFromJournal(java.nio.file.Path journalFile) throws java.io.IOException {
+		return ConnectionCacheJournal.streamCommitted(journalFile,
+				seg -> {
+					Id<Link> from = Id.createLinkId(seg.fromLink());
+					Id<Link> to   = Id.createLinkId(seg.toLink());
+					cache.putSpeculative(PackedKeyCodec.segmentKey(from.index(), to.index(), seg.bin()),
+							new TravelSegment(seg.tt(), seg.dist(), seg.utility()));
+				},
+				sssp -> {
+					Id<Link> from = Id.createLinkId(sssp.fromLink());
+					cache.markSssp(PackedKeyCodec.ssspKey(from.index(), sssp.bin()));
+				});
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────

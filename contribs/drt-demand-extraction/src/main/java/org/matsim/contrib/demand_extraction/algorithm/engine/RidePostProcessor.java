@@ -342,6 +342,15 @@ public final class RidePostProcessor {
 		AtomicInteger processed = new AtomicInteger(0);
 		long routingStartNanos = System.nanoTime();
 
+        // One-shot barrier eviction (single-threaded, before any routing): drop the speculative tier
+        // left over from enumeration. Those within-ride segments are never re-read here — the pass
+        // routes ride-to-ride handoffs — so they are dead weight that would otherwise stay
+        // frozen-resident (no per-unit eviction fires during post-processing). Dropping them here,
+        // at a barrier rather than during the parallel loop, reclaims the memory without ever racing
+        // a getSegment into a divergent point-to-point recompute. The handoffs this pass produces are
+        // retained by value below; the retained tier (enumeration survivor legs for export) is kept.
+        networkCache.dropSpeculativeTier();
+
         // Forward search: For each ride i, find successors j
         runIndexedParallel(total, parallelism, i -> {
 			int done = processed.incrementAndGet();
@@ -410,12 +419,15 @@ public final class RidePostProcessor {
 
                 // Network routing
                 TravelSegment connection = networkCache.getSegment(from, to, endTime);
-                // Cache-memory tiers (Task 7 Step 4): promote every evaluated handoff segment
-                // (accepted OR rejected below) into the never-evicted retained tier. This window
-                // domain — the lookup set of Python's compute_dynamic_successors — must survive
-                // watermark eviction so the connection_cache export is stable. Promotion is purely
-                // additive: getSegment already cached the value, promote only pins it.
-                networkCache.promoteSegment(from, to, endTime);
+                // Cache-memory tiers: pin every evaluated handoff segment (accepted OR rejected
+                // below) into the never-evicted retained tier. This window domain — the lookup set
+                // of Python's compute_dynamic_successors — must survive watermark eviction so the
+                // connection_cache export is stable. We retain BY VALUE (the segment just routed),
+                // NOT promoteSegment (a spec→retained move): this pass now evicts the speculative
+                // tier *during* the parallel routing (checkWatermark below), so a move-based promote
+                // could find the entry already evicted and silently drop the handoff from the export.
+                networkCache.retainSegment(from, to, endTime,
+                        connection.getTravelTime(), connection.getDistance(), connection.getNetworkUtility());
                 // Task 9: record this evaluated handoff in the "window" export domain — accepted
                 // AND rejected. If it was looked up, it is in the window (the rejection reasons
                 // below do not matter). Pack with the same time-bin convention promoteSegment /
@@ -467,6 +479,10 @@ public final class RidePostProcessor {
             List<Integer> succIds = candidates.stream().map(c -> c.rideId).collect(Collectors.toList());
             successors.put(sortedByStart.get(i).getIndex(), succIds);
         });
+
+        // Single-threaded barrier (the parallel pass has joined): freeze the retained overlay of
+        // pinned handoffs into a compact snapshot before export.
+        networkCache.compactRetained();
 
 		long routingTime = System.currentTimeMillis() - routingStartTime;
 		log.info("    Network routing completed in {} ms", routingTime);
