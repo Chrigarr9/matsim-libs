@@ -105,15 +105,33 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 
 	/**
 	 * Build a fixture from {@code LYON_SCENARIO_DIR}, {@code LYON_SCENARIO_PREFIX}
-	 * (default {@code lyon_drt_area_}), {@code LYON_TRAVEL_TIMES_TSV}, and
-	 * {@code LYON_SAMPLE_PCT} (default 1). Throws if required vars are missing.
+	 * (default {@code lyon_drt_area_}), {@code LYON_TRAVEL_TIMES_TSV},
+	 * {@code LYON_SAMPLE_PCT} (default 1), and {@code LYON_FILTER_RADIUS_KM}
+	 * (default {@link #TRIP_FILTER_RADIUS_KM}). Throws if required vars are missing.
+	 *
+	 * <p>The population file under {@code LYON_SCENARIO_DIR} is loaded as-is —
+	 * {@code LYON_SAMPLE_PCT} only scales flow/storage cap factors and the run id,
+	 * it does NOT subsample the population. Point {@code LYON_SCENARIO_DIR} at an
+	 * already-subsampled scenario when running below 100%.
 	 */
 	public static LyonEqasimScenarioFixture fromEnv() {
 		String scenarioDir = requireEnv("LYON_SCENARIO_DIR");
 		String prefix = System.getenv().getOrDefault("LYON_SCENARIO_PREFIX", "lyon_drt_area_");
 		String travelTimes = requireEnv("LYON_TRAVEL_TIMES_TSV");
 		int samplePct = Integer.parseInt(System.getenv().getOrDefault("LYON_SAMPLE_PCT", "1"));
-		return new LyonEqasimScenarioFixture(samplePct, scenarioDir, prefix, travelTimes);
+		double radiusKm = Double.parseDouble(System.getenv()
+				.getOrDefault("LYON_FILTER_RADIUS_KM", Double.toString(TRIP_FILTER_RADIUS_KM)));
+		double centerX = Double.parseDouble(System.getenv()
+				.getOrDefault("LYON_FILTER_CENTER_X", Double.toString(FILTER_CENTER_X)));
+		double centerY = Double.parseDouble(System.getenv()
+				.getOrDefault("LYON_FILTER_CENTER_Y", Double.toString(FILTER_CENTER_Y)));
+		// LYON_EXCLUSION_ZONE=none drops the metropole exclusion shapefile (the
+		// bundle's Paper One region uses --exclusion-zone none, and the default
+		// shapefile relative path assumes the eqasim-output layout, not the bundle).
+		String exclusion = System.getenv().getOrDefault("LYON_EXCLUSION_ZONE", "default");
+		String exclusionPath = "none".equalsIgnoreCase(exclusion) ? null : EXCLUSION_ZONE_SHAPEFILE;
+		FilterConfig filter = new FilterConfig(centerX, centerY, radiusKm, exclusionPath);
+		return new LyonEqasimScenarioFixture(samplePct, scenarioDir, prefix, travelTimes, filter);
 	}
 
 	private static String requireEnv(String name) {
