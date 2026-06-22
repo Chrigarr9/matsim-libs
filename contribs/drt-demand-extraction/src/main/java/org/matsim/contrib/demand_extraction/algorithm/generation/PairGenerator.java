@@ -374,9 +374,20 @@ public final class PairGenerator {
 
 	/**
 	 * Apply the degree-2 top-K partner cap to one request's routed candidate rows.
-	 * Saving is fully known here (post-routing), so the cap runs before the Phase-3
-	 * budget validation — yielding ≤ K budget-valid partners (top-K rows may still be
-	 * budget-rejected; we do not backfill). When {@code pairgenTopK == 0} this is a no-op.
+	 *
+	 * <p>"Top-K partners" counts only partners that have at least one <em>budget-valid</em>
+	 * shared ride: each candidate is budget-validated here, partners are ranked by their best
+	 * valid distance saving, the top {@code K} distinct valid partners are kept, and every
+	 * valid variant (FIFO/LIFO) of a kept partner survives. So the kept count is never
+	 * under-filled by a later budget rejection — a partner with no valid variant cannot occupy
+	 * a slot. When {@code pairgenTopK == 0} this is a no-op (Phase 3 validates as usual; the
+	 * default path is byte-identical to an un-capped run).
+	 *
+	 * <p>Validation here is safe in the parallel candidate phase: {@code buildRide} is pure over
+	 * the candidate's stored segments (no routing, no shared mutable state) and {@link BudgetValidator}
+	 * is stateless (final fields + each request's immutable scoring context), so validity is a
+	 * deterministic per-candidate function and the kept set is independent of thread interleaving.
+	 * Phase 3 re-validates the kept rows in its sequential byte-parity order (unchanged).
 	 */
 	private List<PairCandidate> capToTopKPartners(List<PairCandidate> results) {
 		if (pairgenTopK <= 0 || results.isEmpty()) {
@@ -385,14 +396,18 @@ public final class PairGenerator {
 		int m = results.size();
 		int[] partnerIndex = new int[m];
 		double[] saving = new double[m];
+		boolean[] valid = new boolean[m];
 		for (int r = 0; r < m; r++) {
 			PairCandidate c = results.get(r);
 			double rideDist = 0.0;
 			for (double d : c.connectionDistances) rideDist += d;
 			partnerIndex[r] = c.reqJ.index;
 			saving[r] = c.reqI.directDistance + c.reqJ.directDistance - rideDist;
+			// Same budget check Phase 3 applies. The ride index is irrelevant to budget
+			// feasibility, so a throwaway 0 is fine; the validated ride is discarded.
+			valid[r] = budgetValidator.validateAndPopulateBudgets(buildRide(c, 0)) != null;
 		}
-		boolean[] keep = keepMask(partnerIndex, saving, pairgenTopK);
+		boolean[] keep = keepMaskValid(partnerIndex, saving, valid, pairgenTopK);
 		List<PairCandidate> capped = new ArrayList<>();
 		for (int r = 0; r < m; r++) {
 			if (keep[r]) capped.add(results.get(r));
@@ -688,29 +703,39 @@ public final class PairGenerator {
 	 * @return per-row boolean keep mask
 	 */
 	static boolean[] keepMask(int[] partnerIndex, double[] saving, int k) {
+		boolean[] allValid = new boolean[partnerIndex.length];
+		java.util.Arrays.fill(allValid, true);
+		return keepMaskValid(partnerIndex, saving, allValid, k);
+	}
+
+	/**
+	 * Validity-aware top-K-partner mask: rank distinct VALID partners by best valid saving
+	 * (tie: partner index ascending), keep the top {@code k} ({@code k <= 0} or fewer distinct
+	 * valid partners ⇒ all valid partners), and within kept partners keep every valid row.
+	 * Invalid rows are never kept — so "top-K partners" counts only partners that have at least
+	 * one budget-valid shared ride, and the count cannot be under-filled by post-cap rejection.
+	 */
+	static boolean[] keepMaskValid(int[] partnerIndex, double[] saving, boolean[] valid, int k) {
 		int n = partnerIndex.length;
 		boolean[] mask = new boolean[n];
-		if (k <= 0) {
-			java.util.Arrays.fill(mask, true);
-			return mask;
-		}
 		java.util.Map<Integer, Double> best = new java.util.HashMap<>();
 		for (int r = 0; r < n; r++) {
-			best.merge(partnerIndex[r], saving[r], Math::max);
+			if (valid[r]) best.merge(partnerIndex[r], saving[r], Math::max);
 		}
-		if (best.size() <= k) {
-			java.util.Arrays.fill(mask, true);
-			return mask;
+		java.util.Set<Integer> keep;
+		if (k <= 0 || best.size() <= k) {
+			keep = best.keySet();
+		} else {
+			java.util.List<Integer> partners = new java.util.ArrayList<>(best.keySet());
+			partners.sort((a, b) -> {
+				int c = Double.compare(best.get(b), best.get(a)); // saving descending
+				if (c != 0) return c;
+				return Integer.compare(a, b);                      // tie: index ascending
+			});
+			keep = new java.util.HashSet<>(partners.subList(0, k));
 		}
-		java.util.List<Integer> partners = new java.util.ArrayList<>(best.keySet());
-		partners.sort((a, b) -> {
-			int c = Double.compare(best.get(b), best.get(a)); // saving descending
-			if (c != 0) return c;
-			return Integer.compare(a, b);                      // tie: index ascending
-		});
-		java.util.Set<Integer> keep = new java.util.HashSet<>(partners.subList(0, k));
 		for (int r = 0; r < n; r++) {
-			mask[r] = keep.contains(partnerIndex[r]);
+			mask[r] = valid[r] && keep.contains(partnerIndex[r]);
 		}
 		return mask;
 	}
