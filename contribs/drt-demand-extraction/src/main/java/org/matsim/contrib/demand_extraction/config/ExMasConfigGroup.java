@@ -151,7 +151,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// Example: 1.5 means maximum travel time = 1.5 * direct travel time
 
 	private double maxDetourFactor = 1.5; // Maximum detour factor (50% longer than direct)
-	
+
+	// Per-class maxDetourFactor override. Key = requestTag; value = factor (e.g. 1.05 for connecting,
+	// 1.3 for rural_intra). Requests whose tag is absent fall back to maxDetourFactor (global).
+	// Not XML-serialized — set programmatically (mirrors pruningCoverageKByDegree).
+	private Map<String, Double> maxDetourFactorByClass = new HashMap<>();
+
 	private Integer maxAbsoluteDetour = null; // Absolute detour cap (seconds). If set, limits the max detour time.
 
 	// Sampling settings
@@ -902,6 +907,18 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter("maxDetourFactor")
 	public void setMaxDetourFactor(double maxDetourFactor) {
 		this.maxDetourFactor = maxDetourFactor;
+	}
+
+	public Map<String, Double> getMaxDetourFactorByClass() {
+		return Collections.unmodifiableMap(maxDetourFactorByClass);
+	}
+
+	public void setMaxDetourFactorByClass(Map<String, Double> m) {
+		this.maxDetourFactorByClass = new HashMap<>(m);
+	}
+
+	public void clearMaxDetourFactorByClass() {
+		this.maxDetourFactorByClass = new HashMap<>();
 	}
 
 	@StringGetter("maxAbsoluteDetour")

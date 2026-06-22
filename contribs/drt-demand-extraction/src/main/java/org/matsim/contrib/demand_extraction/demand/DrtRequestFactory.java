@@ -483,7 +483,9 @@ public class DrtRequestFactory {
 	double[] budgetDerivedCaps(double budget, Person person, DrtRequest draft) {
 		double budgetDerivedDetour = budgetToConstraintsCalculator.budgetToMaxDetourTime(
 				budget, person, draft.directTravelTime, draft.directDistance, draft);
-		double configMaxDetour = draft.directTravelTime * (exmasConfig.getMaxDetourFactor() - 1.0);
+		double classFactor = exmasConfig.getMaxDetourFactorByClass().getOrDefault(
+				draft.requestTag, exmasConfig.getMaxDetourFactor());
+		double configMaxDetour = draft.directTravelTime * (classFactor - 1.0);
 		double maxAbsoluteDetour = Math.min(budgetDerivedDetour, configMaxDetour);
 		if (exmasConfig.getMaxAbsoluteDetour() != null) {
 			maxAbsoluteDetour = Math.min(maxAbsoluteDetour, (double) exmasConfig.getMaxAbsoluteDetour());
