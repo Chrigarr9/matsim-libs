@@ -383,11 +383,12 @@ public class DrtRequestFactory {
 					: c -> false;
 
 			double transferBuffer = exmasConfig.getHubTransferBufferSeconds();
+			double maxHubWait = exmasConfig.getMaxHubWaitSeconds();
 			java.util.function.Function<Person, LegRouter> routerFactory =
 					person -> (from, to, dep) -> modeRoutingCache.routeDrtOd(person, from, to, dep);
 
 			ExpansionResult result = applyVirtualExpansion(
-					requests, hubs, fleetSide, isInsideMetropole, transferBuffer,
+					requests, hubs, fleetSide, isInsideMetropole, transferBuffer, maxHubWait,
 					budgetValidator, routerFactory, bothSides);
 			requests = result.requests();
 			this.lastExpansionDropStats = result.dropStats();
@@ -765,7 +766,12 @@ public class DrtRequestFactory {
 	 * @param hubs                hub set for the current fleet run
 	 * @param fleetSide           RURAL or URBAN fleet
 	 * @param isInsideMetropole   spatial predicate for metropole boundary
-	 * @param transferBuffer      hub transfer slack in seconds
+	 * @param transferBuffer      hub transfer slack in seconds (legacy fixed-buffer
+	 *                            continuation split when {@code maxHubWait <= 0})
+	 * @param maxHubWait          hub-sync v1 continuation window width in seconds;
+	 *                            {@code <= 0} = legacy fixed-buffer behavior, {@code > 0}
+	 *                            widens the continuation departure window (see
+	 *                            {@link #expandConnecting}). NO effect on ACCESS legs.
 	 * @param budgetValidator     for per-leg re-finalization
 	 * @param routerFactory       produces a per-person {@link LegRouter}
 	 * @param bothSides           if true, emit BOTH leg sides (RURAL access +
@@ -780,6 +786,7 @@ public class DrtRequestFactory {
 			FleetSide fleetSide,
 			java.util.function.Predicate<Coord> isInsideMetropole,
 			double transferBuffer,
+			double maxHubWait,
 			BudgetValidator budgetValidator,
 			java.util.function.Function<Person, LegRouter> routerFactory,
 			boolean bothSides) {
@@ -806,7 +813,7 @@ public class DrtRequestFactory {
 				for (FleetSide side : sides) {
 					List<DrtRequest> copies = expandConnecting(
 							r, hubs, side, isInsideMetropole, network, router,
-							transferBuffer, dropStats);
+							transferBuffer, maxHubWait, dropStats);
 					int droppedExpansion = hubs.size() - copies.size();
 					int droppedBudget = 0;
 					for (DrtRequest copy : copies) {
@@ -936,7 +943,8 @@ public class DrtRequestFactory {
 				detour, slack, maxAbsDetour, kept, reason));
 	}
 
-	/** Convenience overload without diagnostics (used by unit tests). */
+	/** Convenience overload without diagnostics (used by unit tests). Defaults
+	 *  {@code maxHubWaitSeconds = 0.0} (legacy fixed-buffer continuation window). */
 	static List<DrtRequest> expandConnecting(
 			DrtRequest original,
 			List<HubSetLoader.Hub> hubs,
@@ -946,9 +954,10 @@ public class DrtRequestFactory {
 			LegRouter legRouter,
 			double transferBufferSeconds) {
 		return expandConnecting(original, hubs, fleetSide, isInsideMetropole,
-				network, legRouter, transferBufferSeconds, null);
+				network, legRouter, transferBufferSeconds, 0.0, null);
 	}
 
+	/** Convenience overload without diagnostics, with explicit maxHubWait. */
 	static List<DrtRequest> expandConnecting(
 			DrtRequest original,
 			List<HubSetLoader.Hub> hubs,
@@ -957,6 +966,43 @@ public class DrtRequestFactory {
 			Network network,
 			LegRouter legRouter,
 			double transferBufferSeconds,
+			double maxHubWaitSeconds) {
+		return expandConnecting(original, hubs, fleetSide, isInsideMetropole,
+				network, legRouter, transferBufferSeconds, maxHubWaitSeconds, null);
+	}
+
+	/** Diagnostics overload with legacy fixed-buffer continuation window
+	 *  ({@code maxHubWaitSeconds = 0.0}); kept for existing call sites/tests. */
+	static List<DrtRequest> expandConnecting(
+			DrtRequest original,
+			List<HubSetLoader.Hub> hubs,
+			FleetSide fleetSide,
+			Predicate<Coord> isInsideMetropole,
+			Network network,
+			LegRouter legRouter,
+			double transferBufferSeconds,
+			ExpansionDropStats stats) {
+		return expandConnecting(original, hubs, fleetSide, isInsideMetropole,
+				network, legRouter, transferBufferSeconds, 0.0, stats);
+	}
+
+	/**
+	 * @param maxHubWaitSeconds Paper-2 hub-sync v1: width (s) of the
+	 *        hub-departure window for CONTINUATION legs. {@code <= 0.0} reproduces
+	 *        the legacy fixed-buffer split exactly (backward-compat); {@code > 0.0}
+	 *        widens the continuation window to
+	 *        {@code [hubArrival, hubArrival + maxHubWaitSeconds]} with
+	 *        {@code transferWaitSeconds = 0}. Has NO effect on ACCESS legs.
+	 */
+	static List<DrtRequest> expandConnecting(
+			DrtRequest original,
+			List<HubSetLoader.Hub> hubs,
+			FleetSide fleetSide,
+			Predicate<Coord> isInsideMetropole,
+			Network network,
+			LegRouter legRouter,
+			double transferBufferSeconds,
+			double maxHubWaitSeconds,
 			ExpansionDropStats stats) {
 		if (!"connecting".equals(original.requestTag)) {
 			return List.of(original);
@@ -1074,22 +1120,48 @@ public class DrtRequestFactory {
 				 .hubLegRole(DrtRequest.HubLegRole.ACCESS_LEG)
 				 .transferWaitSeconds(0.0);
 			} else {
-				// CONTINUATION leg hub->D: scheduled after the rural leg's direct
-				// arrival plus the transfer buffer; keeps the full-trip deadline.
-				double shift = ruralLeg[0] + transferBufferSeconds;
-				if (original.requestTime + shift + urbanLeg[0] > original.latestArrival) {
-					if (stats != null) {
-						stats.temporalInfeasible++;
-						recordDetour(stats, original, fleetSide, hub, ruralLeg[0], urbanLeg[0],
-								transferBufferSeconds, false, "temporal_infeasible");
+				// CONTINUATION leg hub->D. The pax reaches the hub at hubArrival =
+				// requestTime + ruralLeg (direct, unbuffered).
+				double hubArrival = original.requestTime + ruralLeg[0];
+				if (maxHubWaitSeconds <= 0.0) {
+					// Legacy fixed-buffer split (backward-compat, byte-identical):
+					// departure pinned at hubArrival + buffer, buffer charged as wait.
+					double shift = ruralLeg[0] + transferBufferSeconds;
+					if (original.requestTime + shift + urbanLeg[0] > original.latestArrival) {
+						if (stats != null) {
+							stats.temporalInfeasible++;
+							recordDetour(stats, original, fleetSide, hub, ruralLeg[0], urbanLeg[0],
+									transferBufferSeconds, false, "temporal_infeasible");
+						}
+						continue;
 					}
-					continue;
+					b.directTravelTime(urbanLeg[0]).directDistance(urbanLeg[1])
+					 .requestTime(original.requestTime + shift)
+					 .earliestDeparture(original.earliestDeparture + shift)
+					 .hubLegRole(DrtRequest.HubLegRole.CONTINUATION_LEG)
+					 .transferWaitSeconds(transferBufferSeconds);
+				} else {
+					// Hub-sync v1 wide window: the continuation leg may depart anywhere
+					// in [hubArrival, hubArrival + maxHubWait], so the urban graph pools
+					// continuation bundles at different slots. The served wait is realized
+					// by bundling, not a fixed buffer (transferWait = 0).
+					if (hubArrival + urbanLeg[0] > original.latestArrival) { // can't make it even departing now
+						if (stats != null) {
+							stats.temporalInfeasible++;
+							recordDetour(stats, original, fleetSide, hub, ruralLeg[0], urbanLeg[0],
+									transferBufferSeconds, false, "temporal_infeasible");
+						}
+						continue;
+					}
+					double legLatestArrival = Math.min(original.latestArrival,
+							hubArrival + maxHubWaitSeconds + urbanLeg[0]);
+					b.directTravelTime(urbanLeg[0]).directDistance(urbanLeg[1])
+					 .requestTime(hubArrival)
+					 .earliestDeparture(hubArrival)
+					 .latestArrival(legLatestArrival)
+					 .hubLegRole(DrtRequest.HubLegRole.CONTINUATION_LEG)
+					 .transferWaitSeconds(0.0);
 				}
-				b.directTravelTime(urbanLeg[0]).directDistance(urbanLeg[1])
-				 .requestTime(original.requestTime + shift)
-				 .earliestDeparture(original.earliestDeparture + shift)
-				 .hubLegRole(DrtRequest.HubLegRole.CONTINUATION_LEG)
-				 .transferWaitSeconds(transferBufferSeconds);
 			}
 
 			DrtRequest copy = b.build();

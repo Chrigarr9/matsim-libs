@@ -144,7 +144,7 @@ class RunDemandExtractionPhase1WiringTest {
 				b.extensionParentsTopKMetric, b.extensionParentsSelectionRule,
 				b.extensionParentsMmrLambda, b.extensionParentsTier2NodeCap,
 				b.checkpointForkBelowMinDegree,
-				b.expandConnectingBothSides, b.maxDetourFactorByClass);
+				b.expandConnectingBothSides, b.maxDetourFactorByClass, b.maxHubWait);
 	}
 
 	/** Mutable builder so tests can override individual fields in a lambda. */
@@ -186,6 +186,7 @@ class RunDemandExtractionPhase1WiringTest {
 		boolean checkpointForkBelowMinDegree = false;
 		boolean expandConnectingBothSides = false;
 		java.util.Map<String, Double> maxDetourFactorByClass = new java.util.HashMap<>();
+		double maxHubWait = Double.NaN;
 	}
 
 }

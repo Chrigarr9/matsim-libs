@@ -190,6 +190,7 @@ public class ConnectingDirectRideEmissionTest {
         return harness.applyVirtualExpansion(
                 input, hubs, FleetSide.RURAL, metro,
                 /* transferBuffer */ 300.0,
+                /* maxHubWait */ 0.0,
                 harness.stubValidator,
                 routerFactory,
                 /* bothSides */ false).requests();

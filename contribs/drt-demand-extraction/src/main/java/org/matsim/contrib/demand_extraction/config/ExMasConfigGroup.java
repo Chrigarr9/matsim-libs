@@ -588,6 +588,25 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	 */
 	private double hubTransferBufferSeconds = 300.0;
 
+	/**
+	 * Paper-2 hub-sync v1 (Task 10b): width of the hub-departure/wait window for
+	 * CONTINUATION (hub→urban) virtual legs, in seconds. When {@code > 0}, the
+	 * continuation leg may depart anywhere in
+	 * {@code [hubArrival, hubArrival + maxHubWaitSeconds]} (where
+	 * {@code hubArrival = requestTime + ruralLegTime}), so the urban shareability
+	 * graph enumerates pooled continuation bundles at different departure slots —
+	 * the runtime feed for the v1 MIP per-bundle nesting constraint. The served
+	 * wait is realized by bundling, not a fixed buffer, so the continuation leg's
+	 * {@code transferWaitSeconds} is set to 0.
+	 *
+	 * <p><b>Default 0.0 = byte-identical to the legacy fixed-buffer behavior</b>
+	 * (the continuation departure stays pinned at
+	 * {@code requestTime + ruralLegTime + hubTransferBufferSeconds} with
+	 * {@code transferWaitSeconds = buffer}). Only used when virtual-trip expansion
+	 * is active (hubSetGeoJsonPath + fleetSide/both-sides set).
+	 */
+	private double maxHubWaitSeconds = 0.0;
+
     public ExMasConfigGroup() {
         super(GROUP_NAME);
     }
@@ -1655,6 +1674,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.hubTransferBufferSeconds = hubTransferBufferSeconds;
 	}
 
+	@StringGetter("maxHubWaitSeconds")
+	public double getMaxHubWaitSeconds() {
+		return maxHubWaitSeconds;
+	}
+
+	@StringSetter("maxHubWaitSeconds")
+	public void setMaxHubWaitSeconds(double maxHubWaitSeconds) {
+		this.maxHubWaitSeconds = maxHubWaitSeconds;
+	}
+
 	@StringGetter("requestClassificationsPath")
 	public String getRequestClassificationsPath() {
 		return requestClassificationsPath;
@@ -1875,6 +1904,14 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Paper-2 Ext-2: scheduled hub transfer slack in seconds; urban virtual legs are "
 				+ "shifted by ruralLegTime + buffer and charged the buffer as waiting disutility. "
 				+ "Default: 300.");
+
+		map.put("maxHubWaitSeconds",
+				"Paper-2 hub-sync v1: width (s) of the hub-departure/wait window for CONTINUATION "
+				+ "(hub->urban) virtual legs. When >0, the continuation leg may depart anywhere in "
+				+ "[hubArrival, hubArrival + maxHubWaitSeconds] (hubArrival = requestTime + ruralLegTime), "
+				+ "so the urban shareability graph enumerates pooled continuation bundles at different "
+				+ "departure slots; transferWaitSeconds is set to 0 (served wait realized by bundling). "
+				+ "Default 0.0 = byte-identical to the legacy fixed-buffer behavior.");
 
         return map;
     }

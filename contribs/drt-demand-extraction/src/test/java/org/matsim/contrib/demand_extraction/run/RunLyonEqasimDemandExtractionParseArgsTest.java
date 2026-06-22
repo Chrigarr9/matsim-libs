@@ -161,4 +161,26 @@ class RunLyonEqasimDemandExtractionParseArgsTest {
         assertEquals(1.05, p.maxDetourFactorByClass.get("connecting"), 0.0);
         assertEquals(1.3, p.maxDetourFactorByClass.get("rural_intra"), 0.0);
     }
+
+    @Test
+    void defaultLeavesMaxHubWaitUnset() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+        });
+        assertTrue(Double.isNaN(p.maxHubWait),
+                "max-hub-wait unset (NaN) by default → config default 0.0 applies");
+    }
+
+    @Test
+    void parsesMaxHubWait() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+                "--max-hub-wait", "300",
+        });
+        assertEquals(300.0, p.maxHubWait, 0.0);
+    }
 }

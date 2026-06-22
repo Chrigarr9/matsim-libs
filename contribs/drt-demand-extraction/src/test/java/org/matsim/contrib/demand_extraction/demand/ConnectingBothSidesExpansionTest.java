@@ -163,6 +163,7 @@ public class ConnectingBothSidesExpansionTest {
         return harness.applyVirtualExpansion(
                 input, hubs, fleetSide, metro,
                 /* transferBuffer */ 300.0,
+                /* maxHubWait */ 0.0,
                 harness.stubValidator,
                 routerFactory,
                 bothSides).requests();

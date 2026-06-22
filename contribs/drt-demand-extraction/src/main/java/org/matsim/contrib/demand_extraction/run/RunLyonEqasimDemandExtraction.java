@@ -120,6 +120,9 @@ public class RunLyonEqasimDemandExtraction {
 		/** Merged run (Paper-2): per-request-class max-detour-factor overrides
 		 *  (class-key → factor). Empty = use the single global maxDetourFactor. */
 		public final java.util.Map<String, Double> maxDetourFactorByClass;
+		/** Hub-sync v1 (Paper-2): continuation-leg hub-departure window width in
+		 *  seconds. NaN = unset (config default 0.0 = legacy fixed-buffer). */
+		public final double maxHubWait;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
@@ -140,7 +143,8 @@ public class RunLyonEqasimDemandExtraction {
 				double extensionParentsMmrLambda, long extensionParentsTier2NodeCap,
 				boolean checkpointForkBelowMinDegree,
 				boolean expandConnectingBothSides,
-				java.util.Map<String, Double> maxDetourFactorByClass) {
+				java.util.Map<String, Double> maxDetourFactorByClass,
+				double maxHubWait) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -176,6 +180,7 @@ public class RunLyonEqasimDemandExtraction {
 			this.checkpointForkBelowMinDegree = checkpointForkBelowMinDegree;
 			this.expandConnectingBothSides = expandConnectingBothSides;
 			this.maxDetourFactorByClass = maxDetourFactorByClass;
+			this.maxHubWait = maxHubWait;
 		}
 	}
 
@@ -215,6 +220,7 @@ public class RunLyonEqasimDemandExtraction {
 		boolean checkpointForkBelowMinDegree = false;
 		boolean expandConnectingBothSides = false;
 		java.util.Map<String, Double> maxDetourFactorByClass = new java.util.HashMap<>();
+		double maxHubWait = Double.NaN;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -257,6 +263,7 @@ public class RunLyonEqasimDemandExtraction {
 				case "--checkpoint-fork-below-min-degree" -> checkpointForkBelowMinDegree = true;
 				case "--expand-connecting-both-sides" -> expandConnectingBothSides = true;
 				case "--max-detour-factor-by-class" -> maxDetourFactorByClass = parseClassFactorMap(args[++i]);
+				case "--max-hub-wait" -> maxHubWait = Double.parseDouble(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -270,7 +277,7 @@ public class RunLyonEqasimDemandExtraction {
 				extensionParentsTopK, extensionParentsTopKMinDegree, extensionParentsTopKMetric,
 				extensionParentsSelectionRule, extensionParentsMmrLambda, extensionParentsTier2NodeCap,
 				checkpointForkBelowMinDegree,
-				expandConnectingBothSides, maxDetourFactorByClass);
+				expandConnectingBothSides, maxDetourFactorByClass, maxHubWait);
 	}
 
 	/**
@@ -625,6 +632,10 @@ public class RunLyonEqasimDemandExtraction {
 		if (!p.maxDetourFactorByClass.isEmpty()) {
 			log.info("  Override: maxDetourFactorByClass = {}", p.maxDetourFactorByClass);
 			exMas.setMaxDetourFactorByClass(p.maxDetourFactorByClass);
+		}
+		if (!Double.isNaN(p.maxHubWait)) {
+			log.info("  Override: maxHubWaitSeconds = {}", p.maxHubWait);
+			exMas.setMaxHubWaitSeconds(p.maxHubWait);
 		}
 		if (p.maxOrderingNodes >= 0) {
 			log.info("  Override: maxOrderingNodesAfterFirstValid = {}", p.maxOrderingNodes);
