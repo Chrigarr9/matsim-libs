@@ -8,6 +8,11 @@ import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.scoring.DemandExtractionScoringAdapter;
 import org.matsim.contrib.demand_extraction.scoring.TripScoreRequest;
 import org.matsim.contrib.demand_extraction.scoring.TripScoreResult;
+import org.matsim.contrib.drt.run.DrtConfigGroup;
+import org.matsim.contrib.drt.run.MultiModeDrtConfigGroup;
+import org.matsim.contrib.dvrp.run.DvrpConfigGroup;
+import org.matsim.core.config.Config;
+import org.matsim.core.config.ConfigUtils;
 
 import java.util.Map;
 
@@ -287,5 +292,80 @@ class DrtRequestFactoryPerClassDetourTest {
         cfg.clearMaxDetourFactorByClass();
         assertTrue(cfg.getMaxDetourFactorByClass().isEmpty(),
                 "after clear, map must be empty");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: production DrtRequestFactory.budgetDerivedCaps per-class path
+    // -----------------------------------------------------------------------
+
+    /**
+     * Calls the REAL (non-overridden) {@link DrtRequestFactory#budgetDerivedCaps}
+     * on a plain {@code DrtRequestFactory} instance — not the harness subclass.
+     *
+     * <p>Strategy: provide a {@link BudgetToConstraintsCalculator} subclass whose
+     * {@code budgetToMaxDetourTime} returns a very large value (1e9 s), so
+     * {@code min(budgetDerived, configDerived) == configDerived} and the
+     * per-class config map is always the binding constraint.
+     *
+     * <p>This test would fail if production {@code budgetDerivedCaps} were
+     * reverted to use only {@code exmasConfig.getMaxDetourFactor()} (the global
+     * factor) instead of the per-class map lookup.
+     */
+    @Test
+    void productionBudgetDerivedCaps_usesPerClassMapForConnectingTag() {
+        ExMasConfigGroup cfg = buildExMasConfig();
+
+        // Minimal MATSim Config with one DRT mode — satisfies BudgetToConstraintsCalculator's constructor.
+        Config matsimConfig = ConfigUtils.createConfig(
+                new MultiModeDrtConfigGroup(), new DvrpConfigGroup());
+        ConfigUtils.addOrGetModule(matsimConfig, ExMasConfigGroup.class);
+        DrtConfigGroup drt = new DrtConfigGroup();
+        drt.setMode("drt");
+        MultiModeDrtConfigGroup.get(matsimConfig).addDrtConfigGroup(drt);
+
+        // Stub: budgetToMaxDetourTime returns 1e9 s so the config cap always binds.
+        // enableBudgetAwareConstraints is false (default) → walk/wait stay 0; only caps[0] matters.
+        BudgetToConstraintsCalculator generousCalculator =
+                new BudgetToConstraintsCalculator(matsimConfig, cfg, fakeAdapter()) {
+                    @Override
+                    public double budgetToMaxDetourTime(double budget, Person person,
+                            double directTravelTime, double directDistance, DrtRequest request) {
+                        return 1_000_000_000.0; // generous — config cap always binds
+                    }
+                };
+
+        BudgetValidator validator = new BudgetValidator(fakeAdapter(), cfg, 1.34) {
+            @Override public double calculateBudget(DrtRequest r) { return 1000.0; }
+        };
+
+        // Plain production DrtRequestFactory — NOT the PerClassDetourHarness subclass.
+        DrtRequestFactory productionFactory = new DrtRequestFactory(
+                cfg,
+                /* modeRoutingCache */ null,
+                /* chainIdentifier */ null,
+                /* commuteIdentifier */ null,
+                /* network */ null,
+                generousCalculator,
+                validator,
+                /* flexibilityCalculator */ null);
+
+        Person person = org.matsim.core.population.PopulationUtils.getFactory()
+                .createPerson(Id.createPersonId("p_prod_test"));
+
+        // --- Case 1: "connecting" tag (in map, factor 1.05 < global 1.5) ---
+        DrtRequest connectingDraft = buildDraft("connecting", DIRECT_TRAVEL_TIME);
+        double[] caps = productionFactory.budgetDerivedCaps(1000.0, person, connectingDraft);
+        double expectedConnecting = DIRECT_TRAVEL_TIME * (CONNECTING_FACTOR - 1.0); // 30 s
+        assertEquals(expectedConnecting, caps[0], 1e-9,
+                "production budgetDerivedCaps: connecting tag must use per-class factor 1.05 → 30 s");
+        assertEquals(CONNECTING_FACTOR, 1.0 + caps[0] / DIRECT_TRAVEL_TIME, 1e-9,
+                "production effectiveMaxDetourFactor for connecting must be exactly 1.05");
+
+        // --- Case 2: absent tag fallback to global 1.5 ---
+        DrtRequest absentDraft = buildDraft("urban_intra", DIRECT_TRAVEL_TIME);
+        double[] capsAbsent = productionFactory.budgetDerivedCaps(1000.0, person, absentDraft);
+        double expectedGlobal = DIRECT_TRAVEL_TIME * (GLOBAL_MAX_DETOUR - 1.0); // 300 s
+        assertEquals(expectedGlobal, capsAbsent[0], 1e-9,
+                "production budgetDerivedCaps: absent tag must fall back to global factor 1.5 → 300 s");
     }
 }
