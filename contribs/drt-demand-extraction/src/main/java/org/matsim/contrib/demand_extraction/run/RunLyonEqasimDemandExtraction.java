@@ -114,6 +114,12 @@ public class RunLyonEqasimDemandExtraction {
 		/** Plan A3 fork: when true, a resume accepts a pre-minDegree checkpoint under
 		 *  changed parent-pruning knobs. Corresponds to {@code --checkpoint-fork-below-min-degree}. */
 		public final boolean checkpointForkBelowMinDegree;
+		/** Merged run (Paper-2): expand each connecting commuter on BOTH fleet sides
+		 *  (rural ACCESS ∪ urban CONTINUATION legs). Default false. */
+		public final boolean expandConnectingBothSides;
+		/** Merged run (Paper-2): per-request-class max-detour-factor overrides
+		 *  (class-key → factor). Empty = use the single global maxDetourFactor. */
+		public final java.util.Map<String, Double> maxDetourFactorByClass;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
@@ -132,7 +138,9 @@ public class RunLyonEqasimDemandExtraction {
 				ExMasConfigGroup.PruningQualityMetric extensionParentsTopKMetric,
 				ExMasConfigGroup.ExtensionParentsSelectionRule extensionParentsSelectionRule,
 				double extensionParentsMmrLambda, long extensionParentsTier2NodeCap,
-				boolean checkpointForkBelowMinDegree) {
+				boolean checkpointForkBelowMinDegree,
+				boolean expandConnectingBothSides,
+				java.util.Map<String, Double> maxDetourFactorByClass) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -166,6 +174,8 @@ public class RunLyonEqasimDemandExtraction {
 			this.extensionParentsMmrLambda = extensionParentsMmrLambda;
 			this.extensionParentsTier2NodeCap = extensionParentsTier2NodeCap;
 			this.checkpointForkBelowMinDegree = checkpointForkBelowMinDegree;
+			this.expandConnectingBothSides = expandConnectingBothSides;
+			this.maxDetourFactorByClass = maxDetourFactorByClass;
 		}
 	}
 
@@ -203,6 +213,8 @@ public class RunLyonEqasimDemandExtraction {
 		double extensionParentsMmrLambda = 0.0;
 		long extensionParentsTier2NodeCap = 0L;
 		boolean checkpointForkBelowMinDegree = false;
+		boolean expandConnectingBothSides = false;
+		java.util.Map<String, Double> maxDetourFactorByClass = new java.util.HashMap<>();
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -243,6 +255,8 @@ public class RunLyonEqasimDemandExtraction {
 				case "--extension-parents-mmr-lambda" -> extensionParentsMmrLambda = Double.parseDouble(args[++i]);
 				case "--extension-parents-tier2-node-cap" -> extensionParentsTier2NodeCap = Long.parseLong(args[++i]);
 				case "--checkpoint-fork-below-min-degree" -> checkpointForkBelowMinDegree = true;
+				case "--expand-connecting-both-sides" -> expandConnectingBothSides = true;
+				case "--max-detour-factor-by-class" -> maxDetourFactorByClass = parseClassFactorMap(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -255,7 +269,32 @@ public class RunLyonEqasimDemandExtraction {
 				maxOrderingNodes,
 				extensionParentsTopK, extensionParentsTopKMinDegree, extensionParentsTopKMetric,
 				extensionParentsSelectionRule, extensionParentsMmrLambda, extensionParentsTier2NodeCap,
-				checkpointForkBelowMinDegree);
+				checkpointForkBelowMinDegree,
+				expandConnectingBothSides, maxDetourFactorByClass);
+	}
+
+	/**
+	 * Parses a {@code k=v,k=v} per-class detour-factor spec (e.g.
+	 * {@code "connecting=1.3,rural_intra=1.2"}) into a class-key → factor map.
+	 * Whitespace around keys/values is trimmed; an empty / blank spec yields an empty map.
+	 */
+	private static java.util.Map<String, Double> parseClassFactorMap(String spec) {
+		java.util.Map<String, Double> out = new java.util.HashMap<>();
+		if (spec == null || spec.isBlank()) {
+			return out;
+		}
+		for (String entry : spec.split(",")) {
+			if (entry.isBlank()) {
+				continue;
+			}
+			String[] kv = entry.split("=", 2);
+			if (kv.length != 2) {
+				throw new IllegalArgumentException(
+						"Invalid --max-detour-factor-by-class entry (expected k=v): " + entry);
+			}
+			out.put(kv[0].trim(), Double.parseDouble(kv[1].trim()));
+		}
+		return out;
 	}
 
 	/**
@@ -578,6 +617,14 @@ public class RunLyonEqasimDemandExtraction {
 		if (p.metropolePolygonPath != null) {
 			log.info("  Override: metropolePolygonPath = {}", p.metropolePolygonPath);
 			exMas.setMetropolePolygonPath(p.metropolePolygonPath);
+		}
+		if (p.expandConnectingBothSides) {
+			log.info("  Override: expandConnectingBothSides = true (merged both-sides run)");
+			exMas.setExpandConnectingBothSides(true);
+		}
+		if (!p.maxDetourFactorByClass.isEmpty()) {
+			log.info("  Override: maxDetourFactorByClass = {}", p.maxDetourFactorByClass);
+			exMas.setMaxDetourFactorByClass(p.maxDetourFactorByClass);
 		}
 		if (p.maxOrderingNodes >= 0) {
 			log.info("  Override: maxOrderingNodesAfterFirstValid = {}", p.maxOrderingNodes);

@@ -115,4 +115,50 @@ class RunLyonEqasimDemandExtractionParseArgsTest {
         });
         assertEquals("/tmp/metropole.shp", p.metropolePolygonPath);
     }
+
+    @Test
+    void defaultsLeaveExpandConnectingBothSidesFalse() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+        });
+        assertFalse(p.expandConnectingBothSides,
+                "expand-connecting-both-sides off by default");
+    }
+
+    @Test
+    void parsesExpandConnectingBothSidesFlag() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+                "--expand-connecting-both-sides",
+        });
+        assertTrue(p.expandConnectingBothSides);
+    }
+
+    @Test
+    void defaultsLeaveMaxDetourFactorByClassEmpty() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+        });
+        assertTrue(p.maxDetourFactorByClass.isEmpty(),
+                "max-detour-factor-by-class empty by default");
+    }
+
+    @Test
+    void parsesMaxDetourFactorByClassSpec() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+                "--max-detour-factor-by-class", "connecting=1.05,rural_intra=1.3",
+        });
+        assertEquals(2, p.maxDetourFactorByClass.size());
+        assertEquals(1.05, p.maxDetourFactorByClass.get("connecting"), 0.0);
+        assertEquals(1.3, p.maxDetourFactorByClass.get("rural_intra"), 0.0);
+    }
 }
