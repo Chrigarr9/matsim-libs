@@ -313,6 +313,8 @@ public final class ExMasCsvWriter {
 		// chained_timebin Task 4: `reposTimeMeanOutgoing` (mean outgoing repos
 		// time across successors) is appended AFTER peak_pax — required by the
 		// chained time-bin repos-time resolver.
+		// Task 3 (DuckDB tagging): `hubLegRoles` is appended AFTER hubIds and
+		// BEFORE peak_pax so downstream DuckDB can tag each pax leg role.
 		writer.write("rideIndex,degree,kind,variant," +
 				"requestIndices,personIds,groupIds,requestTimes,isCommutes,isEducations," +
 				"originsOrdered,destinationsOrdered," +
@@ -321,7 +323,7 @@ public final class ExMasCsvWriter {
 				"pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty," +
 				"dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty," +
 				"accessWalkDistances,egressWalkDistances," +
-				"requestTags,hubIds," +
+				"requestTags,hubIds,hubLegRoles," +
 				"peak_pax,reposTimeMeanOutgoing");
 		writer.newLine();
 	}
@@ -365,6 +367,10 @@ public final class ExMasCsvWriter {
 						.toArray(String[]::new));
 				String hubIds = formatStringArray(Arrays.stream(requests)
 						.map(r -> r.hubId != null ? r.hubId : "")
+						.toArray(String[]::new));
+				// Task 3 (DuckDB tagging): per-pax hub leg role, mirrors hubIds exactly.
+				String hubLegRoles = formatStringArray(Arrays.stream(requests)
+						.map(r -> r.hubLegRole != null ? r.hubLegRole.name() : DrtRequest.HubLegRole.NONE.name())
 						.toArray(String[]::new));
 
 				// Format origin/destination sequences
@@ -428,7 +434,7 @@ public final class ExMasCsvWriter {
 				}
 
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s,%d,%.2f",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s,%s,%d,%.2f",
 						ride.getIndex(), ride.getDegree(), ride.getKind(), variant,
 						reqIndices, personIds, groupIds, requestTimes, isCommutes, isEducations,
 						origins, destinations,
@@ -438,7 +444,7 @@ public final class ExMasCsvWriter {
 						pickupLinkId, pickupX, pickupY, pickupPenalty,
 						dropoffLinkId, dropoffX, dropoffY, dropoffPenalty,
 						accessWalks, egressWalks,
-						requestTags, hubIds,
+						requestTags, hubIds, hubLegRoles,
 						ride.getPeakPax(), ride.getReposTimeMeanOutgoing()));
 				writer.newLine();
 	}
@@ -653,6 +659,8 @@ public final class ExMasCsvWriter {
 			// occupancy over the stop sequence) is appended AFTER
 			// requestTags/hubIds — required by the class-aware path cover
 			// (rev-3 §7.4b).
+			// Task 3 (DuckDB tagging): `hubLegRoles` is appended AFTER hubIds
+			// and BEFORE peak_pax so downstream DuckDB can tag each pax leg role.
 			writer.write("rideIndex,degree," +
 					"sourceRideIndices," +
 					"stopSequence,stopSequenceX,stopSequenceY," +
@@ -660,7 +668,7 @@ public final class ExMasCsvWriter {
 					"passengerTotalWalkDistances,passengerInVehicleTimes," +
 					"totalTravelTime,totalDistance,totalVKT," +
 					"passengerDelays,remainingBudgets," +
-					"requestTags,hubIds," +
+					"requestTags,hubIds,hubLegRoles," +
 					"peak_pax");
 			writer.newLine();
 
@@ -721,9 +729,13 @@ public final class ExMasCsvWriter {
 				String hubIdsStr = formatStringArray(Arrays.stream(paxRequests)
 						.map(r -> r.hubId != null ? r.hubId : "")
 						.toArray(String[]::new));
+				// Task 3 (DuckDB tagging): per-pax hub leg role, mirrors hubIdsStr exactly.
+				String hubLegRolesStr = formatStringArray(Arrays.stream(paxRequests)
+						.map(r -> r.hubLegRole != null ? r.hubLegRole.name() : DrtRequest.HubLegRole.NONE.name())
+						.toArray(String[]::new));
 
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.4f,%s,%s,%s,%s,%d",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.4f,%s,%s,%s,%s,%s,%d",
 						ride.getIndex(), ride.getDegree(),
 						sourceRideIndicesStr,
 						stopSequenceStr, stopSequenceXStr, stopSequenceYStr,
@@ -731,7 +743,7 @@ public final class ExMasCsvWriter {
 						totalWalkDistances, inVehicleTimes,
 						totalTravelTime, totalDistance, totalVKT,
 						delaysStr, remainingBudgetsStr,
-						requestTagsStr, hubIdsStr,
+						requestTagsStr, hubIdsStr, hubLegRolesStr,
 						ride.getPeakPax()));
 				writer.newLine();
 			}

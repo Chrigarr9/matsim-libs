@@ -68,11 +68,12 @@ class ExMasCsvWriterPeakPaxTest {
         assertEquals(2, lines.size(), "expected header + 1 data row");
 
         String header = lines.get(0);
-        // peak_pax is appended after requestTags,hubIds — never inserted in the
-        // middle. (reposTimeMeanOutgoing follows it as the final column, so match
-        // by adjacency/name rather than asserting peak_pax is dead last.)
-        assertTrue(header.contains(",requestTags,hubIds,peak_pax"),
-                "Header must contain requestTags,hubIds,peak_pax in order — was: " + header);
+        // peak_pax is appended after requestTags,hubIds,hubLegRoles — never
+        // inserted in the middle. (reposTimeMeanOutgoing follows it as the
+        // final column, so match by adjacency/name rather than asserting
+        // peak_pax is dead last.)
+        assertTrue(header.contains(",requestTags,hubIds,hubLegRoles,peak_pax"),
+                "Header must contain requestTags,hubIds,hubLegRoles,peak_pax in order — was: " + header);
 
         String[] headerCols = header.split(",", -1);
         int peakIdx = java.util.Arrays.asList(headerCols).indexOf("peak_pax");
@@ -145,8 +146,8 @@ class ExMasCsvWriterPeakPaxTest {
         assertEquals(2, lines.size(), "expected header + 1 data row");
 
         String header = lines.get(0);
-        assertTrue(header.endsWith(",requestTags,hubIds,peak_pax"),
-                "Header must end with requestTags,hubIds,peak_pax — was: " + header);
+        assertTrue(header.endsWith(",requestTags,hubIds,hubLegRoles,peak_pax"),
+                "Header must end with requestTags,hubIds,hubLegRoles,peak_pax — was: " + header);
 
         String[] headerCols = header.split(",", -1);
         int peakIdx = headerCols.length - 1;

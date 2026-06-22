@@ -82,20 +82,21 @@ class ExMasCsvWriterHyperPoolExtension2ColumnsTest {
         assertEquals(2, lines.size());
 
         String header = lines.get(0);
-        // requestTags,hubIds remain APPENDED — never inserted in the middle.
-        // Task 7.2 added peak_pax as a per-ride column AFTER hubIds. The
-        // per-pax pair (requestTags, hubIds) still ends at headerCols[len-2]/[len-3].
-        assertTrue(header.contains(",requestTags,hubIds,"),
-                "Header must contain ,requestTags,hubIds, in order — was: " + header);
+        // requestTags,hubIds,hubLegRoles remain APPENDED — never inserted in the
+        // middle. Task 7.2 added peak_pax AFTER hubIds; Task 3 inserted
+        // hubLegRoles between hubIds and peak_pax. The per-pax triple
+        // (requestTags, hubIds, hubLegRoles) sits immediately before peak_pax.
+        assertTrue(header.contains(",requestTags,hubIds,hubLegRoles,"),
+                "Header must contain ,requestTags,hubIds,hubLegRoles, in order — was: " + header);
 
         // Pre-existing leading columns survive untouched (sanity check).
         assertTrue(header.startsWith("rideIndex,degree,"),
                 "Existing leading header schema unchanged — was: " + header);
 
         String[] headerCols = header.split(",", -1);
-        // requestTags / hubIds sit immediately before peak_pax (Task 7.2).
-        int tagsIdx = headerCols.length - 3;
-        int hubsIdx = headerCols.length - 2;
+        // requestTags / hubIds / hubLegRoles sit immediately before peak_pax.
+        int tagsIdx = headerCols.length - 4;
+        int hubsIdx = headerCols.length - 3;
         assertEquals("requestTags", headerCols[tagsIdx]);
         assertEquals("hubIds", headerCols[hubsIdx]);
 
