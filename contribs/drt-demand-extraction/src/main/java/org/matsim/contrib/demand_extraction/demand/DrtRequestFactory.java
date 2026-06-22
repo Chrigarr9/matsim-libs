@@ -137,12 +137,18 @@ public class DrtRequestFactory {
 		// cohort downstream.
 		String hubSetPath = exmasConfig.getHubSetGeoJsonPath();
 		FleetSide fleetSide = exmasConfig.getFleetSide();
-		if (hubSetPath != null && fleetSide == null) {
+		// Paper-2 merged run: when both-sides expansion is on, fleetSide is
+		// legitimately null (the hub fan-out emits BOTH leg sides per hub via two
+		// internal expandConnecting calls, and off-fleet drop is skipped so both
+		// intra zones are kept).
+		boolean bothSides = exmasConfig.isExpandConnectingBothSides();
+		if (hubSetPath != null && fleetSide == null && !bothSides) {
 			throw new IllegalStateException(
 					"ExMasConfigGroup.hubSetGeoJsonPath is set (" + hubSetPath
-					+ ") but fleetSide is null. Both must be configured together to "
-					+ "enable virtual-trip expansion. Set ExMasConfigGroup.fleetSide "
-					+ "to RURAL or URBAN, or clear hubSetGeoJsonPath to disable "
+					+ ") but fleetSide is null and expandConnectingBothSides is false. "
+					+ "Virtual-trip expansion needs either a fleetSide (RURAL or URBAN, "
+					+ "single-side) OR expandConnectingBothSides=true (merged both-sides "
+					+ "run). Set one of those, or clear hubSetGeoJsonPath to disable "
 					+ "expansion.");
 		}
 		if (hubSetPath != null && hubs == null) {
@@ -371,7 +377,7 @@ public class DrtRequestFactory {
 		// (rural_intra, urban_intra, null) pass through unchanged. Skipped
 		// entirely when hubs == null (Kelheim default and any pre-Extension-2
 		// path), preserving prior request-list contents exactly.
-		if (hubs != null && fleetSide != null) {
+		if (hubs != null && (fleetSide != null || bothSides)) {
 			Predicate<Coord> isInsideMetropole = (expansionMetropoleSource != null)
 					? expansionMetropoleSource::containsPoint
 					: c -> false;
@@ -382,13 +388,14 @@ public class DrtRequestFactory {
 
 			ExpansionResult result = applyVirtualExpansion(
 					requests, hubs, fleetSide, isInsideMetropole, transferBuffer,
-					budgetValidator, routerFactory);
+					budgetValidator, routerFactory, bothSides);
 			requests = result.requests();
 			this.lastExpansionDropStats = result.dropStats();
 			log.info("Virtual-trip expansion: {} connecting -> {} virtual legs "
 					+ "(|H|={}, fleetSide={}, dropped {} at expansion [{} unroutable rural-leg, "
 					+ "{} unroutable urban-leg, {} temporal-infeasible], {} non-positive leg budget)",
-					result.connectingExpanded(), result.virtualEmitted(), hubs.size(), fleetSide,
+					result.connectingExpanded(), result.virtualEmitted(), hubs.size(),
+					bothSides ? "BOTH" : fleetSide,
 					result.virtualDroppedExpansion(), result.dropStats().unroutableRuralLeg,
 					result.dropStats().unroutableUrbanLeg, result.dropStats().temporalInfeasible,
 					result.virtualDroppedBudget());
@@ -732,11 +739,20 @@ public class DrtRequestFactory {
 	 *
 	 * <p>For each request tagged {@code "connecting"}:
 	 * <ol>
-	 *   <li>Fan out to {@code |hubs|} hub-leg copies via {@link #expandConnecting}.</li>
+	 *   <li>Fan out to {@code |hubs|} hub-leg copies via {@link #expandConnecting},
+	 *       once per relevant {@link FleetSide}. In single-side mode
+	 *       ({@code bothSides == false}) this is just {@code fleetSide}; in
+	 *       merged both-sides mode ({@code bothSides == true}) it is BOTH
+	 *       {@link FleetSide#RURAL} (access O→hub legs) AND {@link FleetSide#URBAN}
+	 *       (continuation hub→D legs), unioned — the Task-5 decision (call
+	 *       {@code expandConnecting} twice and concatenate, NOT a new
+	 *       {@code FleetSide.BOTH}). The shared {@code dropStats} accumulates
+	 *       across both calls (counters + detour rows).</li>
 	 *   <li>Finalize each hub copy via {@link #finalizeVirtualLeg}; drop non-positive.</li>
 	 *   <li>Emit the original O→D request retagged {@code "connecting-direct"} —
 	 *       preserving origin/destination/budget/time-windows intact — so the
-	 *       downstream MIP can choose hub-vs-direct.</li>
+	 *       downstream MIP can choose hub-vs-direct. Emitted EXACTLY ONCE per
+	 *       connecting request (outside the side loop), never once per side.</li>
 	 * </ol>
 	 * Non-connecting requests pass through unchanged.
 	 * The returned list is renumbered so {@code index == position}.
@@ -752,6 +768,11 @@ public class DrtRequestFactory {
 	 * @param transferBuffer      hub transfer slack in seconds
 	 * @param budgetValidator     for per-leg re-finalization
 	 * @param routerFactory       produces a per-person {@link LegRouter}
+	 * @param bothSides           if true, emit BOTH leg sides (RURAL access +
+	 *                            URBAN continuation) per hub by calling
+	 *                            {@link #expandConnecting} twice and unioning;
+	 *                            if false, emit only {@code fleetSide}'s leg side
+	 *                            (single-side, backward-compatible)
 	 */
 	ExpansionResult applyVirtualExpansion(
 			List<DrtRequest> requests,
@@ -760,7 +781,8 @@ public class DrtRequestFactory {
 			java.util.function.Predicate<Coord> isInsideMetropole,
 			double transferBuffer,
 			BudgetValidator budgetValidator,
-			java.util.function.Function<Person, LegRouter> routerFactory) {
+			java.util.function.Function<Person, LegRouter> routerFactory,
+			boolean bothSides) {
 
 		ExpansionDropStats dropStats = new ExpansionDropStats();
 		int connectingExpanded = 0;
@@ -773,20 +795,30 @@ public class DrtRequestFactory {
 			if ("connecting".equals(r.requestTag)) {
 				Person person = r.getScoringContext().person();
 				LegRouter router = routerFactory.apply(person);
-				List<DrtRequest> copies = expandConnecting(
-						r, hubs, fleetSide, isInsideMetropole, network, router,
-						transferBuffer, dropStats);
-				int droppedExpansion = hubs.size() - copies.size();
-				int droppedBudget = 0;
-				for (DrtRequest copy : copies) {
-					DrtRequest done = finalizeVirtualLeg(copy, person, budgetValidator);
-					if (done == null) { droppedBudget++; continue; }
-					expanded.add(done);
-					virtualEmitted++;
+				// Which leg side(s) to emit. Both-sides (merged run): RURAL access
+				// legs ∪ URBAN continuation legs — call expandConnecting once per
+				// side and union (Task-5 decision; NOT a FleetSide.BOTH). The
+				// shared dropStats accumulates across both calls. Single-side:
+				// just the configured fleetSide.
+				List<FleetSide> sides = bothSides
+						? List.of(FleetSide.RURAL, FleetSide.URBAN)
+						: (fleetSide != null ? List.of(fleetSide) : List.<FleetSide>of());
+				for (FleetSide side : sides) {
+					List<DrtRequest> copies = expandConnecting(
+							r, hubs, side, isInsideMetropole, network, router,
+							transferBuffer, dropStats);
+					int droppedExpansion = hubs.size() - copies.size();
+					int droppedBudget = 0;
+					for (DrtRequest copy : copies) {
+						DrtRequest done = finalizeVirtualLeg(copy, person, budgetValidator);
+						if (done == null) { droppedBudget++; continue; }
+						expanded.add(done);
+						virtualEmitted++;
+					}
+					virtualDroppedExpansion += droppedExpansion;
+					virtualDroppedBudget += droppedBudget;
 				}
-				virtualDroppedExpansion += droppedExpansion;
-				virtualDroppedBudget += droppedBudget;
-				connectingExpanded++;
+				connectingExpanded++;   // ONCE per request, not per side
 				// Emit the connecting-direct ride: the original O→D request
 				// retagged so the downstream MIP can choose hub-vs-direct.
 				// No re-finalization: budget, time-windows, and caps are

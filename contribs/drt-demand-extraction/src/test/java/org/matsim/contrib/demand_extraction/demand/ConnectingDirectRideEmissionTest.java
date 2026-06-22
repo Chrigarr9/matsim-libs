@@ -191,7 +191,8 @@ public class ConnectingDirectRideEmissionTest {
                 input, hubs, FleetSide.RURAL, metro,
                 /* transferBuffer */ 300.0,
                 harness.stubValidator,
-                routerFactory).requests();
+                routerFactory,
+                /* bothSides */ false).requests();
     }
 
     // -------------------------------------------------------------------------

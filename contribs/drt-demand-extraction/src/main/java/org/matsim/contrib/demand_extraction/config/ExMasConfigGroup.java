@@ -389,6 +389,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// When enabled, connection cache is automatically written
 	private boolean calcPredecessors = true;
 
+	// Paper-2 merged run: emit BOTH connecting leg-sides (access O->hub AND
+	// continuation hub->D) per hub for each connecting commuter, in one run,
+	// by calling expandConnecting twice (RURAL then URBAN) and unioning. Lets
+	// fleetSide stay null so both zones' intra rides are kept (no off-fleet
+	// drop). Default false preserves single-side (per-fleetSide) behavior.
+	private boolean expandConnectingBothSides = false;
+
 	// Maximum time gap (seconds) between predecessor end and successor start.
 	// null/omitted => use this default (1800 s = 30 min), -1 => unbounded (explicit).
 	// 1800 s covers the realistic empty-vehicle redeployment window; at 100% an
@@ -1329,6 +1336,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.calcPredecessors = calcPredecessors;
 	}
 
+	@StringGetter("expandConnectingBothSides")
+	public boolean isExpandConnectingBothSides() {
+		return expandConnectingBothSides;
+	}
+
+	@StringSetter("expandConnectingBothSides")
+	public void setExpandConnectingBothSides(boolean expandConnectingBothSides) {
+		this.expandConnectingBothSides = expandConnectingBothSides;
+	}
+
 	@StringGetter("predecessorsFilterTime")
 	public Double getPredecessorsFilterTime() {
 		return predecessorsFilterTime;
@@ -1766,6 +1783,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("calcShapleyValues", "Calculate Shapley values for each ride (distance contribution per passenger). Default: true");
 		map.put("calcPredecessors",
 				"Calculate predecessor/successor relationships between rides. When enabled, connection cache is automatically written. Default: true");
+		map.put("expandConnectingBothSides",
+				"Paper-2 merged run: emit BOTH connecting leg-sides (access O->hub AND continuation hub->D) "
+				+ "per hub for each connecting commuter in one run. Enables hub expansion with fleetSide null "
+				+ "(both intra zones kept). Default: false");
 		map.put("predecessorsFilterTime",
 				"Maximum time gap (seconds) between predecessor end and successor start. " +
 				"Default: 1800 s (30 min) — covers realistic empty-vehicle redeployments and keeps the " +
