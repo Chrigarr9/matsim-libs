@@ -366,57 +366,32 @@ public class DrtRequestFactory {
 
 		// Paper-2 Extension 2 — virtual-trip expansion (post-construction pass).
 		// For each request tagged "connecting", emit |H| copies (one per hub)
-		// with the cross-boundary endpoint replaced by the hub coord. Other
-		// tags (rural_intra, urban_intra, null) pass through unchanged. Skipped
+		// with the cross-boundary endpoint replaced by the hub coord, plus the
+		// original O→D request retagged "connecting-direct". Other tags
+		// (rural_intra, urban_intra, null) pass through unchanged. Skipped
 		// entirely when hubs == null (Kelheim default and any pre-Extension-2
 		// path), preserving prior request-list contents exactly.
-		int connectingExpanded = 0;
-		int virtualEmitted = 0;
-		int virtualDroppedExpansion = 0;
-		int virtualDroppedBudget = 0;
 		if (hubs != null && fleetSide != null) {
 			Predicate<Coord> isInsideMetropole = (expansionMetropoleSource != null)
 					? expansionMetropoleSource::containsPoint
 					: c -> false;
 
 			double transferBuffer = exmasConfig.getHubTransferBufferSeconds();
-			ExpansionDropStats dropStats = new ExpansionDropStats();
+			java.util.function.Function<Person, LegRouter> routerFactory =
+					person -> (from, to, dep) -> modeRoutingCache.routeDrtOd(person, from, to, dep);
 
-			List<DrtRequest> expanded = new ArrayList<>(requests.size());
-			for (DrtRequest r : requests) {
-				if ("connecting".equals(r.requestTag)) {
-					Person person = r.getScoringContext().person();
-					LegRouter router = (from, to, dep) ->
-							modeRoutingCache.routeDrtOd(person, from, to, dep);
-					List<DrtRequest> copies = expandConnecting(
-							r, hubs, fleetSide, isInsideMetropole, network, router,
-							transferBuffer, dropStats);
-					// expandConnecting drops hubs for routing failure OR temporal
-					// infeasibility (both manifest as fewer copies than hubs).
-					int droppedExpansion = hubs.size() - copies.size();
-					int droppedBudget = 0;
-					for (DrtRequest copy : copies) {
-						DrtRequest done = finalizeVirtualLeg(copy, person, budgetValidator);
-						if (done == null) { droppedBudget++; continue; }
-						expanded.add(done);
-						virtualEmitted++;
-					}
-					virtualDroppedExpansion += droppedExpansion;
-					virtualDroppedBudget += droppedBudget;
-					connectingExpanded++;
-				} else {
-					expanded.add(r);
-				}
-			}
-			requests = renumber(expanded);
-			this.lastExpansionDropStats = dropStats;
+			ExpansionResult result = applyVirtualExpansion(
+					requests, hubs, fleetSide, isInsideMetropole, transferBuffer,
+					budgetValidator, routerFactory);
+			requests = result.requests();
+			this.lastExpansionDropStats = result.dropStats();
 			log.info("Virtual-trip expansion: {} connecting -> {} virtual legs "
 					+ "(|H|={}, fleetSide={}, dropped {} at expansion [{} unroutable rural-leg, "
 					+ "{} unroutable urban-leg, {} temporal-infeasible], {} non-positive leg budget)",
-					connectingExpanded, virtualEmitted, hubs.size(), fleetSide,
-					virtualDroppedExpansion, dropStats.unroutableRuralLeg,
-					dropStats.unroutableUrbanLeg, dropStats.temporalInfeasible,
-					virtualDroppedBudget);
+					result.connectingExpanded(), result.virtualEmitted(), hubs.size(), fleetSide,
+					result.virtualDroppedExpansion(), result.dropStats().unroutableRuralLeg,
+					result.dropStats().unroutableUrbanLeg, result.dropStats().temporalInfeasible,
+					result.virtualDroppedBudget());
 		}
 
 		long elapsed = System.currentTimeMillis() - startTime;
@@ -741,6 +716,91 @@ public class DrtRequestFactory {
 	@FunctionalInterface
 	interface LegRouter {
 		double[] route(Id<Link> fromLink, Id<Link> toLink, double departureTime);
+	}
+
+	/** Carries the result of {@link #applyVirtualExpansion}. */
+	record ExpansionResult(
+			List<DrtRequest> requests,
+			ExpansionDropStats dropStats,
+			int connectingExpanded,
+			int virtualEmitted,
+			int virtualDroppedExpansion,
+			int virtualDroppedBudget) {}
+
+	/**
+	 * Paper-2 Extension 2 — virtual-trip expansion pass over {@code requests}.
+	 *
+	 * <p>For each request tagged {@code "connecting"}:
+	 * <ol>
+	 *   <li>Fan out to {@code |hubs|} hub-leg copies via {@link #expandConnecting}.</li>
+	 *   <li>Finalize each hub copy via {@link #finalizeVirtualLeg}; drop non-positive.</li>
+	 *   <li>Emit the original O→D request retagged {@code "connecting-direct"} —
+	 *       preserving origin/destination/budget/time-windows intact — so the
+	 *       downstream MIP can choose hub-vs-direct.</li>
+	 * </ol>
+	 * Non-connecting requests pass through unchanged.
+	 * The returned list is renumbered so {@code index == position}.
+	 *
+	 * <p>Package-private so the unit test harness can inject a synthetic
+	 * {@code LegRouter} without needing a live {@link ModeRoutingCache}.
+	 *
+	 * @param requests            pre-built, finalized requests (from the
+	 *                            population-scan phase of {@code buildRequests})
+	 * @param hubs                hub set for the current fleet run
+	 * @param fleetSide           RURAL or URBAN fleet
+	 * @param isInsideMetropole   spatial predicate for metropole boundary
+	 * @param transferBuffer      hub transfer slack in seconds
+	 * @param budgetValidator     for per-leg re-finalization
+	 * @param routerFactory       produces a per-person {@link LegRouter}
+	 */
+	ExpansionResult applyVirtualExpansion(
+			List<DrtRequest> requests,
+			List<HubSetLoader.Hub> hubs,
+			FleetSide fleetSide,
+			java.util.function.Predicate<Coord> isInsideMetropole,
+			double transferBuffer,
+			BudgetValidator budgetValidator,
+			java.util.function.Function<Person, LegRouter> routerFactory) {
+
+		ExpansionDropStats dropStats = new ExpansionDropStats();
+		int connectingExpanded = 0;
+		int virtualEmitted = 0;
+		int virtualDroppedExpansion = 0;
+		int virtualDroppedBudget = 0;
+
+		List<DrtRequest> expanded = new ArrayList<>(requests.size());
+		for (DrtRequest r : requests) {
+			if ("connecting".equals(r.requestTag)) {
+				Person person = r.getScoringContext().person();
+				LegRouter router = routerFactory.apply(person);
+				List<DrtRequest> copies = expandConnecting(
+						r, hubs, fleetSide, isInsideMetropole, network, router,
+						transferBuffer, dropStats);
+				int droppedExpansion = hubs.size() - copies.size();
+				int droppedBudget = 0;
+				for (DrtRequest copy : copies) {
+					DrtRequest done = finalizeVirtualLeg(copy, person, budgetValidator);
+					if (done == null) { droppedBudget++; continue; }
+					expanded.add(done);
+					virtualEmitted++;
+				}
+				virtualDroppedExpansion += droppedExpansion;
+				virtualDroppedBudget += droppedBudget;
+				connectingExpanded++;
+				// Emit the connecting-direct ride: the original O→D request
+				// retagged so the downstream MIP can choose hub-vs-direct.
+				// No re-finalization: budget, time-windows, and caps are
+				// inherited from the already-finalized connecting request.
+				DrtRequest direct = r.toBuilder().requestTag("connecting-direct").build();
+				direct.setScoringContext(r.getScoringContext());
+				expanded.add(direct);
+			} else {
+				expanded.add(r);
+			}
+		}
+		return new ExpansionResult(renumber(expanded), dropStats,
+				connectingExpanded, virtualEmitted,
+				virtualDroppedExpansion, virtualDroppedBudget);
 	}
 
 	/**
