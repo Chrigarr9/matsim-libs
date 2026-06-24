@@ -607,6 +607,32 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	 */
 	private double maxHubWaitSeconds = 0.0;
 
+	/**
+	 * Paper-2 hub-sync v2 (Task 11c, two-sided): when {@code true}, the ACCESS
+	 * (rural→hub) virtual leg of each connecting commuter is emitted as MULTIPLE
+	 * variants at earlier-departure offsets {@code 0, step, 2·step, …} (where
+	 * {@code step = maxHubWaitSeconds}, bounded by {@link #hubSyncMaxAdvanceSeconds}).
+	 * Each variant departs at {@code requestTime − offset} (hub arrival shifts
+	 * earlier by the same amount) and is re-routed for the new departure, so the
+	 * resulting hub-arrival diversity lets the Python side cluster sync slots and
+	 * the MIP align both legs. Offset 0 reproduces today's single access leg, so
+	 * <b>default {@code false} is byte-identical to the v1 behavior</b>. Requires
+	 * {@code maxHubWaitSeconds > 0} when enabled (the step must be positive to
+	 * enumerate variants). Has NO effect on CONTINUATION legs (already wide via
+	 * {@link #maxHubWaitSeconds}).
+	 */
+	private boolean hubSyncTwoSided = false;
+
+	/**
+	 * Paper-2 hub-sync v2 (Task 11c): maximum seconds a commuter may depart
+	 * earlier than their original request to reach an earlier hub-arrival sync
+	 * slot, bounding the ACCESS variant ladder when {@link #hubSyncTwoSided} is
+	 * on. The number of variants is {@code floor(hubSyncMaxAdvanceSeconds /
+	 * maxHubWaitSeconds) + 1}. Default 900 s. Ignored when
+	 * {@code hubSyncTwoSided == false}.
+	 */
+	private double hubSyncMaxAdvanceSeconds = 900.0;
+
     public ExMasConfigGroup() {
         super(GROUP_NAME);
     }
@@ -1682,6 +1708,26 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter("maxHubWaitSeconds")
 	public void setMaxHubWaitSeconds(double maxHubWaitSeconds) {
 		this.maxHubWaitSeconds = maxHubWaitSeconds;
+	}
+
+	@StringGetter("hubSyncTwoSided")
+	public boolean isHubSyncTwoSided() {
+		return hubSyncTwoSided;
+	}
+
+	@StringSetter("hubSyncTwoSided")
+	public void setHubSyncTwoSided(boolean hubSyncTwoSided) {
+		this.hubSyncTwoSided = hubSyncTwoSided;
+	}
+
+	@StringGetter("hubSyncMaxAdvanceSeconds")
+	public double getHubSyncMaxAdvanceSeconds() {
+		return hubSyncMaxAdvanceSeconds;
+	}
+
+	@StringSetter("hubSyncMaxAdvanceSeconds")
+	public void setHubSyncMaxAdvanceSeconds(double hubSyncMaxAdvanceSeconds) {
+		this.hubSyncMaxAdvanceSeconds = hubSyncMaxAdvanceSeconds;
 	}
 
 	@StringGetter("requestClassificationsPath")

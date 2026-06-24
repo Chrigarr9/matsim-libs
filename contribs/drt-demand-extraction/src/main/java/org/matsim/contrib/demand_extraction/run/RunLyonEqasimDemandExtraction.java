@@ -123,6 +123,13 @@ public class RunLyonEqasimDemandExtraction {
 		/** Hub-sync v1 (Paper-2): continuation-leg hub-departure window width in
 		 *  seconds. NaN = unset (config default 0.0 = legacy fixed-buffer). */
 		public final double maxHubWait;
+		/** Hub-sync v2 (Paper-2, Task 11c): emit multiple ACCESS variants per
+		 *  (commuter, hub) at earlier-departure offsets. Default false. */
+		public final boolean hubSyncTwoSided;
+		/** Hub-sync v2 (Paper-2, Task 11c): max seconds a commuter may depart
+		 *  earlier than their request to reach an earlier sync slot. NaN = unset
+		 *  (config default 900.0). */
+		public final double hubSyncMaxAdvance;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
@@ -144,7 +151,9 @@ public class RunLyonEqasimDemandExtraction {
 				boolean checkpointForkBelowMinDegree,
 				boolean expandConnectingBothSides,
 				java.util.Map<String, Double> maxDetourFactorByClass,
-				double maxHubWait) {
+				double maxHubWait,
+				boolean hubSyncTwoSided,
+				double hubSyncMaxAdvance) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -181,6 +190,8 @@ public class RunLyonEqasimDemandExtraction {
 			this.expandConnectingBothSides = expandConnectingBothSides;
 			this.maxDetourFactorByClass = maxDetourFactorByClass;
 			this.maxHubWait = maxHubWait;
+			this.hubSyncTwoSided = hubSyncTwoSided;
+			this.hubSyncMaxAdvance = hubSyncMaxAdvance;
 		}
 	}
 
@@ -221,6 +232,8 @@ public class RunLyonEqasimDemandExtraction {
 		boolean expandConnectingBothSides = false;
 		java.util.Map<String, Double> maxDetourFactorByClass = new java.util.HashMap<>();
 		double maxHubWait = Double.NaN;
+		boolean hubSyncTwoSided = false;
+		double hubSyncMaxAdvance = Double.NaN;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -264,6 +277,8 @@ public class RunLyonEqasimDemandExtraction {
 				case "--expand-connecting-both-sides" -> expandConnectingBothSides = true;
 				case "--max-detour-factor-by-class" -> maxDetourFactorByClass = parseClassFactorMap(args[++i]);
 				case "--max-hub-wait" -> maxHubWait = Double.parseDouble(args[++i]);
+				case "--hub-sync-twosided" -> hubSyncTwoSided = true;
+				case "--hub-sync-max-advance" -> hubSyncMaxAdvance = Double.parseDouble(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -277,7 +292,8 @@ public class RunLyonEqasimDemandExtraction {
 				extensionParentsTopK, extensionParentsTopKMinDegree, extensionParentsTopKMetric,
 				extensionParentsSelectionRule, extensionParentsMmrLambda, extensionParentsTier2NodeCap,
 				checkpointForkBelowMinDegree,
-				expandConnectingBothSides, maxDetourFactorByClass, maxHubWait);
+				expandConnectingBothSides, maxDetourFactorByClass, maxHubWait,
+				hubSyncTwoSided, hubSyncMaxAdvance);
 	}
 
 	/**
@@ -636,6 +652,14 @@ public class RunLyonEqasimDemandExtraction {
 		if (!Double.isNaN(p.maxHubWait)) {
 			log.info("  Override: maxHubWaitSeconds = {}", p.maxHubWait);
 			exMas.setMaxHubWaitSeconds(p.maxHubWait);
+		}
+		if (p.hubSyncTwoSided) {
+			log.info("  Override: hubSyncTwoSided = true (hub-sync v2 access variants)");
+			exMas.setHubSyncTwoSided(true);
+		}
+		if (!Double.isNaN(p.hubSyncMaxAdvance)) {
+			log.info("  Override: hubSyncMaxAdvanceSeconds = {}", p.hubSyncMaxAdvance);
+			exMas.setHubSyncMaxAdvanceSeconds(p.hubSyncMaxAdvance);
 		}
 		if (p.maxOrderingNodes >= 0) {
 			log.info("  Override: maxOrderingNodesAfterFirstValid = {}", p.maxOrderingNodes);

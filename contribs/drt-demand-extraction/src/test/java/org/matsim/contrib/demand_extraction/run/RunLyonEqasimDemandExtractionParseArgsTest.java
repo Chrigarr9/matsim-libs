@@ -183,4 +183,29 @@ class RunLyonEqasimDemandExtractionParseArgsTest {
         });
         assertEquals(300.0, p.maxHubWait, 0.0);
     }
+
+    @Test
+    void defaultsLeaveHubSyncTwoSidedOff() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+        });
+        assertFalse(p.hubSyncTwoSided, "hub-sync-twosided off by default");
+        assertTrue(Double.isNaN(p.hubSyncMaxAdvance),
+                "hub-sync-max-advance unset (NaN) by default → config default 900 applies");
+    }
+
+    @Test
+    void parsesHubSyncTwoSidedAndMaxAdvance() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+                "--hub-sync-twosided",
+                "--hub-sync-max-advance", "600",
+        });
+        assertTrue(p.hubSyncTwoSided);
+        assertEquals(600.0, p.hubSyncMaxAdvance, 0.0);
+    }
 }
