@@ -411,6 +411,24 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// 0 or -1 => keep all (no pruning). Default: 50
 	private int maxSuccessors = 50;
 
+	// Spatial pre-filter for the predecessor/successor pass (default true).
+	// A handoff i->j is feasible only if the empty vehicle can drive from ride i's
+	// last dropoff to ride j's first pickup within the time gap (startTime_j - endTime_i).
+	// Network travel time is always >= euclidean(lastDest_i, firstOrigin_j) / maxSpeed, so
+	// when euclidean/maxSpeed > gap the pair is provably infeasible and is skipped BEFORE
+	// routing. This never drops a feasible successor (feasible => routed_tt <= gap =>
+	// euclidean/maxSpeed <= gap), so successor output is identical; it only avoids routing
+	// the far-and-infeasible pairs that dominate the time window at 100% scale. Requires a
+	// real Network (production path); with a stub lookup it is a no-op regardless of this flag.
+	private boolean predecessorsSpatialPrefilter = true;
+
+	// Explicit upper-bound speed (m/s) for the pre-filter reachability test. 0 (default) => derive
+	// from the network's max FINITE freespeed x 1.5. Set a realistic value (e.g. 45.0 = 162 km/h)
+	// when the network has artifact links (e.g. 300 km/h or Infinity freespeed) that inflate the
+	// auto bound and weaken pruning; the caller then asserts no real empty-vehicle handoff exceeds
+	// this effective speed. Must stay >= the true max achievable handoff speed to remain sound.
+	private double predecessorsPrefilterMaxSpeedMps = 0.0;
+
 	// Connection cache export mode (allowed: window|all|successors_only):
 	// - "window" (default): Export only the OD/bin segments the predecessor/successor pass
 	//   evaluated (accepted AND rejected handoffs) — the lookup domain of Python's
@@ -1326,6 +1344,23 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		return checkpointDir != null && !checkpointDir.isEmpty();
 	}
 
+	// Run-scoped directory for enumeration analytics CSVs (enumeration_stats.csv, menu-depth files).
+	// Deliberately NOT a persisted MATSim param (no @StringGetter/@StringSetter): it is an output
+	// location set programmatically by the runner, so it must never land in phase1_config.xml, the
+	// resume fingerprint, or the strict unknown-<param> XML validation. Empty = analytics off
+	// (behaviour unchanged), which is the default for the single-process / test paths.
+	private String statsDir = "";
+
+	/** The run-scoped enumeration-analytics output directory ({@code ""} = analytics disabled). */
+	public String getStatsDir() {
+		return statsDir;
+	}
+
+	/** Set the run-scoped enumeration-analytics output directory ({@code null}/empty disables it). */
+	public void setStatsDir(String statsDir) {
+		this.statsDir = statsDir == null ? "" : statsDir;
+	}
+
 	/**
 	 * Opt-in fork resume (Plan B2): when true, a checkpoint written strictly below
 	 * {@link #getExtensionParentsTopKMinDegree()} may be resumed even if the parent-pruning knobs
@@ -1419,6 +1454,26 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter("maxSuccessors")
 	public void setMaxSuccessors(int maxSuccessors) {
 		this.maxSuccessors = maxSuccessors;
+	}
+
+	@StringGetter("predecessorsSpatialPrefilter")
+	public boolean isPredecessorsSpatialPrefilter() {
+		return predecessorsSpatialPrefilter;
+	}
+
+	@StringSetter("predecessorsSpatialPrefilter")
+	public void setPredecessorsSpatialPrefilter(boolean predecessorsSpatialPrefilter) {
+		this.predecessorsSpatialPrefilter = predecessorsSpatialPrefilter;
+	}
+
+	@StringGetter("predecessorsPrefilterMaxSpeedMps")
+	public double getPredecessorsPrefilterMaxSpeedMps() {
+		return predecessorsPrefilterMaxSpeedMps;
+	}
+
+	@StringSetter("predecessorsPrefilterMaxSpeedMps")
+	public void setPredecessorsPrefilterMaxSpeedMps(double predecessorsPrefilterMaxSpeedMps) {
+		this.predecessorsPrefilterMaxSpeedMps = predecessorsPrefilterMaxSpeedMps;
 	}
 
 	@StringGetter("connectionCacheExportMode")

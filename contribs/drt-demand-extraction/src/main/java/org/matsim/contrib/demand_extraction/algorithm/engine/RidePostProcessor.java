@@ -59,6 +59,14 @@ public final class RidePostProcessor {
     private final MaxCostResolver maxCostResolver;
 
     /**
+     * Real network used by the predecessor/successor spatial pre-filter to look up link
+     * coordinates and the network's max free speed. {@code null} when the processor is
+     * built from a bare {@link TravelSegmentLookup} stub (tests) — the pre-filter is then a
+     * no-op and the pass routes every in-time-window candidate exactly as before.
+     */
+    private final org.matsim.api.core.v01.network.Network prefilterNetwork;
+
+    /**
      * Deduplicated packed OD/bin keys ({@link PackedKeyCodec#segmentKey}) of every handoff segment
      * the predecessor/successor pass evaluated — accepted AND rejected. This is the Task-9 "window"
      * export domain (= the lookup set of Python's {@code compute_dynamic_successors}).
@@ -78,18 +86,30 @@ public final class RidePostProcessor {
      */
     public RidePostProcessor(ExMasConfigGroup config, MatsimNetworkCache networkCache,
                             MaxCostResolver maxCostResolver) {
-        this(config, (TravelSegmentLookup) networkCache, maxCostResolver);
+        this(config, (TravelSegmentLookup) networkCache, maxCostResolver, networkCache.getNetwork());
     }
 
     /**
      * Flexible constructor — accepts any {@link TravelSegmentLookup}.
-     * Used in tests with lightweight stubs.
+     * Used in tests with lightweight stubs. The spatial pre-filter is disabled (no network).
      */
     public RidePostProcessor(ExMasConfigGroup config, TravelSegmentLookup networkCache,
                             MaxCostResolver maxCostResolver) {
+        this(config, networkCache, maxCostResolver, null);
+    }
+
+    /**
+     * Full constructor — accepts a {@link TravelSegmentLookup} plus the real {@link org.matsim.api.core.v01.network.Network}
+     * that backs it. The network powers the predecessor/successor spatial pre-filter (link
+     * coordinates + max free speed). Pass {@code null} to disable the pre-filter (stub tests).
+     */
+    public RidePostProcessor(ExMasConfigGroup config, TravelSegmentLookup networkCache,
+                            MaxCostResolver maxCostResolver,
+                            org.matsim.api.core.v01.network.Network prefilterNetwork) {
         this.config = config;
         this.networkCache = networkCache;
         this.maxCostResolver = maxCostResolver;
+        this.prefilterNetwork = prefilterNetwork;
     }
 
     public List<Ride> process(RideStore store) {
@@ -326,6 +346,79 @@ public final class RidePostProcessor {
         double filterDistanceFactor = (rawFilterDist != null && rawFilterDist >= 0) ? rawFilterDist : Double.POSITIVE_INFINITY;
         int maxSuccessors = config.getMaxSuccessors();
 
+        // ── Spatial pre-filter setup ─────────────────────────────────────────────
+        // A handoff i->j needs network travel time <= gap_j = startTimes[j] - endTimes[i].
+        // Network time is always >= euclidean(lastDest_i, firstOrigin_j) / maxSpeed, so when
+        // euclidean/maxSpeed > gap_j the pair is provably infeasible -> skip before routing.
+        // SOUND: a feasible handoff has routed_tt <= gap_j, and euclidean/maxSpeed <= routed_tt,
+        // so it always passes the filter; only far-and-infeasible pairs are dropped. Successor
+        // output is therefore identical; only the routing/retain/window work for dropped pairs
+        // is saved (that work dominates the pass at 100% scale). Needs a real network + a finite
+        // filterTime; otherwise it is a no-op and the pass behaves exactly as before.
+        final boolean spatialPrefilter = config.isPredecessorsSpatialPrefilter()
+                && prefilterNetwork != null && Double.isFinite(filterTime);
+        // Distance-factor cap applied as a PRE-ROUTING euclidean cut. LOSSLESS w.r.t. the existing
+        // post-route distance filter (below): a pair with euclidean > rideDist_i*factor has routed
+        // distance >= euclidean > cap, so the post filter would drop it anyway — skipping it before
+        // routing is output-identical. Unlike the time-reach cut (which reaches ~the whole study area
+        // at a 900 s gap), this is an ABSOLUTE cap and so prunes at every time gap — the lever that
+        // actually makes the 100% pass tractable. Active whenever a finite filterDistanceFactor is set
+        // and a real network is available (coords needed).
+        final boolean distancePrefilter = prefilterNetwork != null && Double.isFinite(filterDistanceFactor);
+        final boolean coordsNeeded = spatialPrefilter || distancePrefilter;
+        final double[] originX = coordsNeeded ? new double[total] : null;
+        final double[] originY = coordsNeeded ? new double[total] : null;
+        final double[] destX = coordsNeeded ? new double[total] : null;
+        final double[] destY = coordsNeeded ? new double[total] : null;
+        final double maxSpeed;
+        if (coordsNeeded) {
+            var links = prefilterNetwork.getLinks();
+            if (spatialPrefilter) {
+                double override = config.getPredecessorsPrefilterMaxSpeedMps();
+                if (override > 0.0) {
+                    // Explicit upper-bound speed (m/s). Use when the network has artifact links whose
+                    // freespeed inflates the auto bound and weakens pruning; the caller asserts no
+                    // real handoff exceeds this effective speed.
+                    maxSpeed = override;
+                } else {
+                    double maxFree = 0.0;
+                    for (org.matsim.api.core.v01.network.Link link : links.values()) {
+                        double fs = link.getFreespeed();
+                        // Ignore non-finite freespeed (artifact/virtual links, e.g. Infinity): including
+                        // them yields maxSpeed=Infinity -> the filter never prunes. Finite max is the sound
+                        // bound for every finite-speed link (which is all but a handful of artifacts).
+                        if (Double.isFinite(fs) && fs > maxFree) maxFree = fs;
+                    }
+                    // 1.5x safety margin absorbs (a) time-dependent travel times faster than freespeed,
+                    // (b) the link-coord vs routed-node-coord discrepancy, and (c) the negligible euclidean
+                    // distance any short non-finite-speed link could cover "for free", keeping the bound sound.
+                    maxSpeed = Math.max(maxFree, 1.0) * 1.5;
+                }
+            } else {
+                maxSpeed = 0.0;
+            }
+            for (int idx = 0; idx < total; idx++) {
+                org.matsim.api.core.v01.network.Link oLink =
+                        firstOrigins[idx] != null ? links.get(firstOrigins[idx]) : null;
+                org.matsim.api.core.v01.network.Link dLink =
+                        lastDests[idx] != null ? links.get(lastDests[idx]) : null;
+                if (oLink != null) { originX[idx] = oLink.getCoord().getX(); originY[idx] = oLink.getCoord().getY(); }
+                if (dLink != null) { destX[idx] = dLink.getCoord().getX(); destY[idx] = dLink.getCoord().getY(); }
+            }
+            log.info("    Predecessor pre-filter: time-reach={} (maxSpeed {} m/s, radius {} m @ {}s), distance-cap={} (factor {} x ride distance)",
+                    spatialPrefilter ? "ON" : "off",
+                    spatialPrefilter ? String.format("%.1f", maxSpeed) : "-",
+                    spatialPrefilter ? String.format("%.0f", maxSpeed * filterTime) : "-",
+                    String.format("%.0f", filterTime),
+                    distancePrefilter ? "ON" : "off",
+                    distancePrefilter ? String.format("%.2f", filterDistanceFactor) : "-");
+        } else {
+            maxSpeed = 0.0;
+            if (config.isPredecessorsSpatialPrefilter() && prefilterNetwork == null) {
+                log.info("    Predecessor spatial pre-filter requested but no network available — disabled (stub lookup).");
+            }
+        }
+
         Map<Integer, List<Integer>> predecessors = new ConcurrentHashMap<>();
         Map<Integer, List<Integer>> successors = new ConcurrentHashMap<>();
         Map<Integer, Double> reposTimeMeans = new ConcurrentHashMap<>();
@@ -415,7 +508,17 @@ public final class RidePostProcessor {
                 for (int j = sliceStart; j < sliceEnd; j++) {
                     if (i == j) continue;
                     Id<Link> to = firstOrigins[j];
-                    if (to != null) candidateLinksList.add(to);
+                    if (to == null) continue;
+                    // Pre-filter: only seed the SSSP tree with candidates that pass the time-reach
+                    // and/or distance-cap cuts. Skipped pairs are provably droppable (routed later
+                    // would fail arrivalTime<=startTime or the distance filter), so leaving them out
+                    // of the tree targets is output-invariant.
+                    if (coordsNeeded && !preRouteKeep(spatialPrefilter, startTimes[j] - endTime, maxSpeed,
+                            distancePrefilter, rideDistances[i], filterDistanceFactor,
+                            originX[j] - destX[i], originY[j] - destY[i])) {
+                        continue;
+                    }
+                    candidateLinksList.add(to);
                 }
                 if (!candidateLinksList.isEmpty()) {
                     @SuppressWarnings("unchecked")
@@ -436,6 +539,17 @@ public final class RidePostProcessor {
 
                 // Disjoint requests check
                 if (!Collections.disjoint(requestSets.get(i), requestSets.get(j))) {
+                    continue;
+                }
+
+                // Pre-filter: skip provably-droppable handoffs BEFORE routing them. Time-reach cut
+                // (euclidean > maxSpeed*gap => routed_tt > gap => arrivalTime > startTime[j]) and/or
+                // absolute distance cap (euclidean > rideDist_i*factor => routed > cap => post-route
+                // distance filter drops it). Both are lossless; this avoids the getSegment route +
+                // retain + window-record for the far pairs that dominate the window at 100% scale.
+                if (coordsNeeded && !preRouteKeep(spatialPrefilter, startTimes[j] - endTime, maxSpeed,
+                        distancePrefilter, rideDistances[i], filterDistanceFactor,
+                        originX[j] - destX[i], originY[j] - destY[i])) {
                     continue;
                 }
 
@@ -599,6 +713,47 @@ public final class RidePostProcessor {
         double getScore() {
             return distance * Math.max(1.0, idlingTime);
         }
+    }
+
+    /**
+     * Sound reachability lower bound for the predecessor/successor spatial pre-filter.
+     *
+     * <p>An empty vehicle handoff can only be feasible if it covers the straight-line gap
+     * within the available time. The network travel time is always {@code >= euclidean / maxSpeed}
+     * (a network path is at least the straight-line distance, driven at no more than maxSpeed),
+     * so {@code euclidean > maxSpeed * gap} proves {@code routed_tt > gap} and the handoff is
+     * infeasible. Returns {@code true} when the pair MIGHT be feasible (must be routed);
+     * {@code false} when it is provably infeasible (safe to skip). Uses squared distance to
+     * avoid a sqrt in the hot loop.
+     *
+     * @param gap {@code startTime_j - endTime_i} (>= 0 within the time-window slice)
+     * @param maxSpeed conservative upper bound on network speed (m/s)
+     * @param dx x-distance between ride i's last dropoff and ride j's first pickup (m)
+     * @param dy y-distance between the same two points (m)
+     */
+    static boolean withinReach(double gap, double maxSpeed, double dx, double dy) {
+        if (gap < 0.0) return false;
+        double reach = maxSpeed * gap;
+        return dx * dx + dy * dy <= reach * reach;
+    }
+
+    /**
+     * Combined pre-routing keep test: returns {@code true} if the handoff (i-&gt;j) might be
+     * feasible/kept and must be routed, {@code false} if it is provably droppable and can be
+     * skipped before routing. Applies (a) the time-reach lower bound when {@code spatial} is on,
+     * and (b) the absolute distance cap {@code rideDistI * distFactor} when {@code distCap} is on.
+     * Both are lossless: (a) is a sound feasibility lower bound; (b) matches the post-route distance
+     * filter (euclidean &le; routed, so euclidean &gt; cap =&gt; routed &gt; cap =&gt; post-filter drops it).
+     */
+    static boolean preRouteKeep(boolean spatial, double gap, double maxSpeed,
+                                boolean distCap, double rideDistI, double distFactor,
+                                double dx, double dy) {
+        if (spatial && !withinReach(gap, maxSpeed, dx, dy)) return false;
+        if (distCap) {
+            double cap = rideDistI * distFactor;
+            if (dx * dx + dy * dy > cap * cap) return false;
+        }
+        return true;
     }
 
     private int resolveParallelism() {

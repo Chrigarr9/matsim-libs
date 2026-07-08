@@ -71,7 +71,12 @@ public final class RunDemandExtractionPhase2 {
 				     "--extension-parents-mmr-lambda", "--checkpoint-dir",
 				     "--algorithm-process-count", "--heuristics-process-count",
 				     "--max-degree", "--calc-predecessors", "--calc-shapley-values",
-				     "--cache-eviction-watermark", "--pairgen-top-k" -> i++; // applied via applyPhase2KnobOverrides
+				     "--cache-eviction-watermark", "--pairgen-top-k",
+				     "--max-ordering-nodes-after-first-valid", "--predecessors-filter-time",
+				     "--predecessors-spatial-prefilter", "--predecessors-prefilter-max-speed-mps",
+				     "--predecessors-filter-distance-factor",
+				     "--ordering-probe-dir",
+				     "--ordering-probe-min-degree" -> i++; // value tokens applied later (knob overrides / applyOrderingProbe)
 				case "--checkpoint-fork-below-min-degree", "--trust-checkpoint-journal" -> { } // valueless boolean flags — applied via applyPhase2KnobOverrides
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
@@ -148,6 +153,26 @@ public final class RunDemandExtractionPhase2 {
 				// are excluded from the resume hash (RunFingerprint.FORKABLE_POSTPROCESS_PARAMS).
 				case "--calc-predecessors" -> cfg.setCalcPredecessors(Boolean.parseBoolean(args[++i]));
 				case "--calc-shapley-values" -> cfg.setCalcShapleyValues(Boolean.parseBoolean(args[++i]));
+				// Per-set ordering-enumeration node budget (0 = exact/off). Making this a Phase-2
+				// override lets the no-max-degree production run cap the post-first-valid DFS tail
+				// (the deg-8/9 cost driver) without re-running Phase 1. See maxOrderingNodesAfterFirstValid.
+				case "--max-ordering-nodes-after-first-valid" -> cfg.setMaxOrderingNodesAfterFirstValid(Long.parseLong(args[++i]));
+				// Predecessor/successor handoff window in seconds. Overridable at Phase 2 because it is
+				// a post-processing knob (bounds the handoff search + the window connection-cache export),
+				// so it is sound to vary under a fork/resume like calc-predecessors above.
+				case "--predecessors-filter-time" -> cfg.setPredecessorsFilterTime(Double.parseDouble(args[++i]));
+				// Spatial pre-filter for the predecessor/successor pass (default ON). Sound lower-bound
+				// cut: skips routing handoffs whose straight-line distance can't be covered in the time
+				// gap at maxSpeed — identical successor output, far less routing at 100% scale. Set false
+				// only to A/B-compare against the un-filtered pass.
+				case "--predecessors-spatial-prefilter" -> cfg.setPredecessorsSpatialPrefilter(Boolean.parseBoolean(args[++i]));
+				// Explicit upper-bound speed (m/s) for the pre-filter; 0 = auto (max finite freespeed x1.5).
+				case "--predecessors-prefilter-max-speed-mps" -> cfg.setPredecessorsPrefilterMaxSpeedMps(Double.parseDouble(args[++i]));
+				// Handoff distance cap = factor x ride's own distance. Applied BOTH as a pre-routing
+				// euclidean cut (lossless: euclidean <= routed distance, so it never drops a kept handoff)
+				// AND as the existing post-route filter. Small values are the real tractability lever at
+				// 100% scale, where the 900s time-reach radius already covers the whole study area.
+				case "--predecessors-filter-distance-factor" -> cfg.setPredecessorsFilterDistanceFactor(Double.parseDouble(args[++i]));
 				// Speculative-tier eviction watermark (fraction of max heap). 1.0 DISABLES eviction.
 				// For a warm-loaded degree-2 dump set this to 1.0: the journal is loaded as one big
 				// speculative tier, and the default 0.7 watermark would otherwise evict it as fast as
@@ -158,6 +183,49 @@ public final class RunDemandExtractionPhase2 {
 				default -> { }
 			}
 		}
+	}
+
+	/**
+	 * Wire the {@code --ordering-probe-dir <dir>} flag to the per-set ordering probe: when present,
+	 * enable {@link org.matsim.contrib.demand_extraction.algorithm.bamas.extension.EnumerationStats}'
+	 * probe sink to write {@code <dir>/ordering_probe.csv}. Set BEFORE the algorithm runs (the probe
+	 * path is read by the workers during enumeration), so this uses the runtime setter rather than the
+	 * class-load-time {@code bamas.orderingProbe} system property. The minimum recorded degree defaults
+	 * to 6 (or {@code bamas.orderingProbeMinDegree}) but can be lowered per run with
+	 * {@code --ordering-probe-min-degree <n>} — cheap now that the probe aggregates to one averaged row
+	 * per degree, so degree 3 is affordable even at 100%. No-op when the flag is absent (probe stays off).
+	 *
+	 * @return the resolved {@code ordering_probe.csv} path when enabled, else {@code null}
+	 */
+	static Path applyOrderingProbe(String[] args) {
+		// Apply the min-degree override first (if any) so the enable log reports the effective value.
+		for (int i = 0; i < args.length - 1; i++) {
+			if ("--ordering-probe-min-degree".equals(args[i])) {
+				try {
+					org.matsim.contrib.demand_extraction.algorithm.bamas.extension.EnumerationStats
+							.setProbeMinDegree(Integer.parseInt(args[i + 1].trim()));
+				} catch (NumberFormatException e) {
+					log.warn("--ordering-probe-min-degree: not an integer ({}), keeping {}",
+							args[i + 1],
+							org.matsim.contrib.demand_extraction.algorithm.bamas.extension.EnumerationStats
+									.getProbeMinDegree());
+				}
+				break;
+			}
+		}
+		for (int i = 0; i < args.length; i++) {
+			if ("--ordering-probe-dir".equals(args[i]) && i + 1 < args.length) {
+				Path probeCsv = Path.of(args[i + 1]).resolve("ordering_probe.csv");
+				org.matsim.contrib.demand_extraction.algorithm.bamas.extension.EnumerationStats
+						.setProbePath(probeCsv.toString());
+				log.info("PHASE 2: ordering probe enabled (min degree {}) -> {}",
+						org.matsim.contrib.demand_extraction.algorithm.bamas.extension.EnumerationStats
+								.getProbeMinDegree(),
+						probeCsv.toAbsolutePath());
+				return probeCsv;
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -215,6 +283,14 @@ public final class RunDemandExtractionPhase2 {
 		ExMasConfigGroup exMasCfg = injector.getInstance(ExMasConfigGroup.class);
 		assertDumpSupportsConfig(dump.scoringContextsVersion(), exMasCfg);
 		applyPhase2KnobOverrides(args, exMasCfg);
+		// Enumeration analytics: always persist per-degree EnumerationStats + degree-2 menu depth
+		// under <outputDir>/drt_demand/stats. Programmatic (non-persisted) config carrier, read by
+		// the engine (menu depth) and the extender (enumeration_stats.csv).
+		Path statsDir = a.outputDir.resolve("drt_demand").resolve("stats");
+		exMasCfg.setStatsDir(statsDir.toString());
+		log.info("PHASE 2: enumeration analytics -> {}", statsDir.toAbsolutePath());
+		// Opt-in per-set ordering probe (writes <dir>/ordering_probe.csv). Must be set before run().
+		applyOrderingProbe(args);
 		// Provenance: persist the effective config (dump config + CLI overrides) next to the
 		// outputs. exMasCfg is the same module instance inside the injected Config, so the
 		// overrides above are already reflected. Same XML format as the dump's phase1_config.xml.
@@ -284,6 +360,10 @@ public final class RunDemandExtractionPhase2 {
 
 		Path publishedRequests = dataManager.publishCanonicalRequests(a.phase1Dir);
 		log.info("PHASE 2 STEP 5: published canonical requests CSV to {}", publishedRequests);
+
+		// Flush the averaged per-degree ordering probe now (not only at JVM-exit) so the file lands
+		// on disk at completion even if the JVM is reused or torn down abnormally. No-op if disabled.
+		org.matsim.contrib.demand_extraction.algorithm.bamas.extension.EnumerationStats.writeProbeSummary();
 
 		long overallElapsedMs = System.currentTimeMillis() - overallStartMs;
 		long peakHeapBytes = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();

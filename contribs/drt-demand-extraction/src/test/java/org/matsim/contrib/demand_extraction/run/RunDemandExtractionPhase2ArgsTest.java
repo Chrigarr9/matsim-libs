@@ -227,6 +227,94 @@ class RunDemandExtractionPhase2ArgsTest {
 		assertEquals(java.nio.file.Path.of("/tmp/net.xml.gz"), parsed.networkXml());
 	}
 
+	// ------------------------------------------------------------------ //
+	// --max-ordering-nodes-after-first-valid + --predecessors-filter-time  //
+	// CLI wiring (no-max-degree production run knobs)                      //
+	// ------------------------------------------------------------------ //
+
+	@Test
+	void applyPhase2KnobOverridesSetsMaxOrderingNodes() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		RunDemandExtractionPhase2.applyPhase2KnobOverrides(
+				new String[]{"--max-ordering-nodes-after-first-valid", "200000"}, cfg);
+		assertEquals(200000L, cfg.getMaxOrderingNodesAfterFirstValid(),
+				"--max-ordering-nodes-after-first-valid 200000 should set the ordering node budget");
+	}
+
+	@Test
+	void applyPhase2KnobOverridesSetsPredecessorsFilterTime() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		RunDemandExtractionPhase2.applyPhase2KnobOverrides(
+				new String[]{"--predecessors-filter-time", "900"}, cfg);
+		assertEquals(900.0, cfg.getPredecessorsFilterTime(), 1e-9,
+				"--predecessors-filter-time 900 should set the handoff window to 900s");
+	}
+
+	@Test
+	void parseArgsToleratesNewValueFlagsWithoutMisreadingNext() {
+		// Both new flags take a value; parseArgs must skip both tokens and still find --network.
+		String[] args = {
+				"--phase1-dir", "/tmp/dump",
+				"--max-ordering-nodes-after-first-valid", "200000",
+				"--predecessors-filter-time", "900",
+				"--network", "/tmp/net.xml.gz",
+				"--travel-times", "/tmp/tt.tsv",
+				"--output-dir", "/tmp/out"
+		};
+		RunDemandExtractionPhase2.Phase2Args parsed = RunDemandExtractionPhase2.parseArgs(args);
+		assertEquals(java.nio.file.Path.of("/tmp/net.xml.gz"), parsed.networkXml());
+		assertEquals(java.nio.file.Path.of("/tmp/out"), parsed.outputDir());
+	}
+
+	// ------------------------------------------------------------------ //
+	// --ordering-probe-dir CLI wiring (per-set ordering probe sink)        //
+	// ------------------------------------------------------------------ //
+
+	@Test
+	void parseArgsToleratesOrderingProbeDirWithoutMisreadingNext() {
+		// --ordering-probe-dir takes a value; parseArgs must skip both tokens and still find --network.
+		String[] args = {
+				"--phase1-dir", "/tmp/dump",
+				"--ordering-probe-dir", "/tmp/out/drt_demand/stats",
+				"--network", "/tmp/net.xml.gz",
+				"--travel-times", "/tmp/tt.tsv",
+				"--output-dir", "/tmp/out"
+		};
+		RunDemandExtractionPhase2.Phase2Args parsed = RunDemandExtractionPhase2.parseArgs(args);
+		assertEquals(java.nio.file.Path.of("/tmp/net.xml.gz"), parsed.networkXml());
+		assertEquals(java.nio.file.Path.of("/tmp/out"), parsed.outputDir());
+	}
+
+	@Test
+	void applyOrderingProbeEnablesProbeSinkWhenPresent() {
+		try {
+			java.nio.file.Path returned = RunDemandExtractionPhase2.applyOrderingProbe(
+					new String[]{"--ordering-probe-dir", "/tmp/out/drt_demand/stats"});
+			java.nio.file.Path expected = java.nio.file.Path.of("/tmp/out/drt_demand/stats")
+					.resolve("ordering_probe.csv");
+			assertEquals(expected, returned, "applyOrderingProbe returns the resolved probe CSV path");
+			assertEquals(expected.toString(),
+					org.matsim.contrib.demand_extraction.algorithm.bamas.extension.EnumerationStats.getProbePath(),
+					"probe sink path must be applied to EnumerationStats");
+		} finally {
+			// Static probe state — reset so no other test inherits an enabled probe.
+			org.matsim.contrib.demand_extraction.algorithm.bamas.extension.EnumerationStats.setProbePath(null);
+		}
+	}
+
+	@Test
+	void applyOrderingProbeIsNoOpWhenAbsent() {
+		// Absent flag must not enable the probe (leaves whatever the default is, here null).
+		org.matsim.contrib.demand_extraction.algorithm.bamas.extension.EnumerationStats.setProbePath(null);
+		java.nio.file.Path returned = RunDemandExtractionPhase2.applyOrderingProbe(new String[]{});
+		org.junit.jupiter.api.Assertions.assertNull(returned, "no flag -> null return");
+		org.junit.jupiter.api.Assertions.assertNull(
+				org.matsim.contrib.demand_extraction.algorithm.bamas.extension.EnumerationStats.getProbePath(),
+				"no flag -> probe stays disabled");
+	}
+
 	// Canonical-requests publishing moved to ExtractionDataManager.publishCanonicalRequests;
 	// its behavior is covered by ExtractionDataManagerTest.
 }

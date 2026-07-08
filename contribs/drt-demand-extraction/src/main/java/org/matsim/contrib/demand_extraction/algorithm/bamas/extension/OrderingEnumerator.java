@@ -254,11 +254,61 @@ public final class OrderingEnumerator {
 			long firstValidNodeCap,
 			Consumer<Ordering> evaluator) {
 
+		EnumerationStats st = EnumerationStats.get();
+		st.probeSetStart();
+
+		// Insertion-first, always on. Pass 1 freezes the parent's pickup/dropoff order and
+		// slots in the new request (pure insertion); pass 2 is the full search. The two
+		// share one incumbent and one per-set node window (no probeSetStart between them).
+		//
+		// With the post-first-valid budget ON, pass 1 records a shallow first-valid, so the
+		// cap starts counting from the O(n^2) insertion tree instead of the exponential
+		// reordering descent — that is the tractability win. With the budget OFF, pass 2 is
+		// unbounded and still finds the exact optimum, so results are unchanged; pass 1 only
+		// tightens the incumbent early, which sharpens pass 2's B&B pruning.
+		//
+		// Pass 2 always runs. If pass 1 found no feasible insertion, the budget never
+		// started and pass 2 is the full fallback search — so no feasible set loses its ride.
+		enumerateSeededPass(requestIndices, graph, network, requests, bestValidDist,
+				seedParentOrigin, seedParentDest, seedNewRequest,
+				budgetAwareConstraints, firstValidNodeCap, /* insertionOnly= */ true,
+				evaluator);
+		enumerateSeededPass(requestIndices, graph, network, requests, bestValidDist,
+				seedParentOrigin, seedParentDest, seedNewRequest,
+				budgetAwareConstraints, firstValidNodeCap, /* insertionOnly= */ false,
+				evaluator);
+
+		st.insertionOnly = false;
+		st.probeSetEnd(requestIndices.length);
+	}
+
+	/**
+	 * Run ONE rank-restricted seeded ordering pass. Builds the per-set constraint /
+	 * adjacency state and runs the origin DFS. Does NOT open or close the per-set probe
+	 * window ({@code probeSetStart}/{@code probeSetEnd}) — the caller owns it, so the two
+	 * insertion-first passes share a single node budget.
+	 *
+	 * <p>Package-private so unit tests can drive a single pass and inspect its output
+	 * (production only ever reaches it through {@link #enumerateAndEvaluateSeeded}).
+	 *
+	 * @param insertionOnly when true, the seeded DFS explores only rank-0 (parent-
+	 *        consistent) branches — the pure-insertion pass; when false, the full search.
+	 */
+	static void enumerateSeededPass(
+			int[] requestIndices, ShareabilityGraph graph,
+			MatsimNetworkCache network, DrtRequest[] requests,
+			double[] bestValidDist,
+			int[] seedParentOrigin, int[] seedParentDest, int seedNewRequest,
+			boolean budgetAwareConstraints,
+			long firstValidNodeCap,
+			boolean insertionOnly,
+			Consumer<Ordering> evaluator) {
+
+		EnumerationStats.get().insertionOnly = insertionOnly;
+
 		PairInfo[] constraints = extractConstraints(requestIndices, graph);
 		if (constraints == null) return;
 		int n = requestIndices.length;
-
-		EnumerationStats.get().probeSetStart();
 
 		Boolean[][] origAdj = new Boolean[n][n];
 		for (int a = 0; a < n; a++) {
@@ -292,8 +342,6 @@ public final class OrderingEnumerator {
 				budgetAwareConstraints,
 				firstValidNodeCap,
 				evaluator, connTT, connDist, connUtil);
-
-		EnumerationStats.get().probeSetEnd(n);
 	}
 
 	private static int[] remapToLocal(int[] globalOrder, int[] requestIndices) {
@@ -367,7 +415,8 @@ public final class OrderingEnumerator {
 		// Per-set node budget (Design A): once the post-first-valid tail is spent,
 		// abort this subtree. bestRide is already held by the evaluator; the monotone
 		// predicate makes every further node entry return immediately, unwinding the set.
-		if (probeStats.orderingBudgetExhausted()) return;
+		// The tracked variant records the first exhaustion per set into orderingBudgetHits.
+		if (probeStats.orderingBudgetExhaustedTracked()) return;
 		// Per-set first-valid node cap (Task A2): if the cap is enabled and the node
 		// budget before the first valid ordering is exhausted, abandon the set.
 		// Strictly gated on cap > 0 so the OFF path is byte-identical.
@@ -441,6 +490,10 @@ public final class OrderingEnumerator {
 			});
 
 			for (int c : candidates) {
+				// Insertion-first pass: only the next parent-in-order or the new request
+				// may be placed (rank 0). Skipping rank-1 here freezes the parent order.
+				if (probeStats.insertionOnly
+						&& parentConsistentRank(c, nextParentLocal0, newRequestLocal0) != 0) continue;
 				DrtRequest reqC = requests[c];
 				double newLowC = -reqC.getMaxNegativeDelay();
 				double newHighC = reqC.getMaxPositiveDelay()
@@ -504,7 +557,8 @@ public final class OrderingEnumerator {
 		// Process rank0 then rank1, each with its own break. Each sub-loop is
 		// sound because its list is distance-sorted internally. bestValidDist[0]
 		// may tighten during the rank0 pass; rank1's break uses the current value.
-		for (int pass = 0; pass < 2; pass++) {
+		// Insertion-first pass stops after rank0 (pass 0), freezing the parent order.
+		for (int pass = 0; pass < (probeStats.insertionOnly ? 1 : 2); pass++) {
 			List<Integer> group = (pass == 0) ? rank0 : rank1;
 			int groupCount = group.size();
 			for (int idx = 0; idx < groupCount; idx++) {
@@ -967,7 +1021,8 @@ public final class OrderingEnumerator {
 		EnumerationStats stats = EnumerationStats.get();
 		stats.probeNode();
 		// Per-set node budget (Design A): abort once the post-first-valid tail is spent.
-		if (stats.orderingBudgetExhausted()) return;
+		// The tracked variant records the first exhaustion per set into orderingBudgetHits.
+		if (stats.orderingBudgetExhaustedTracked()) return;
 		// Per-set first-valid node cap (Task A2): abandon before first valid if cap hit.
 		if (firstValidNodeCap > 0 && stats.curSetNodesFirstValid < 0
 				&& stats.curSetNodes >= firstValidNodeCap) return;
@@ -1041,7 +1096,8 @@ public final class OrderingEnumerator {
 		rank0.sort(byDistDest);
 		rank1.sort(byDistDest);
 
-		for (int pass = 0; pass < 2; pass++) {
+		// Insertion-first pass stops after rank0 (pass 0), freezing the parent dropoff order.
+		for (int pass = 0; pass < (stats.insertionOnly ? 1 : 2); pass++) {
 			List<Integer> group = (pass == 0) ? rank0 : rank1;
 			int groupCount = group.size();
 			for (int idx = 0; idx < groupCount; idx++) {

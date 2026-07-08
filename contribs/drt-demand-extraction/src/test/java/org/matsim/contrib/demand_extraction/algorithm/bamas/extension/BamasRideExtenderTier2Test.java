@@ -4,12 +4,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.network.Link;
 import org.matsim.api.core.v01.population.Person;
@@ -168,6 +171,27 @@ class BamasRideExtenderTier2Test {
 				1L, /* small dist */ 34683.5, new int[] {0, 2});
 		assertTrue(markedBeatsUnmarked < 0,
 				"anyCapped=true: marked (cap 0) sorts before unmarked (cap>0) regardless of distance");
+	}
+
+	// ── Analytics: the extender persists enumeration_stats.csv at the degree boundary ──
+	// When the run-scoped stats dir is set on the config, extendParents writes exactly one
+	// per-degree row (header on first use) alongside the existing log() output. This exercises
+	// the real extender -> EnumerationStatsCsvWriter path end to end on the cheap in-memory fixture.
+	@Test
+	void writesEnumerationStatsCsvWhenStatsDirSet(@TempDir Path tmp) throws Exception {
+		TestSetup s = buildKelheimMissingTripleSetup();
+		Path statsDir = tmp.resolve("drt_demand").resolve("stats");
+		s.config.setStatsDir(statsDir.toString());
+
+		newExtender(s).extendParents(
+				new ArrayList<>(List.of(parent(s.pairSmallest, 0L), parent(s.pairLargest, 0L))), 3);
+
+		Path csv = statsDir.resolve(EnumerationStatsCsvWriter.FILE_NAME);
+		assertTrue(Files.exists(csv), "extender must write enumeration_stats.csv when statsDir is set");
+		List<String> lines = Files.readAllLines(csv);
+		assertTrue(lines.size() >= 2, "header + at least one degree row");
+		assertEquals(EnumerationStats.csvHeader(), lines.get(0));
+		assertTrue(lines.get(1).startsWith("3,"), "the data row must be for degree 3");
 	}
 
 	// ─────────────────────────────── helpers ────────────────────────────────────

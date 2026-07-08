@@ -368,6 +368,19 @@ public final class BamasRideExtender {
 		if (!threadStatsMap.isEmpty()) {
 			EnumerationStats total = EnumerationStats.sum(threadStatsMap.values());
 			total.log(log, targetDegree, parallelism);
+			// Persist the same aggregate as one CSV row per degree (analytics; additive to log()).
+			// This runs on the main thread after the workers joined above, so it is single-threaded.
+			// resultsFound == the number of rides kept/emitted for this degree (the corpus histogram
+			// bin). wallClockMs is this degree's extension wall time; heapUsedBytes is a used-heap
+			// sample (totalMemory-freeMemory) at the degree boundary.
+			String statsDir = exMasConfig.getStatsDir();
+			if (statsDir != null && !statsDir.isEmpty()) {
+				long wallClockMs = System.currentTimeMillis() - phaseStartTime;
+				Runtime rt = Runtime.getRuntime();
+				long heapUsedBytes = rt.totalMemory() - rt.freeMemory();
+				EnumerationStatsCsvWriter.append(java.nio.file.Path.of(statsDir), total,
+						targetDegree, parallelism, resultsFound.get(), wallClockMs, heapUsedBytes);
+			}
 			// Reset thread-local stats for next degree
 			threadStatsMap.values().forEach(EnumerationStats::clear);
 		}

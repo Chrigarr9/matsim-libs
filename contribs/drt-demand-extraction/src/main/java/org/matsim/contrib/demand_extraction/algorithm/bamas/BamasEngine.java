@@ -239,6 +239,18 @@ public final class BamasEngine {
 		log.info("Graph built: {} edges, {} nodes in {}s",
 				graph.getEdgeCount(), graph.getNodeCount(), String.format("%.1f", graphElapsed / 1000.0));
 
+		// Analytics: degree-2 "menu depth" (valid partners per request) — the density driver of the
+		// pooling scaling law. Derived once here from the shareability graph (node ids = request
+		// indices); zero-partner requests are included via the full request-index set. Off unless the
+		// run-scoped stats dir is set (single-process/test paths leave it empty -> no-op).
+		String menuStatsDir = exMasConfig.getStatsDir();
+		if (menuStatsDir != null && !menuStatsDir.isEmpty()) {
+			int[] allRequestIndices = new int[runReqArray.length];
+			for (int i = 0; i < runReqArray.length; i++) allRequestIndices[i] = runReqArray[i].index;
+			org.matsim.contrib.demand_extraction.algorithm.bamas.extension.MenuDepthWriter.write(
+					java.nio.file.Path.of(menuStatsDir), graph, allRequestIndices);
+		}
+
 		checkpointBaseIfFresh(allPairs, resume);
 
 		// Degree-2 survivors live in `pairSurvivors` (added to rideLayers as the first layer).

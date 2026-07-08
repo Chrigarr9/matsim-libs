@@ -20,6 +20,11 @@ import org.apache.logging.log4j.Logger;
  *   <li>Evaluator outcome funnel: how each completed ordering ends up
  *       (ride-null, valid-but-worse, new-best).</li>
  * </ul>
+ *
+ * <p>All of the above are ALSO serialised per degree to
+ * {@code <stats>/enumeration_stats.csv} via {@link #csvHeader()} / {@link #toCsvRow}
+ * (see {@link EnumerationStatsCsvWriter}). The CSV column order is fixed and documented
+ * on those two methods; keep them in lock-step when adding a counter.
  */
 public final class EnumerationStats {
 	private static final ThreadLocal<EnumerationStats> THREAD_LOCAL =
@@ -58,6 +63,13 @@ public final class EnumerationStats {
 	public long validButWorseThanBest; // valid ride, distance ≥ bestValidDist
 	public long newBestRides;         // valid ride that tightened the bound
 
+	// ---- Ordering-budget cap diagnostics ----
+	// Number of sets whose post-first-valid ordering node budget was exhausted (i.e. where
+	// orderingBudgetExhausted() caused the DFS to unwind). Counted at most once per set via the
+	// transient curSetBudgetHit flag below. Documents how often the
+	// --max-ordering-nodes-after-first-valid cap actually bit at this degree.
+	public long orderingBudgetHits;
+
 	// ---- Timing (nanos) ----
 	public long timeTotal;
 	public long timeEnumeration;
@@ -71,6 +83,14 @@ public final class EnumerationStats {
 	public long curSetNodesFirstValid = -1;
 	/** curSetNodes value at the last bestValidDist improvement (-1 = none). */
 	public long curSetNodesBest = -1;
+	/** Transient: true once the current set has been counted in {@link #orderingBudgetHits}. */
+	private boolean curSetBudgetHit;
+
+	// ---- Insertion-first pass mode (transient per-thread flag, set per seeded pass) ----
+	// True while the seeded DFS is running the pure-insertion pass (rank-0/parent-consistent
+	// branches only); false for the full-search pass. Set explicitly by OrderingEnumerator before
+	// each pass, not summed or cleared — it is a mode flag, not a counter.
+	public boolean insertionOnly;
 
 	// ---- Per-set ordering node budget (Design A; 0 = disabled) ----
 	// Caps the per-set DFS *after* the first budget-valid ordering is found. The
@@ -104,22 +124,90 @@ public final class EnumerationStats {
 				&& (curSetNodes - curSetNodesFirstValid) > b;
 	}
 
-	// ---- Optional per-set probe sink (enabled by -Dbamas.orderingProbe=<csv path>) ----
+	/**
+	 * Same predicate as {@link #orderingBudgetExhausted()} but records the FIRST time it fires for
+	 * the current set into {@link #orderingBudgetHits}. A set that trips the cap across many DFS
+	 * node entries — and across both the origin and dest recursions — is still counted exactly once,
+	 * because {@code curSetBudgetHit} is reset per set in {@link #probeSetStart()}. Call this at the
+	 * DFS node-entry cap check. OFF-path behaviour is unchanged (returns false when the budget is
+	 * disabled or no valid ordering exists yet).
+	 */
+	public boolean orderingBudgetExhaustedTracked() {
+		if (orderingBudgetExhausted()) {
+			if (!curSetBudgetHit) {
+				curSetBudgetHit = true;
+				orderingBudgetHits++;
+			}
+			return true;
+		}
+		return false;
+	}
+
+	// ---- Optional per-set probe sink (enabled by -Dbamas.orderingProbe=<csv> or --ordering-probe-dir) ----
 	// Sizes a per-set ordering node budget: records, per high-degree set, how many
 	// DFS nodes were entered in total, before the first valid ordering (feasibility
 	// floor for any budget), and before the last bestValidDist improvement (quality
-	// target). Inert unless the property is set; counters themselves are always live
+	// target). Inert unless a sink path is set; counters themselves are always live
 	// (one long++ per node) so the same counter can later drive a runtime cap.
-	private static final String PROBE_PATH = System.getProperty("bamas.orderingProbe");
+	//
+	// probePath defaults from the JVM system property (back-compat with
+	// -Dbamas.orderingProbe=<csv>) but can be redirected at runtime via setProbePath — wired from
+	// the CLI --ordering-probe-dir before the algorithm runs. Volatile so the main-thread write
+	// happens-before the worker reads during enumeration.
+	private static volatile String probePath = System.getProperty("bamas.orderingProbe");
 	/** Minimum degree to record (the explosion lives at high degree; low degrees are noise). */
-	private static final int PROBE_MIN_DEGREE = Integer.getInteger("bamas.orderingProbeMinDegree", 6);
-	private static java.io.Writer probeWriter;
+	private static volatile int probeMinDegree = Integer.getInteger("bamas.orderingProbeMinDegree", 6);
+	private static boolean probeShutdownHookRegistered;
+
+	// Per-degree accumulator (one bucket per degree, aggregated across all sets of that degree).
+	// We only need the AVERAGE ordering effort per degree for the scaling study, not a row per
+	// coalition — at 100% the per-set stream is millions of rows and a synchronized flush per row.
+	// So each set folds into a fixed-width running total and we emit one averaged row per degree at
+	// close. Guarded by PROBE_LOCK; contention is arithmetic-only (no IO on the hot path).
+	// Layout per bucket: [0]=sets, [1]=validSets, [2]=sumNodesTotal, [3]=sumFirstValid,
+	//                     [4]=sumBest, [5]=maxNodesTotal, [6]=maxFirstValid, [7]=maxBest
+	private static final Object PROBE_LOCK = new Object();
+	private static final java.util.TreeMap<Integer, long[]> probeByDegree = new java.util.TreeMap<>();
+	private static boolean probeSummaryWritten;
 
 	static {
-		if (PROBE_PATH != null) {
-			Runtime.getRuntime().addShutdownHook(new Thread(EnumerationStats::probeClose));
+		if (probePath != null) {
+			registerProbeShutdownHook();
 		}
 	}
+
+	private static synchronized void registerProbeShutdownHook() {
+		if (!probeShutdownHookRegistered) {
+			Runtime.getRuntime().addShutdownHook(new Thread(EnumerationStats::probeClose));
+			probeShutdownHookRegistered = true;
+		}
+	}
+
+	/**
+	 * Enable (or redirect) the per-set ordering probe sink at runtime. Wired from the
+	 * {@code --ordering-probe-dir} CLI flag before the algorithm runs, so it does not rely on the
+	 * class-load-time system property. {@code null} disables the probe. Registers the flush/close
+	 * shutdown hook once.
+	 */
+	public static synchronized void setProbePath(String path) {
+		probePath = path;
+		synchronized (PROBE_LOCK) {
+			probeByDegree.clear();
+			probeSummaryWritten = false;
+		}
+		if (path != null) {
+			registerProbeShutdownHook();
+		}
+	}
+
+	/** The active per-set probe sink path, or {@code null} when the probe is disabled. */
+	public static String getProbePath() { return probePath; }
+
+	/** Override the minimum degree recorded by the per-set probe (default {@code 6}). */
+	public static void setProbeMinDegree(int minDegree) { probeMinDegree = minDegree; }
+
+	/** The minimum degree recorded by the per-set probe. */
+	public static int getProbeMinDegree() { return probeMinDegree; }
 
 	public static EnumerationStats get() { return THREAD_LOCAL.get(); }
 
@@ -128,6 +216,7 @@ public final class EnumerationStats {
 		curSetNodes = 0;
 		curSetNodesFirstValid = -1;
 		curSetNodesBest = -1;
+		curSetBudgetHit = false;
 	}
 
 	/** Record one DFS node entry for the current set. */
@@ -146,28 +235,69 @@ public final class EnumerationStats {
 		}
 	}
 
-	/** Emit one per-set record (no-op unless the probe is enabled and degree >= min). */
+	/** Fold this set into its per-degree bucket (no-op unless the probe is enabled and degree >= min). */
 	public void probeSetEnd(int degree) {
-		if (PROBE_PATH == null || degree < PROBE_MIN_DEGREE) return;
-		writeProbeRow(degree, curSetNodes, curSetNodesFirstValid, curSetNodesBest);
+		if (probePath == null || degree < probeMinDegree) return;
+		accumulateSet(degree, curSetNodes, curSetNodesFirstValid, curSetNodesBest);
 	}
 
-	private static synchronized void writeProbeRow(int degree, long nodes, long firstValid, long best) {
-		try {
-			if (probeWriter == null) {
-				probeWriter = new java.io.BufferedWriter(new java.io.FileWriter(PROBE_PATH));
-				probeWriter.write("degree,nodesTotal,nodesToFirstValid,nodesToBest\n");
+	/**
+	 * Fold one finished set into its degree bucket. {@code firstValid}/{@code best} are -1 when the
+	 * set produced no budget-valid ordering; those are counted in {@code sets} but excluded from the
+	 * first-valid/best sums (and their {@code validSets} denominator) so the averages measure effort
+	 * only over sets that actually yielded a ride.
+	 */
+	private static void accumulateSet(int degree, long nodes, long firstValid, long best) {
+		synchronized (PROBE_LOCK) {
+			long[] b = probeByDegree.computeIfAbsent(degree, d -> new long[8]);
+			b[0]++;                                   // sets
+			b[2] += nodes;                            // sumNodesTotal
+			if (nodes > b[5]) b[5] = nodes;           // maxNodesTotal
+			if (firstValid >= 0) {
+				b[1]++;                               // validSets
+				b[3] += firstValid;                   // sumFirstValid
+				if (firstValid > b[6]) b[6] = firstValid; // maxFirstValid
+				if (best >= 0) {
+					b[4] += best;                     // sumBest
+					if (best > b[7]) b[7] = best;     // maxBest
+				}
 			}
-			probeWriter.write(degree + "," + nodes + "," + firstValid + "," + best + "\n");
-			probeWriter.flush();
-		} catch (java.io.IOException e) {
-			// best-effort probe; ignore IO failures
 		}
 	}
 
-	private static synchronized void probeClose() {
-		if (probeWriter != null) {
-			try { probeWriter.close(); } catch (java.io.IOException e) { /* ignore */ } finally { probeWriter = null; }
+	/**
+	 * Emit one averaged row per degree. Safe to call more than once (the shutdown hook and an
+	 * explicit end-of-run call both target it) — the {@code probeSummaryWritten} guard writes exactly
+	 * once. Public so the Phase-2 runner can flush the summary at PHASE 2 COMPLETE, not only at JVM
+	 * exit, so a reused JVM or an abnormal teardown still leaves the file on disk.
+	 */
+	public static void writeProbeSummary() { probeClose(); }
+
+	/** Emit one averaged row per degree. Guarded to write exactly once. */
+	private static void probeClose() {
+		synchronized (PROBE_LOCK) {
+			if (probeSummaryWritten || probePath == null || probeByDegree.isEmpty()) return;
+			probeSummaryWritten = true;
+			try {
+				java.io.File f = new java.io.File(probePath);
+				if (f.getParentFile() != null) f.getParentFile().mkdirs();
+				try (java.io.Writer w = new java.io.BufferedWriter(new java.io.FileWriter(f))) {
+					w.write("degree,sets,validSets,meanNodesTotal,meanNodesToFirstValid,meanNodesToBest,"
+							+ "maxNodesTotal,maxNodesToFirstValid,maxNodesToBest\n");
+					for (java.util.Map.Entry<Integer, long[]> e : probeByDegree.entrySet()) {
+						long[] b = e.getValue();
+						long sets = b[0], valid = b[1];
+						double meanTotal = sets > 0 ? (double) b[2] / sets : 0.0;
+						double meanFirst = valid > 0 ? (double) b[3] / valid : -1.0;
+						double meanBest = valid > 0 ? (double) b[4] / valid : -1.0;
+						w.write(e.getKey() + "," + sets + "," + valid + ","
+								+ meanTotal + "," + meanFirst + "," + meanBest + ","
+								+ b[5] + "," + b[6] + "," + b[7] + "\n");
+					}
+				}
+			} catch (java.io.IOException ex) {
+				// best-effort probe; ignore IO failures
+			}
 		}
 	}
 
@@ -200,6 +330,8 @@ public final class EnumerationStats {
 		rideNullFailures = 0;
 		validButWorseThanBest = 0;
 		newBestRides = 0;
+		orderingBudgetHits = 0;
+		curSetBudgetHit = false;
 		timeTotal = 0;
 		timeEnumeration = 0;
 		timeRideConstruction = 0;
@@ -234,12 +366,95 @@ public final class EnumerationStats {
 			total.rideNullFailures += s.rideNullFailures;
 			total.validButWorseThanBest += s.validButWorseThanBest;
 			total.newBestRides += s.newBestRides;
+			total.orderingBudgetHits += s.orderingBudgetHits;
 			total.timeTotal += s.timeTotal;
 			total.timeEnumeration += s.timeEnumeration;
 			total.timeRideConstruction += s.timeRideConstruction;
 			total.timeBudgetValidation += s.timeBudgetValidation;
 		}
 		return total;
+	}
+
+	// ---- CSV persistence (analytics; see EnumerationStatsCsvWriter) ----
+	// The column order below is FIXED and must stay in lock-step between csvHeader() and toCsvRow().
+	// Leading columns are degree-level quantities the extender supplies at the degree boundary
+	// (not per-thread counters); the rest mirror the counters aggregated by sum(). Timing columns
+	// carry raw nanoseconds (suffix "Ns"); log() converts them to ms for humans, the CSV stays
+	// lossless. wallClockMs is the extender's degree wall time; heapUsedBytes is a used-heap sample
+	// (totalMemory-freeMemory) taken at the degree boundary.
+
+	/** Fixed CSV header (no trailing newline). Column order matches {@link #toCsvRow}. */
+	public static String csvHeader() {
+		return String.join(",",
+				// degree-level (supplied by the extender)
+				"degree", "threads", "ridesEmitted", "wallClockMs", "heapUsedBytes",
+				// enumeration flow
+				"setsProcessed", "orderingsEvaluated", "ridesBuilt", "ridesPassedConstraints",
+				"budgetValidations", "budgetPassed", "segmentLookups",
+				"setsConstraintFeasible", "setsBudgetFeasible", "parentSeedRidesFound",
+				// hard-constraint pruning
+				"prunedByTravelTime", "prunedByDropoffCheck",
+				"prunedByDelayWindowOrigin", "prunedByDelayWindowDropoff",
+				// B&B distance-bound
+				"bnbOriginCuts", "bnbOriginSkippedCandidates", "bnbOriginLbCuts", "bnbOriginLbSkippedCandidates",
+				"bnbDestCuts", "bnbDestSkippedCandidates", "bnbDestLbCuts", "bnbDestLbSkippedCandidates",
+				// evaluator funnel
+				"rideNullFailures", "validButWorseThanBest", "newBestRides",
+				// ordering-budget cap
+				"orderingBudgetHits",
+				// timing (raw nanos)
+				"timeTotalNs", "timeEnumerationNs", "timeRideConstructionNs", "timeBudgetValidationNs");
+	}
+
+	/**
+	 * One CSV data row for this (aggregated) stats instance, in {@link #csvHeader()} column order and
+	 * with no trailing newline. The five leading extras are degree-level quantities the extender
+	 * knows at the degree boundary rather than per-thread counters:
+	 *
+	 * @param degree        the degree these stats were produced for (targetDegree)
+	 * @param threads       worker parallelism used for the degree
+	 * @param ridesEmitted  rides actually kept/emitted for this degree (the corpus histogram bin)
+	 * @param wallClockMs   wall-clock milliseconds spent on this degree's extension
+	 * @param heapUsedBytes used heap (totalMemory-freeMemory) sampled at the degree boundary
+	 */
+	public String toCsvRow(int degree, int threads, long ridesEmitted, long wallClockMs, long heapUsedBytes) {
+		StringBuilder sb = new StringBuilder(256);
+		sb.append(degree).append(',')
+				.append(threads).append(',')
+				.append(ridesEmitted).append(',')
+				.append(wallClockMs).append(',')
+				.append(heapUsedBytes).append(',')
+				.append(setsProcessed).append(',')
+				.append(orderingsEvaluated).append(',')
+				.append(ridesBuilt).append(',')
+				.append(ridesPassedConstraints).append(',')
+				.append(budgetValidations).append(',')
+				.append(budgetPassed).append(',')
+				.append(segmentLookups).append(',')
+				.append(setsConstraintFeasible).append(',')
+				.append(setsBudgetFeasible).append(',')
+				.append(parentSeedRidesFound).append(',')
+				.append(prunedByTravelTime).append(',')
+				.append(prunedByDropoffCheck).append(',')
+				.append(prunedByDelayWindowOrigin).append(',')
+				.append(prunedByDelayWindowDropoff).append(',')
+				.append(bnbOriginCuts).append(',')
+				.append(bnbOriginSkippedCandidates).append(',')
+				.append(bnbOriginLbCuts).append(',')
+				.append(bnbOriginLbSkippedCandidates).append(',')
+				.append(bnbDestCuts).append(',')
+				.append(bnbDestSkippedCandidates).append(',')
+				.append(bnbDestLbCuts).append(',')
+				.append(bnbDestLbSkippedCandidates).append(',')
+				.append(rideNullFailures).append(',')
+				.append(validButWorseThanBest).append(',')
+				.append(newBestRides).append(',')
+				.append(orderingBudgetHits).append(',')
+				.append(timeTotal).append(',')
+				.append(timeEnumeration).append(',')
+				.append(timeRideConstruction).append(',')
+				.append(timeBudgetValidation);
+		return sb.toString();
 	}
 
 	public void log(Logger log, int degree, int threads) {
@@ -285,6 +500,8 @@ public final class EnumerationStats {
 				totalEvalOutcomes > 0 ? String.format("%.1f", 100.0 * validButWorseThanBest / totalEvalOutcomes) : "N/A");
 		log.info("    new-best (tightened):      {} ({}%)", newBestRides,
 				totalEvalOutcomes > 0 ? String.format("%.1f", 100.0 * newBestRides / totalEvalOutcomes) : "N/A");
+		log.info("  Ordering-budget cap hits: {} ({}% of processed)", orderingBudgetHits,
+				setsProcessed > 0 ? String.format("%.1f", 100.0 * orderingBudgetHits / setsProcessed) : "N/A");
 		log.info("  Sets constraint-feasible: {} ({}% of processed)", setsConstraintFeasible,
 				setsProcessed > 0 ? String.format("%.1f", 100.0 * setsConstraintFeasible / setsProcessed) : "N/A");
 		log.info("  Sets budget-feasible: {} ({}% of processed)", setsBudgetFeasible,
