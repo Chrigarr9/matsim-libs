@@ -385,8 +385,10 @@ public final class PairGenerator {
 	 *
 	 * <p>Validation here is safe in the parallel candidate phase: {@code buildRide} is pure over
 	 * the candidate's stored segments (no routing, no shared mutable state) and {@link BudgetValidator}
-	 * is stateless (final fields + each request's immutable scoring context), so validity is a
-	 * deterministic per-candidate function and the kept set is independent of thread interleaving.
+	 * is stateless (final fields, and {@code DrtTripScorer.scoreWithContext} is thread-confined —
+	 * it builds its walk legs per call and never writes into the shared scoring context, EXT-5),
+	 * so validity is a deterministic per-candidate function and the kept set is independent of
+	 * thread interleaving.
 	 * Phase 3 re-validates the kept rows in its sequential byte-parity order (unchanged).
 	 */
 	private List<PairCandidate> capToTopKPartners(List<PairCandidate> results) {
