@@ -355,7 +355,7 @@ public class DrtRequestFactory {
 				double[] ptMetrics = (personPtMetrics != null) ? personPtMetrics.get(tripIdx) : null;
 
 				DrtRequest request = buildRequest(
-						requests.size(), person, trip, tripIdx, groupId, isCommute, bestBaselineMode, modeAttrs, ptMetrics);
+						requests.size(), person, trip, tripIdx, groupId, isCommute, isEducation, bestBaselineMode, modeAttrs, ptMetrics);
 
 				if (request != null) {
 					requests.add(request);
@@ -512,10 +512,14 @@ public class DrtRequestFactory {
 	 * Uses BudgetValidator for consistent budget calculation methodology.
 	 *
 	 * @param ptMetrics PT accessibility metrics: [carTravelTime, ptTravelTime], or null if unavailable
+	 *
+	 * <p>Package-private so the same-package test harness can invoke it directly
+	 * (mirrors the other package-private seams {@code budgetDerivedCaps},
+	 * {@code finalizeVirtualLeg}, {@code renumber}).
 	 */
-	private DrtRequest buildRequest(
+	DrtRequest buildRequest(
 			int requestIndex, Person person, Trip trip, int tripIdx,
-			String groupId, boolean isCommute, Entry<String, Double> bestBaselineMode,
+			String groupId, boolean isCommute, boolean isEducation, Entry<String, Double> bestBaselineMode,
 			Map<String, ModeAttributes> modeAttrs, double[] ptMetrics) {
 
 		String drtMode = exmasConfig.getDrtMode();
@@ -607,6 +611,7 @@ public class DrtRequestFactory {
 				.groupId(groupId)
 				.tripIndex(tripIdx)
 				.isCommute(isCommute)
+				.isEducation(isEducation)
 				.bestModeScore(bestBaselineMode.getValue())
 				.bestMode(bestBaselineMode.getKey())
 				.requestTag(requestTag)
