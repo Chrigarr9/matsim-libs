@@ -567,6 +567,34 @@ public class DrtRequestFactoryVirtualTripTest {
         }
     }
 
+    // ---- EXT-9: shifted access sync-variants consume the origin flexibility ----
+
+    @Test
+    void accessSyncVariants_consumeOriginFlexibility() {
+        Network network = buildGridNetwork();
+        List<HubSetLoader.Hub> hubs = threeHubs().subList(0, 1);
+        Predicate<Coord> isInsideMetropole = c -> c.getX() >= 500.0;
+        DrtRequest fwd = TestRequestBuilder.connectingFixture(null).toBuilder()
+                .requestTime(7200.0)
+                .earliestDeparture(6600.0)   // 600 s origin flexibility
+                .latestArrival(14400.0)
+                .build();
+
+        List<DrtRequest> access = DrtRequestFactory.expandConnecting(
+                fwd, hubs, FleetSide.RURAL, isInsideMetropole, network,
+                fixedRouter(), 300.0, 600.0, true, 1200.0, null);
+
+        for (DrtRequest v : access) {
+            if (v.requestTime < fwd.requestTime - 1e-9) { // shifted variants only (k >= 1)
+                assertEquals(v.requestTime, v.earliestDeparture, 1e-9,
+                        "a shifted variant consumes the origin flexibility; earliness "
+                        + "beyond hubSyncMaxAdvance must not stack on originFlex");
+            } else { // k == 0 stays byte-identical
+                assertEquals(fwd.earliestDeparture, v.earliestDeparture, 1e-9);
+            }
+        }
+    }
+
     @Test
     void sanity_metropoleStubMatchesFixtureEndpoints() {
         // The connecting fixture has origin=(0,0) (outside the x>=500 stub

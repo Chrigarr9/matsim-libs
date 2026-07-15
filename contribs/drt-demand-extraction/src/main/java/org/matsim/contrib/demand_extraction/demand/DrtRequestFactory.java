@@ -1231,12 +1231,14 @@ public class DrtRequestFactory {
 						}
 						continue;
 					}
-					// Shift BOTH temporal anchors earlier by the offset. At offset 0
-					// this leaves requestTime/earliestDeparture exactly as the
-					// original's (byte-identical to today; earliestDeparture may
-					// differ from requestTime under the budget-aware flex path).
+					// Shift requestTime earlier by the offset. At offset 0 this leaves
+					// requestTime/earliestDeparture exactly as the original's
+					// (byte-identical to today; earliestDeparture may differ from
+					// requestTime under the budget-aware flex path).
 					b.requestTime(newRequestTime)
-					 .earliestDeparture(original.earliestDeparture - offset)
+					 // k=0: byte-identical to v1. k>=1: the variant consumes the origin
+					 // flexibility — the offset grid is the earliness mechanism (EXT-9).
+					 .earliestDeparture(offset == 0.0 ? original.earliestDeparture : newRequestTime)
 					 .directTravelTime(varFirst[0]).directDistance(varFirst[1])
 					 .latestArrival(legLatestArrival)
 					 .hubLegRole(DrtRequest.HubLegRole.ACCESS_LEG)
