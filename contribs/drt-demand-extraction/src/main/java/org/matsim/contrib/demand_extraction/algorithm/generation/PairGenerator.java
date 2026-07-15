@@ -375,13 +375,18 @@ public final class PairGenerator {
 	/**
 	 * Apply the degree-2 top-K partner cap to one request's routed candidate rows.
 	 *
-	 * <p>"Top-K partners" counts only partners that have at least one <em>budget-valid</em>
-	 * shared ride: each candidate is budget-validated here, partners are ranked by their best
-	 * valid distance saving, the top {@code K} distinct valid partners are kept, and every
-	 * valid variant (FIFO/LIFO) of a kept partner survives. So the kept count is never
+	 * <p>"Top-K partners" counts distinct partner PERSONS (commuters), not request copies: all
+	 * hub copies / sync variants of one commuter share the {@code getPaxId()} person id, so they
+	 * collapse into a single partner slot and can never fill more than one of the {@code K} slots
+	 * (EXT-13). Only partners that have at least one <em>budget-valid</em> shared ride count: each
+	 * candidate is budget-validated here, partners are ranked by their best valid distance saving,
+	 * the top {@code K} distinct valid partner persons are kept, and every valid variant
+	 * (FIFO/LIFO, and every copy) of a kept partner survives. So the kept count is never
 	 * under-filled by a later budget rejection — a partner with no valid variant cannot occupy
-	 * a slot. When {@code pairgenTopK == 0} this is a no-op (Phase 3 validates as usual; the
-	 * default path is byte-identical to an un-capped run).
+	 * a slot. Equal-saving ties break on the smallest {@code reqJ.index} among a partner's rows,
+	 * so the distinct-persons path stays byte-identical to the pre-EXT-13 cap. When
+	 * {@code pairgenTopK == 0} this is a no-op (Phase 3 validates as usual; the default path is
+	 * byte-identical to an un-capped run).
 	 *
 	 * <p>Validation here is safe in the parallel candidate phase: {@code buildRide} is pure over
 	 * the candidate's stored segments (no routing, no shared mutable state) and {@link BudgetValidator}
@@ -396,20 +401,32 @@ public final class PairGenerator {
 			return results;
 		}
 		int m = results.size();
-		int[] partnerIndex = new int[m];
+		// EXT-13: partners are COMMUTERS, not request copies — all hub copies / sync variants of
+		// one person (same getPaxId()) share a dense slot id (assigned in first-seen candidate
+		// order, deterministic because `results` arrives in the generator's candidate order), so
+		// they collapse into ONE of the K partner slots. The tie-break stays on reqJ.index (kept
+		// in a separate key array) so a run with only distinct-person partners is byte-identical
+		// to the pre-EXT-13 cap.
+		int[] partnerSlot = new int[m];
+		int[] tieKey = new int[m];
 		double[] saving = new double[m];
 		boolean[] valid = new boolean[m];
+		java.util.HashMap<String, Integer> paxSlot = new java.util.HashMap<>();
 		for (int r = 0; r < m; r++) {
 			PairCandidate c = results.get(r);
 			double rideDist = 0.0;
 			for (double d : c.connectionDistances) rideDist += d;
-			partnerIndex[r] = c.reqJ.index;
+			String pid = c.reqJ.getPaxId();
+			Integer slot = paxSlot.get(pid);
+			if (slot == null) { slot = paxSlot.size(); paxSlot.put(pid, slot); }
+			partnerSlot[r] = slot;
+			tieKey[r] = c.reqJ.index;
 			saving[r] = c.reqI.directDistance + c.reqJ.directDistance - rideDist;
 			// Same budget check Phase 3 applies. The ride index is irrelevant to budget
 			// feasibility, so a throwaway 0 is fine; the validated ride is discarded.
 			valid[r] = budgetValidator.validateAndPopulateBudgets(buildRide(c, 0)) != null;
 		}
-		boolean[] keep = keepMaskValid(partnerIndex, saving, valid, pairgenTopK);
+		boolean[] keep = keepMaskValid(partnerSlot, tieKey, saving, valid, pairgenTopK);
 		List<PairCandidate> capped = new ArrayList<>();
 		for (int r = 0; r < m; r++) {
 			if (keep[r]) capped.add(results.get(r));
@@ -716,13 +733,39 @@ public final class PairGenerator {
 	 * valid partners ⇒ all valid partners), and within kept partners keep every valid row.
 	 * Invalid rows are never kept — so "top-K partners" counts only partners that have at least
 	 * one budget-valid shared ride, and the count cannot be under-filled by post-cap rejection.
+	 *
+	 * <p>Here the grouping key and the tie-break key coincide: partners are grouped by
+	 * {@code partnerIndex} and equal-saving ties break on that same index ascending.
 	 */
 	static boolean[] keepMaskValid(int[] partnerIndex, double[] saving, boolean[] valid, int k) {
-		int n = partnerIndex.length;
+		return keepMaskValid(partnerIndex, partnerIndex, saving, valid, k);
+	}
+
+	/**
+	 * Validity-aware top-K-partner mask with a separate tie-break key (EXT-13).
+	 *
+	 * <p>Partners are grouped by {@code partnerGroup} (e.g. a per-commuter slot id, so all hub
+	 * copies / sync variants of one person collapse into one partner), ranked by best valid
+	 * saving descending, and equal-saving ties break on the per-group MINIMUM {@code tieKey}
+	 * ascending (e.g. the smallest {@code reqJ.index} among the group's rows). Splitting the two
+	 * keys keeps the tie-break stable on {@code reqJ.index} even though rows arrive in
+	 * filter-time order and slot ids are assigned in first-seen order — so a run whose partners
+	 * are all distinct persons (one row per group, {@code tieKey == group representative}) is
+	 * byte-identical to the pre-EXT-13 cap.
+	 *
+	 * <p>The single-key {@link #keepMaskValid(int[], double[], boolean[], int)} overload delegates
+	 * here with {@code tieKey == partnerGroup}, recovering the coincident-key behaviour exactly.
+	 */
+	static boolean[] keepMaskValid(int[] partnerGroup, int[] tieKey, double[] saving, boolean[] valid, int k) {
+		int n = partnerGroup.length;
 		boolean[] mask = new boolean[n];
 		java.util.Map<Integer, Double> best = new java.util.HashMap<>();
+		java.util.Map<Integer, Integer> tie = new java.util.HashMap<>();
 		for (int r = 0; r < n; r++) {
-			if (valid[r]) best.merge(partnerIndex[r], saving[r], Math::max);
+			if (valid[r]) {
+				best.merge(partnerGroup[r], saving[r], Math::max);
+				tie.merge(partnerGroup[r], tieKey[r], Math::min);
+			}
 		}
 		java.util.Set<Integer> keep;
 		if (k <= 0 || best.size() <= k) {
@@ -732,12 +775,12 @@ public final class PairGenerator {
 			partners.sort((a, b) -> {
 				int c = Double.compare(best.get(b), best.get(a)); // saving descending
 				if (c != 0) return c;
-				return Integer.compare(a, b);                      // tie: index ascending
+				return Integer.compare(tie.get(a), tie.get(b));    // tie: reqJ.index ascending
 			});
 			keep = new java.util.HashSet<>(partners.subList(0, k));
 		}
 		for (int r = 0; r < n; r++) {
-			mask[r] = valid[r] && keep.contains(partnerIndex[r]);
+			mask[r] = valid[r] && keep.contains(partnerGroup[r]);
 		}
 		return mask;
 	}
