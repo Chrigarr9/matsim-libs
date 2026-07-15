@@ -28,6 +28,26 @@ final class TestRequestBuilder {
     }
 
     /**
+     * Reverse-direction connecting fixture: origin (1000,0) is URBAN under the
+     * tests' `x >= 500` metropole predicate, destination (0,0) is RURAL.
+     * Journey: urban origin -> hub -> rural destination (e.g. work -> home).
+     */
+    static DrtRequest connectingReverseFixture(String hubId) {
+        return baseBuilder(3, "p_connecting_rev")
+            .requestTag("connecting")
+            .hubId(hubId)
+            .originLinkId(Id.createLinkId("l_d"))
+            .destinationLinkId(Id.createLinkId("l_o"))
+            .originX(1000.0).originY(0.0)
+            .destinationX(0.0).destinationY(0.0)
+            .originLinkCoordFromX(1000.0).originLinkCoordFromY(0.0)
+            .originLinkCoordToX(1000.0).originLinkCoordToY(0.0)
+            .destinationLinkCoordFromX(0.0).destinationLinkCoordFromY(0.0)
+            .destinationLinkCoordToX(0.0).destinationLinkCoordToY(0.0)
+            .build();
+    }
+
+    /**
      * Returns a minimal {@link DrtRequest} tagged {@code "rural_intra"} with a
      * {@code null} {@code hubId} (non-virtual trip).
      */

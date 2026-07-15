@@ -877,15 +877,21 @@ public class DrtRequestFactory {
 	/**
 	 * Paper-2 Extension 2 — virtual-trip expansion for one {@code connecting}
 	 * request. Returns {@code |hubs|} copies of {@code original}, each with
-	 * one endpoint replaced by a hub coordinate (which endpoint depends on
-	 * {@code fleetSide}):
+	 * one endpoint replaced by a hub coordinate. Which endpoint is replaced,
+	 * and the leg role, follow the journey ORIENTATION and which physical leg
+	 * this fleet serves — NOT {@code fleetSide} alone (EXT-1). The rural fleet
+	 * serves the leg whose non-hub endpoint is the rural end; that leg is the
+	 * journey's FIRST leg (origin->hub) iff the rural end is the origin
+	 * (forward, rural->urban), and the SECOND leg (hub->destination) otherwise
+	 * (reverse, urban->rural). The urban fleet mirrors this.
 	 *
 	 * <ul>
-	 *   <li>{@link FleetSide#RURAL} — the URBAN endpoint (the one inside the
-	 *       metropole polygon) is replaced. The rural fleet sees a rural-to-hub
-	 *       trip.</li>
-	 *   <li>{@link FleetSide#URBAN} — the RURAL endpoint is replaced. The
-	 *       urban fleet sees a hub-to-urban trip.</li>
+	 *   <li>The copy serving the leg that contains the journey ORIGIN is an
+	 *       {@link DrtRequest.HubLegRole#ACCESS_LEG} ({@code O->hub}): the hub
+	 *       replaces the destination.</li>
+	 *   <li>The copy serving the leg that contains the journey DESTINATION is a
+	 *       {@link DrtRequest.HubLegRole#CONTINUATION_LEG} ({@code hub->D}): the
+	 *       hub replaces the origin.</li>
 	 * </ul>
 	 *
 	 * <p>For non-connecting tags ({@code rural_intra}, {@code urban_intra},
@@ -897,18 +903,20 @@ public class DrtRequestFactory {
 	 *
 	 * <p>Paper-2 Ext-2 (Task 8): each virtual copy carries its OWN leg's routed
 	 * {@code directTravelTime} / {@code directDistance} (from {@code legRouter}),
-	 * not the inherited full-trip values. The journey orientation is
-	 * {@code ruralEnd -> hub -> urbanEnd}; both legs are routed so the off-fleet
-	 * leg's direct time drives a temporal split:
+	 * not the inherited full-trip values. Both legs are routed in physical
+	 * travel direction ({@code firstLeg = O->hub}, {@code secondLeg = hub->D})
+	 * so the off-fleet leg's direct time drives a temporal split, keyed on the
+	 * copy's ROLE (see above), not {@code fleetSide}:
 	 * <ul>
-	 *   <li>{@link FleetSide#RURAL} ACCESS leg ({@code O->hub}): departs at
-	 *       {@code requestTime}; {@code latestArrival} is backed out as
-	 *       {@code original.latestArrival - urbanLeg_tt - buffer} so the
+	 *   <li>ACCESS leg ({@code O->hub}): departs at {@code requestTime};
+	 *       {@code latestArrival} is backed out as
+	 *       {@code original.latestArrival - secondLeg_tt - buffer} so the
 	 *       continuation + transfer still make the full-trip deadline. Role
 	 *       {@code ACCESS_LEG}, {@code transferWaitSeconds = 0}.</li>
-	 *   <li>{@link FleetSide#URBAN} CONTINUATION leg ({@code hub->D}): shifted to
-	 *       {@code requestTime + ruralLeg_tt + buffer} (and
-	 *       {@code earliestDeparture} likewise), keeping the full-trip
+	 *   <li>CONTINUATION leg ({@code hub->D}): shifted to
+	 *       {@code requestTime + firstLeg_tt + buffer} (and
+	 *       {@code earliestDeparture} likewise, EXT-3-clamped so it never
+	 *       precedes hub arrival + buffer), keeping the full-trip
 	 *       {@code latestArrival}. Role {@code CONTINUATION_LEG},
 	 *       {@code transferWaitSeconds = buffer}.</li>
 	 * </ul>
@@ -1088,45 +1096,28 @@ public class DrtRequestFactory {
 		Coord destCoord = new Coord(original.destinationX, original.destinationY);
 		boolean originIsUrban = isInsideMetropole.test(originCoord);
 		boolean destIsUrban = isInsideMetropole.test(destCoord);
-		boolean replaceOrigin;
-		if (fleetSide == FleetSide.RURAL) {
-			// Rural fleet sees rural-to-hub: replace the urban endpoint.
-			if (originIsUrban && !destIsUrban) {
-				replaceOrigin = true;     // origin was urban, becomes hub
-			} else {
-				replaceOrigin = false;    // default: destination was urban
-			}
-		} else { // URBAN
-			// Urban fleet sees hub-to-urban: replace the rural endpoint.
-			if (destIsUrban && !originIsUrban) {
-				replaceOrigin = true;     // origin was rural, becomes hub
-			} else if (!destIsUrban && originIsUrban) {
-				replaceOrigin = false;    // destination was rural, becomes hub
-			} else {
-				// Fallback: assume origin is rural (mirrors the
-				// rural-fleet fallback orientation).
-				replaceOrigin = true;
-			}
-		}
 
-		// Endpoint links in journey orientation: rural end -> hub -> urban end.
-		// The hub replaces ONE endpoint; the OTHER (kept) endpoint is THIS fleet's
-		// served terminus, and the replaced one is the off-fleet terminus.
-		// `replaceOrigin` carries OPPOSITE coordinate-semantics per fleet — RURAL
-		// replaces the urban endpoint, URBAN the rural one (see the branch above) —
-		// so the rural/urban terminus assignment MUST branch on fleetSide. Deriving
-		// it from `replaceOrigin` alone (the old code) routed the URBAN continuation
-		// leg to the rural origin, corrupting its directDistance/directTravelTime.
-		Id<Link> replacedEndLink = replaceOrigin ? original.originLinkId : original.destinationLinkId;
-		Id<Link> keptEndLink     = replaceOrigin ? original.destinationLinkId : original.originLinkId;
-		Id<Link> ruralEndLink, urbanEndLink;
-		if (fleetSide == FleetSide.RURAL) {
-			ruralEndLink = keptEndLink;       // rural fleet keeps the rural end,
-			urbanEndLink = replacedEndLink;   // replaces the urban end with the hub
-		} else {
-			urbanEndLink = keptEndLink;       // urban fleet keeps the urban end,
-			ruralEndLink = replacedEndLink;   // replaces the rural end with the hub
-		}
+		// Journey orientation: is the RURAL end the journey origin (forward,
+		// rural->urban) or the destination (reverse, urban->rural)? Ambiguous
+		// cases (neither or both endpoints test urban) fall back to FORWARD,
+		// matching the historical dominant home-to-work assumption.
+		boolean ruralEndIsOrigin = !(originIsUrban && !destIsUrban);
+
+		// Which physical leg does THIS fleet serve? The rural fleet serves the
+		// leg whose non-hub endpoint is the rural end; that leg is the journey's
+		// FIRST leg (O->hub, ACCESS) iff the rural end is the origin. Mirrored
+		// for the urban fleet. Role therefore depends on orientation, NOT on
+		// fleetSide alone (the old code inverted reverse-direction trips).
+		boolean fleetServesOriginEnd = (fleetSide == FleetSide.RURAL) == ruralEndIsOrigin;
+		DrtRequest.HubLegRole role = fleetServesOriginEnd
+				? DrtRequest.HubLegRole.ACCESS_LEG
+				: DrtRequest.HubLegRole.CONTINUATION_LEG;
+
+		// Endpoint replacement follows the role: an ACCESS copy is O->hub (the
+		// hub replaces the destination), a CONTINUATION copy is hub->D (the hub
+		// replaces the origin). This reproduces the old geometry in all four
+		// orientation x fleetSide cases — only roles/timing/metrics change.
+		boolean replaceOrigin = (role == DrtRequest.HubLegRole.CONTINUATION_LEG);
 
 		List<DrtRequest> copies = new ArrayList<>(hubs.size());
 		for (HubSetLoader.Hub hub : hubs) {
@@ -1134,27 +1125,35 @@ public class DrtRequestFactory {
 			Link hubLink = NetworkUtils.getNearestLink(network, hubCoord);
 			Id<Link> hubLinkId = hubLink.getId();
 
-			// Route BOTH legs regardless of fleetSide: the off-fleet leg's direct
-			// time drives the temporal split (urban shift / rural deadline).
-			double[] ruralLeg = legRouter.route(ruralEndLink, hubLinkId, original.requestTime);
-			if (ruralLeg == null || ruralLeg[0] <= 0.0 || ruralLeg[1] <= 0.0) {
+			// Route BOTH legs in PHYSICAL travel direction: firstLeg = journey
+			// origin -> hub at the desired departure; secondLeg = hub -> journey
+			// destination after the first leg + transfer buffer.
+			double[] firstLeg = legRouter.route(original.originLinkId, hubLinkId, original.requestTime);
+			if (firstLeg == null || firstLeg[0] <= 0.0 || firstLeg[1] <= 0.0) {
 				if (stats != null) {
-					stats.unroutableRuralLeg++;
+					if (ruralEndIsOrigin) stats.unroutableRuralLeg++; else stats.unroutableUrbanLeg++;
 					recordDetour(stats, original, fleetSide, hub, Double.NaN, Double.NaN,
-							transferBufferSeconds, false, "unroutable_rural_leg");
+							transferBufferSeconds, false,
+							ruralEndIsOrigin ? "unroutable_rural_leg" : "unroutable_urban_leg");
 				}
 				continue;
 			}
-			double[] urbanLeg = legRouter.route(hubLinkId, urbanEndLink,
-					original.requestTime + ruralLeg[0] + transferBufferSeconds);
-			if (urbanLeg == null || urbanLeg[0] <= 0.0 || urbanLeg[1] <= 0.0) {
+			double[] secondLeg = legRouter.route(hubLinkId, original.destinationLinkId,
+					original.requestTime + firstLeg[0] + transferBufferSeconds);
+			if (secondLeg == null || secondLeg[0] <= 0.0 || secondLeg[1] <= 0.0) {
 				if (stats != null) {
-					stats.unroutableUrbanLeg++;
-					recordDetour(stats, original, fleetSide, hub, ruralLeg[0], Double.NaN,
-							transferBufferSeconds, false, "unroutable_urban_leg");
+					if (ruralEndIsOrigin) stats.unroutableUrbanLeg++; else stats.unroutableRuralLeg++;
+					recordDetour(stats, original, fleetSide, hub,
+							ruralEndIsOrigin ? firstLeg[0] : Double.NaN,
+							ruralEndIsOrigin ? Double.NaN : firstLeg[0],
+							transferBufferSeconds, false,
+							ruralEndIsOrigin ? "unroutable_urban_leg" : "unroutable_rural_leg");
 				}
 				continue;
 			}
+			// Diagnostics keep the rural/urban naming: map first/second by orientation.
+			double ruralLegTime = ruralEndIsOrigin ? firstLeg[0] : secondLeg[0];
+			double urbanLegTime = ruralEndIsOrigin ? secondLeg[0] : firstLeg[0];
 
 			DrtRequest.Builder b = original.toBuilder().hubId(hub.id());
 			Coord hubLinkFrom = hubLink.getFromNode().getCoord();
@@ -1171,11 +1170,11 @@ public class DrtRequestFactory {
 				 .destinationLinkCoordToX(hubLinkTo.getX()).destinationLinkCoordToY(hubLinkTo.getY());
 			}
 
-			if (fleetSide == FleetSide.RURAL) {
-				// ACCESS leg O->hub. The deadline backout uses the urban-leg time
-				// (routed at the original departure) exactly as today:
-				//   legLatestArrival = original.latestArrival − urbanLeg − buffer.
-				double legLatestArrival = original.latestArrival - urbanLeg[0] - transferBufferSeconds;
+			if (role == DrtRequest.HubLegRole.ACCESS_LEG) {
+				// ACCESS leg O->hub. The deadline backout uses the SECOND (post-hub)
+				// leg time (routed at the original departure) exactly as today:
+				//   legLatestArrival = original.latestArrival − secondLeg − buffer.
+				double legLatestArrival = original.latestArrival - secondLeg[0] - transferBufferSeconds;
 
 				// Variant offsets. v1 (twosided off) → only offset 0, departing at
 				// the original requestTime → byte-identical to today. v2 (twosided
@@ -1194,27 +1193,34 @@ public class DrtRequestFactory {
 				for (int k = 0; k < numVariants; k++) {
 					double offset = k * maxHubWaitSeconds;
 					double newRequestTime = original.requestTime - offset;
-					// Re-route the rural leg at the new departure (leg travel time
-					// can depend on departure). Offset 0 reuses the already-routed
+					// Re-route the first (O->hub) leg at the new departure (leg travel
+					// time can depend on departure). Offset 0 reuses the already-routed
 					// leg so v1 stays byte-identical.
-					double[] varRural;
+					double[] varFirst;
 					if (offset == 0.0) {
-						varRural = ruralLeg;
+						varFirst = firstLeg;
 					} else {
-						varRural = legRouter.route(ruralEndLink, hubLinkId, newRequestTime);
-						if (varRural == null || varRural[0] <= 0.0 || varRural[1] <= 0.0) {
+						varFirst = legRouter.route(original.originLinkId, hubLinkId, newRequestTime);
+						if (varFirst == null || varFirst[0] <= 0.0 || varFirst[1] <= 0.0) {
 							if (stats != null) {
-								stats.unroutableRuralLeg++;
-								recordDetour(stats, original, fleetSide, hub, Double.NaN, urbanLeg[0],
-										transferBufferSeconds, false, "unroutable_rural_leg");
+								if (ruralEndIsOrigin) stats.unroutableRuralLeg++; else stats.unroutableUrbanLeg++;
+								recordDetour(stats, original, fleetSide, hub,
+										ruralEndIsOrigin ? Double.NaN : secondLeg[0],
+										ruralEndIsOrigin ? secondLeg[0] : Double.NaN,
+										transferBufferSeconds, false,
+										ruralEndIsOrigin ? "unroutable_rural_leg" : "unroutable_urban_leg");
 							}
 							continue;
 						}
 					}
-					if (newRequestTime + varRural[0] > legLatestArrival) { // hub doesn't fit
+					// Diagnostics keep rural/urban naming: the variant's first-leg time
+					// maps to the rural/urban slot by orientation.
+					double varRuralLegTime = ruralEndIsOrigin ? varFirst[0] : secondLeg[0];
+					double varUrbanLegTime = ruralEndIsOrigin ? secondLeg[0] : varFirst[0];
+					if (newRequestTime + varFirst[0] > legLatestArrival) { // hub doesn't fit
 						if (stats != null) {
 							stats.temporalInfeasible++;
-							recordDetour(stats, original, fleetSide, hub, varRural[0], urbanLeg[0],
+							recordDetour(stats, original, fleetSide, hub, varRuralLegTime, varUrbanLegTime,
 									transferBufferSeconds, false, "temporal_infeasible");
 						}
 						continue;
@@ -1225,7 +1231,7 @@ public class DrtRequestFactory {
 					// differ from requestTime under the budget-aware flex path).
 					b.requestTime(newRequestTime)
 					 .earliestDeparture(original.earliestDeparture - offset)
-					 .directTravelTime(varRural[0]).directDistance(varRural[1])
+					 .directTravelTime(varFirst[0]).directDistance(varFirst[1])
 					 .latestArrival(legLatestArrival)
 					 .hubLegRole(DrtRequest.HubLegRole.ACCESS_LEG)
 					 .transferWaitSeconds(0.0);
@@ -1234,7 +1240,7 @@ public class DrtRequestFactory {
 					copies.add(variant);
 					if (stats != null) {
 						stats.kept++;
-						recordDetour(stats, original, fleetSide, hub, varRural[0], urbanLeg[0],
+						recordDetour(stats, original, fleetSide, hub, varRuralLegTime, varUrbanLegTime,
 								transferBufferSeconds, true, "kept");
 					}
 				}
@@ -1243,23 +1249,28 @@ public class DrtRequestFactory {
 				continue;
 			} else {
 				// CONTINUATION leg hub->D. The pax reaches the hub at hubArrival =
-				// requestTime + ruralLeg (direct, unbuffered).
-				double hubArrival = original.requestTime + ruralLeg[0];
+				// requestTime + firstLeg (direct, unbuffered).
+				double hubArrival = original.requestTime + firstLeg[0];
 				if (maxHubWaitSeconds <= 0.0) {
 					// Legacy fixed-buffer split (backward-compat, byte-identical):
 					// departure pinned at hubArrival + buffer, buffer charged as wait.
-					double shift = ruralLeg[0] + transferBufferSeconds;
-					if (original.requestTime + shift + urbanLeg[0] > original.latestArrival) {
+					double shift = firstLeg[0] + transferBufferSeconds;
+					if (original.requestTime + shift + secondLeg[0] > original.latestArrival) {
 						if (stats != null) {
 							stats.temporalInfeasible++;
-							recordDetour(stats, original, fleetSide, hub, ruralLeg[0], urbanLeg[0],
+							recordDetour(stats, original, fleetSide, hub, ruralLegTime, urbanLegTime,
 									transferBufferSeconds, false, "temporal_infeasible");
 						}
 						continue;
 					}
-					b.directTravelTime(urbanLeg[0]).directDistance(urbanLeg[1])
+					// EXT-3: the continuation can never depart the hub before the pax
+					// arrives (hubArrival + buffer == original.requestTime + shift).
+					// Without the clamp, originFlex opens the window up to originFlex
+					// seconds BEFORE the physical transfer is possible.
+					b.directTravelTime(secondLeg[0]).directDistance(secondLeg[1])
 					 .requestTime(original.requestTime + shift)
-					 .earliestDeparture(original.earliestDeparture + shift)
+					 .earliestDeparture(Math.max(original.earliestDeparture + shift,
+							original.requestTime + shift))
 					 .hubLegRole(DrtRequest.HubLegRole.CONTINUATION_LEG)
 					 .transferWaitSeconds(transferBufferSeconds);
 				} else {
@@ -1267,17 +1278,17 @@ public class DrtRequestFactory {
 					// in [hubArrival, hubArrival + maxHubWait], so the urban graph pools
 					// continuation bundles at different slots. The served wait is realized
 					// by bundling, not a fixed buffer (transferWait = 0).
-					if (hubArrival + urbanLeg[0] > original.latestArrival) { // can't make it even departing now
+					if (hubArrival + secondLeg[0] > original.latestArrival) { // can't make it even departing now
 						if (stats != null) {
 							stats.temporalInfeasible++;
-							recordDetour(stats, original, fleetSide, hub, ruralLeg[0], urbanLeg[0],
+							recordDetour(stats, original, fleetSide, hub, ruralLegTime, urbanLegTime,
 									transferBufferSeconds, false, "temporal_infeasible");
 						}
 						continue;
 					}
 					double legLatestArrival = Math.min(original.latestArrival,
-							hubArrival + maxHubWaitSeconds + urbanLeg[0]);
-					b.directTravelTime(urbanLeg[0]).directDistance(urbanLeg[1])
+							hubArrival + maxHubWaitSeconds + secondLeg[0]);
+					b.directTravelTime(secondLeg[0]).directDistance(secondLeg[1])
 					 .requestTime(hubArrival)
 					 .earliestDeparture(hubArrival)
 					 .latestArrival(legLatestArrival)
@@ -1291,7 +1302,7 @@ public class DrtRequestFactory {
 			copies.add(copy);
 			if (stats != null) {
 				stats.kept++;
-				recordDetour(stats, original, fleetSide, hub, ruralLeg[0], urbanLeg[0],
+				recordDetour(stats, original, fleetSide, hub, ruralLegTime, urbanLegTime,
 						transferBufferSeconds, true, "kept");
 			}
 		}

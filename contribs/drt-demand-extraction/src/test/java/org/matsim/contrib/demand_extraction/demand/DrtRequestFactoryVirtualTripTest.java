@@ -384,6 +384,96 @@ public class DrtRequestFactoryVirtualTripTest {
                 .allMatch(d -> "temporal_infeasible".equals(d.reason())));
     }
 
+    private static LegRouter fixedRouter() {
+        return (from, to, dep) -> new double[] {600.0, 5000.0};
+    }
+
+    // ---- EXT-1: reverse direction (urban origin -> rural destination) ----
+
+    @Test
+    void reverseTrip_ruralFleet_emitsContinuationLeg_shiftedLate_withOwnDirectionMetrics() {
+        Network network = buildGridNetwork();
+        List<HubSetLoader.Hub> hubs = threeHubs();
+        Predicate<Coord> isInsideMetropole = c -> c.getX() >= 500.0;
+        DrtRequest rev = TestRequestBuilder.connectingReverseFixture(null);
+
+        List<DrtRequest> expanded = DrtRequestFactory.expandConnecting(
+                rev, hubs, FleetSide.RURAL, isInsideMetropole, network,
+                fixedRouter(), 300.0);
+
+        assertEquals(3, expanded.size());
+        for (DrtRequest v : expanded) {
+            // Rural fleet serves the SECOND leg (hub -> rural destination).
+            assertEquals(DrtRequest.HubLegRole.CONTINUATION_LEG, v.hubLegRole,
+                    "reverse trip: rural-side copy is the continuation leg");
+            // Origin replaced by hub, rural destination kept.
+            assertEquals(rev.destinationX, v.destinationX, 1e-9);
+            assertEquals(rev.destinationY, v.destinationY, 1e-9);
+            // Anchored AFTER the urban access leg: requestTime + first(600) + buffer(300).
+            assertEquals(rev.requestTime + 600.0 + 300.0, v.requestTime, 1e-9);
+            // Direct metrics from the copy's own OD (hub -> rural dest), 600 s / 5000 m.
+            assertEquals(600.0, v.directTravelTime, 1e-9);
+            assertEquals(5000.0, v.directDistance, 1e-9);
+            // EXT-3 clamp: the leg can never depart the hub before the pax arrives.
+            assertTrue(v.earliestDeparture >= v.requestTime - 1e-9,
+                    "legacy continuation must not depart before hub arrival + buffer");
+        }
+    }
+
+    @Test
+    void reverseTrip_urbanFleet_emitsAccessLeg_atOriginalDeparture_withDeadlineBackout() {
+        Network network = buildGridNetwork();
+        List<HubSetLoader.Hub> hubs = threeHubs();
+        Predicate<Coord> isInsideMetropole = c -> c.getX() >= 500.0;
+        DrtRequest rev = TestRequestBuilder.connectingReverseFixture(null);
+
+        List<DrtRequest> expanded = DrtRequestFactory.expandConnecting(
+                rev, hubs, FleetSide.URBAN, isInsideMetropole, network,
+                fixedRouter(), 300.0);
+
+        assertEquals(3, expanded.size());
+        for (DrtRequest v : expanded) {
+            // Urban fleet serves the FIRST leg (urban origin -> hub).
+            assertEquals(DrtRequest.HubLegRole.ACCESS_LEG, v.hubLegRole,
+                    "reverse trip: urban-side copy is the access leg");
+            // Urban origin kept, destination replaced by hub.
+            assertEquals(rev.originX, v.originX, 1e-9);
+            assertEquals(rev.originY, v.originY, 1e-9);
+            // Departs at the ORIGINAL desired time.
+            assertEquals(rev.requestTime, v.requestTime, 1e-9);
+            // Deadline backout: latestArrival - secondLeg(600) - buffer(300).
+            assertEquals(rev.latestArrival - 600.0 - 300.0, v.latestArrival, 1e-9);
+            assertEquals(600.0, v.directTravelTime, 1e-9);
+        }
+    }
+
+    // ---- EXT-3: clamp also for FORWARD trips with origin flexibility ----
+
+    @Test
+    void legacyContinuation_neverDepartsBeforeHubArrivalPlusBuffer() {
+        Network network = buildGridNetwork();
+        List<HubSetLoader.Hub> hubs = threeHubs();
+        Predicate<Coord> isInsideMetropole = c -> c.getX() >= 500.0;
+        // Forward fixture with 600 s origin flexibility (earliestDeparture < requestTime).
+        DrtRequest flex = TestRequestBuilder.connectingFixture(null).toBuilder()
+                .requestTime(1000.0)
+                .earliestDeparture(400.0)
+                .latestArrival(4600.0)
+                .build();
+
+        List<DrtRequest> expanded = DrtRequestFactory.expandConnecting(
+                flex, hubs, FleetSide.URBAN, isInsideMetropole, network,
+                fixedRouter(), 300.0);
+
+        for (DrtRequest v : expanded) {
+            assertEquals(DrtRequest.HubLegRole.CONTINUATION_LEG, v.hubLegRole);
+            // Old (buggy) value would be 400 + 900 = 1300 < requestTime 1900.
+            assertEquals(v.requestTime, v.earliestDeparture, 1e-9,
+                    "continuation earliestDeparture must clamp to hub arrival + buffer");
+            assertEquals(0.0, v.getMaxNegativeDelay(), 1e-9);
+        }
+    }
+
     @Test
     void unroutableHub_isDropped() {
         Network network = buildGridNetwork();
