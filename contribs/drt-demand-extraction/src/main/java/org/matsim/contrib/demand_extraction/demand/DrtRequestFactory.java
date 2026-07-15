@@ -1332,7 +1332,7 @@ public class DrtRequestFactory {
 					if (hubSyncTwoSided) {
 						numContVariants = (int) Math.floor(hubSyncMaxAdvanceSeconds / maxHubWaitSeconds) + 1;
 					}
-					double prevAnchor = Double.NaN;
+					java.util.HashSet<Double> seenAnchors = new java.util.HashSet<>();
 					for (int k = 0; k < numContVariants; k++) {
 						double offset = k * maxHubWaitSeconds;
 						double shiftedDeparture = original.requestTime - offset;
@@ -1349,9 +1349,10 @@ public class DrtRequestFactory {
 							}
 						}
 						double varHubArrival = shiftedDeparture + varFirst[0];
-						// Time-independent routing can collapse offsets onto one anchor; skip dups.
-						if (varHubArrival == prevAnchor) continue;
-						prevAnchor = varHubArrival;
+						// Time-independent routing can collapse offsets onto one anchor; the
+						// set also catches NON-ADJACENT collisions (SYNC-10), which the old
+						// prevAnchor guard let through as duplicate variants.
+						if (!seenAnchors.add(varHubArrival)) continue;
 						if (varHubArrival + secondLeg[0] > original.latestArrival) {
 							if (stats != null) {
 								stats.temporalInfeasible++;

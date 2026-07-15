@@ -140,8 +140,84 @@ public class ContinuationLegWideWindowTest {
     }
 
     // -------------------------------------------------------------------------
+    // SYNC-10: non-adjacent anchor collisions are deduplicated.
+    // -------------------------------------------------------------------------
+
+    /**
+     * Departure-dependent routing can make two NON-ADJACENT access offsets land
+     * on the SAME hub arrival, with a DIFFERENT anchor in between. Here the
+     * rural (O->hub) leg travel time varies with departure so that offsets
+     * k=0 and k=2 both anchor at hubArrival = t0+600, while k=1 anchors at
+     * t0+200:
+     * <pre>
+     *   k=0: dep = 0    , ruralT = 600  -> anchor = 0    + 600  = 600
+     *   k=1: dep = -300 , ruralT = 500  -> anchor = -300 + 500  = 200
+     *   k=2: dep = -600 , ruralT = 1200 -> anchor = -600 + 1200 = 600  (== k=0)
+     * </pre>
+     * The old {@code prevAnchor} guard only caught ADJACENT duplicates, so it
+     * let the k=2 collision through as a third, duplicate continuation variant.
+     * The seen-anchor set dedupes it: exactly two distinct anchors
+     * (requestTimes 200 and 600), i.e. 2 variants, not 3.
+     */
+    @Test
+    void nonAdjacentAnchorCollisionIsDeduplicated() {
+        Network network = buildGridNetwork();
+        List<HubSetLoader.Hub> hubs = oneHub();
+        DrtRequest c = TestRequestBuilder.connectingFixture(null);
+        double maxHubWait = 300.0;   // step  -> offsets {0, 300, 600}
+        double maxAdvance = 600.0;   // bound -> numContVariants = floor(600/300)+1 = 3
+
+        List<DrtRequest> out = DrtRequestFactory.expandConnecting(
+                c, hubs, FleetSide.URBAN, coord -> coord.getX() >= 500.0,
+                network, departureDependentRuralRouter(hubs, network), BUFFER, maxHubWait,
+                /* hubSyncTwoSided */ true, /* hubSyncMaxAdvanceSeconds */ maxAdvance,
+                null);
+
+        assertEquals(2, out.size(),
+                "non-adjacent collision (k=0 & k=2 both anchor at 600) must dedupe to 2 variants, not 3");
+
+        java.util.Set<Double> anchors = new java.util.HashSet<>();
+        for (DrtRequest v : out) {
+            assertEquals(DrtRequest.HubLegRole.CONTINUATION_LEG, v.hubLegRole);
+            assertEquals(URBAN_LEG_T, v.directTravelTime, 1e-9, "urban leg's own direct tt");
+            assertEquals(v.requestTime, v.earliestDeparture, 1e-9,
+                    "continuation earliestDeparture pinned to its own anchor");
+            anchors.add(v.requestTime);
+        }
+        assertEquals(java.util.Set.of(200.0, 600.0), anchors,
+                "distinct anchors are t0+200 and t0+600 (the k=2 duplicate of t0+600 dropped)");
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers — router, network, hubs (mirrors DrtRequestFactoryVirtualTripTest).
     // -------------------------------------------------------------------------
+
+    /**
+     * Rural leg (O->hub) travel time DEPENDS on departure so offsets k=0 and
+     * k=2 collide on the same hub anchor (600) while k=1 differs (200):
+     * dep 0 -> 600, dep -300 -> 500, dep -600 -> 1200. Urban leg (hub->D) is
+     * the constant continuation leg (900 s / 9000 m).
+     */
+    private static LegRouter departureDependentRuralRouter(List<HubSetLoader.Hub> hubs, Network network) {
+        java.util.Set<Id<Link>> hubLinks = new java.util.HashSet<>();
+        for (HubSetLoader.Hub h : hubs) {
+            hubLinks.add(NetworkUtils.getNearestLink(network, h.coord()).getId());
+        }
+        return (from, to, dep) -> {
+            if (hubLinks.contains(to)) {
+                double ruralT;
+                if (dep == -300.0) {
+                    ruralT = 500.0;
+                } else if (dep == -600.0) {
+                    ruralT = 1200.0;
+                } else {
+                    ruralT = RURAL_LEG_T; // dep == 0 (and any other departure)
+                }
+                return new double[] {ruralT, 6000.0}; // rural leg O->hub
+            }
+            return new double[] {URBAN_LEG_T, 9000.0}; // urban leg hub->D
+        };
+    }
 
     /** Rural leg (TO a hub link) = 600 s / 6000 m; urban leg (FROM a hub link)
      *  = 900 s / 9000 m. */
@@ -176,6 +252,10 @@ public class ContinuationLegWideWindowTest {
         net.addLink(nf.createLink(Id.createLinkId("w"), sw, nw));
         assertNotNull(NetworkUtils.getNearestLink(net, new Coord(0.0, 0.0)));
         return net;
+    }
+
+    private static List<HubSetLoader.Hub> oneHub() {
+        return List.of(new HubSetLoader.Hub("hub_a", new Coord(5_000.0, 8_000.0)));
     }
 
     private static List<HubSetLoader.Hub> threeHubs() {
