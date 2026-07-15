@@ -139,6 +139,27 @@ public class DrtRequestFactoryVirtualTripTest {
     }
 
     // -------------------------------------------------------------------------
+    // EXT-4: role-aware per-class detour-factor lookup precedence.
+    // Role-specific key ("<tag>:<ROLE>") beats bare tag key beats global.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void classFactor_roleKeyBeatsTagKeyBeatsGlobal() {
+        var byClass = java.util.Map.of(
+                "connecting", 1.4,
+                "connecting:ACCESS_LEG", 1.8,
+                "connecting:CONTINUATION_LEG", 1.1);
+        assertEquals(1.8, DrtRequestFactory.resolveClassFactor(byClass, 1.5,
+                "connecting", DrtRequest.HubLegRole.ACCESS_LEG), 1e-9);
+        assertEquals(1.1, DrtRequestFactory.resolveClassFactor(byClass, 1.5,
+                "connecting", DrtRequest.HubLegRole.CONTINUATION_LEG), 1e-9);
+        assertEquals(1.4, DrtRequestFactory.resolveClassFactor(byClass, 1.5,
+                "connecting", DrtRequest.HubLegRole.NONE), 1e-9);
+        assertEquals(1.5, DrtRequestFactory.resolveClassFactor(java.util.Map.of(), 1.5,
+                "rural_intra", DrtRequest.HubLegRole.NONE), 1e-9);
+    }
+
+    // -------------------------------------------------------------------------
     // hubId + linkId rewriting: each virtual copy must point its rewritten
     // endpoint at the nearest network link to the hub.
     // -------------------------------------------------------------------------

@@ -300,6 +300,22 @@ public class RunLyonEqasimDemandExtraction {
 	 * Parses a {@code k=v,k=v} per-class detour-factor spec (e.g.
 	 * {@code "connecting=1.3,rural_intra=1.2"}) into a class-key → factor map.
 	 * Whitespace around keys/values is trimmed; an empty / blank spec yields an empty map.
+	 *
+	 * <p>Accepted key forms (resolved most-specific first by
+	 * {@link org.matsim.contrib.demand_extraction.demand.DrtRequestFactory#resolveClassFactor},
+	 * EXT-4):
+	 * <ul>
+	 *   <li>{@code tag} — a bare request class, e.g. {@code connecting},
+	 *       {@code rural_intra}, {@code urban_intra}, {@code connecting-direct}
+	 *       (the direct O→D copy of a connecting request).</li>
+	 *   <li>{@code tag:ACCESS_LEG} — the role-specific factor for the hub-leg copy
+	 *       serving the journey ORIGIN leg (O→hub), e.g. {@code connecting:ACCESS_LEG}.</li>
+	 *   <li>{@code tag:CONTINUATION_LEG} — the role-specific factor for the hub-leg
+	 *       copy serving the journey DESTINATION leg (hub→D), e.g.
+	 *       {@code connecting:CONTINUATION_LEG}.</li>
+	 * </ul>
+	 * A role-specific {@code tag:ROLE} key overrides the bare {@code tag} key, which
+	 * in turn overrides the global {@code --max-detour-factor}.
 	 */
 	private static java.util.Map<String, Double> parseClassFactorMap(String spec) {
 		java.util.Map<String, Double> out = new java.util.HashMap<>();

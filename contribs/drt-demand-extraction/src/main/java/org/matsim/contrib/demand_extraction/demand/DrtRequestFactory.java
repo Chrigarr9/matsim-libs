@@ -466,11 +466,34 @@ public class DrtRequestFactory {
 	 * the per-leg routed attributes (already written onto the copy before this
 	 * is called).
 	 */
+	/**
+	 * Class-factor lookup, most-specific key first (EXT-4). Static for testability.
+	 *
+	 * <p>Resolution order: role-specific key {@code "<tag>:<ROLE>"} (e.g.
+	 * {@code connecting:ACCESS_LEG}) → bare {@code "<tag>"} → global
+	 * {@code globalFactor}. The role-specific key is only consulted when the role
+	 * is non-{@link DrtRequest.HubLegRole#NONE}, so bare-tag / global lookups stay
+	 * byte-identical to the previous {@code getOrDefault(tag, global)} semantics
+	 * when no {@code tag:ROLE} keys are configured.
+	 */
+	static double resolveClassFactor(java.util.Map<String, Double> byClass,
+			double globalFactor, String requestTag, DrtRequest.HubLegRole role) {
+		if (requestTag != null && role != DrtRequest.HubLegRole.NONE) {
+			Double roleSpecific = byClass.get(requestTag + ":" + role.name());
+			if (roleSpecific != null) return roleSpecific;
+		}
+		if (requestTag != null) {
+			Double tagLevel = byClass.get(requestTag);
+			if (tagLevel != null) return tagLevel;
+		}
+		return globalFactor;
+	}
+
 	double[] budgetDerivedCaps(double budget, Person person, DrtRequest draft) {
 		double budgetDerivedDetour = budgetToConstraintsCalculator.budgetToMaxDetourTime(
 				budget, person, draft.directTravelTime, draft.directDistance, draft);
-		double classFactor = exmasConfig.getMaxDetourFactorByClass().getOrDefault(
-				draft.requestTag, exmasConfig.getMaxDetourFactor());
+		double classFactor = resolveClassFactor(exmasConfig.getMaxDetourFactorByClass(),
+				exmasConfig.getMaxDetourFactor(), draft.requestTag, draft.hubLegRole);
 		double configMaxDetour = draft.directTravelTime * (classFactor - 1.0);
 		double maxAbsoluteDetour = Math.min(budgetDerivedDetour, configMaxDetour);
 		if (exmasConfig.getMaxAbsoluteDetour() != null) {
@@ -864,6 +887,20 @@ public class DrtRequestFactory {
 				// inherited from the already-finalized connecting request.
 				DrtRequest direct = r.toBuilder().requestTag("connecting-direct").build();
 				direct.setScoringContext(r.getScoringContext());
+				// EXT-4: the copy was finalized under the "connecting" class; if the
+				// config differentiates connecting-direct, re-derive its caps under
+				// its own tag. Without such an entry this is a no-op (byte-identical).
+				if (exmasConfig.getMaxDetourFactorByClass().containsKey("connecting-direct")) {
+					double[] caps = budgetDerivedCaps(direct.budget,
+							person, direct);
+					DrtRequest recapped = direct.toBuilder()
+							.maxDetourFactor(1.0 + caps[0] / direct.directTravelTime)
+							.maxWalkDistance(caps[1])
+							.maxWaitTime(caps[2])
+							.build();
+					recapped.setScoringContext(r.getScoringContext());
+					direct = recapped;
+				}
 				expanded.add(direct);
 			} else {
 				expanded.add(r);

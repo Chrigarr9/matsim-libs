@@ -162,6 +162,109 @@ public class ConnectingDirectRideEmissionTest {
     }
 
     // -------------------------------------------------------------------------
+    // EXT-4: connecting-direct re-cap. When the config differentiates the
+    // "connecting-direct" class, the direct copy re-derives its caps under its
+    // own tag; without such an entry the copy is field-identical to today.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void connectingDirectRide_reCappedUnderOwnTag_whenConfigured() {
+        // Map differentiates connecting-direct with factor 1.05; the fixture's
+        // original maxDetourFactor is 1.5. RecapHarness.budgetDerivedCaps applies
+        // resolveClassFactor, so the direct copy re-derives to 1.05.
+        RecapHarness harness = recapHarness(java.util.Map.of("connecting-direct", 1.05));
+        DrtRequest c = TestRequestBuilder.connectingFixture(null);
+        List<DrtRequest> result = expandRecap(harness, twoHubs(), fakeRouter(twoHubs(), grid()), c);
+
+        DrtRequest direct = directRide(result);
+        assertEquals(1.05, direct.maxDetourFactor, 1e-9,
+                "connecting-direct copy must re-derive maxDetourFactor under its own class factor 1.05");
+        assertNotEquals(c.maxDetourFactor, direct.maxDetourFactor, 1e-9,
+                "re-capped direct copy must differ from the original connecting request");
+    }
+
+    @Test
+    void connectingDirectRide_fieldIdenticalWhenNoConnectingDirectEntry() {
+        // No connecting-direct entry → recap gate is false → direct copy inherits
+        // the original caps unchanged (byte-identical to pre-EXT-4 behaviour).
+        RecapHarness harness = recapHarness(java.util.Map.of("connecting", 1.2));
+        DrtRequest c = TestRequestBuilder.connectingFixture(null);
+        List<DrtRequest> result = expandRecap(harness, twoHubs(), fakeRouter(twoHubs(), grid()), c);
+
+        DrtRequest direct = directRide(result);
+        assertEquals(c.maxDetourFactor, direct.maxDetourFactor, 1e-12,
+                "without a connecting-direct entry the direct copy's maxDetourFactor is unchanged");
+        assertEquals(c.maxWalkDistance, direct.maxWalkDistance, 1e-12, "maxWalkDistance unchanged");
+        assertEquals(c.maxWaitTime, direct.maxWaitTime, 1e-12, "maxWaitTime unchanged");
+    }
+
+    private List<DrtRequest> expandRecap(
+            RecapHarness harness,
+            List<HubSetLoader.Hub> hubs,
+            LegRouter router,
+            DrtRequest r) {
+        if (r.getScoringContext() == null) {
+            Person person = PopulationUtils.getFactory().createPerson(r.personId);
+            r.setScoringContext(minimalCtx(person));
+        }
+        Predicate<Coord> metro = c -> c.getX() >= 500.0;
+        Function<Person, LegRouter> routerFactory = person -> router;
+        return harness.applyVirtualExpansion(
+                List.of(r), hubs, FleetSide.RURAL, metro,
+                /* transferBuffer */ 300.0, /* maxHubWait */ 0.0,
+                harness.stubValidator, routerFactory, /* bothSides */ false).requests();
+    }
+
+    private static RecapHarness recapHarness(java.util.Map<String, Double> byClass) {
+        Network network = grid();
+        ExMasConfigGroup cfg = new ExMasConfigGroup();
+        cfg.setDrtMode("drt");
+        cfg.setMinDrtAccessEgressDistance(100.0);
+        cfg.setEnableBudgetAwareConstraints(false);
+        cfg.setMaxDetourFactor(1.5);
+        cfg.setMaxDetourFactorByClass(byClass);
+        DemandExtractionScoringAdapter fakeAdapter = new DemandExtractionScoringAdapter() {
+            @Override public TripScoreResult scoreTrip(TripScoreRequest req) { return new TripScoreResult(1.0, "stub"); }
+            @Override public String getName() { return "stub"; }
+            @Override public double getMarginalUtilityOfMoney(Person p, double d) { return 0.01; }
+            @Override public boolean includesOpportunityCost() { return true; }
+            @Override public boolean supportsDistanceSpecificMoneyUtility() { return false; }
+        };
+        BudgetValidator stubValidator = new BudgetValidator(fakeAdapter, cfg, 1.34) {
+            @Override public double calculateBudget(DrtRequest r) { return 1.0; }
+            @Override public DrtRequest.ScoringContext computeScoringContext(DrtRequest r, Person p) {
+                return minimalCtx(p);
+            }
+        };
+        return new RecapHarness(cfg, stubValidator, network);
+    }
+
+    /**
+     * Harness whose {@link #budgetDerivedCaps} applies the production
+     * {@link DrtRequestFactory#resolveClassFactor} lookup against the config map,
+     * so the connecting-direct re-cap re-derives a class-specific factor. Budget-
+     * derived detour is generous so the config factor always binds.
+     */
+    static class RecapHarness extends DrtRequestFactory {
+        final BudgetValidator stubValidator;
+        final ExMasConfigGroup cfg;
+
+        RecapHarness(ExMasConfigGroup config, BudgetValidator validator, Network network) {
+            super(config, null, null, null, network, null, validator, null);
+            this.stubValidator = validator;
+            this.cfg = config;
+        }
+
+        @Override
+        double[] budgetDerivedCaps(double budget, Person person, DrtRequest draft) {
+            double factor = DrtRequestFactory.resolveClassFactor(
+                    cfg.getMaxDetourFactorByClass(), cfg.getMaxDetourFactor(),
+                    draft.requestTag, draft.hubLegRole);
+            return new double[]{draft.directTravelTime * (factor - 1.0), 0.0, 0.0};
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers: invoke production applyVirtualExpansion
     // -------------------------------------------------------------------------
 
