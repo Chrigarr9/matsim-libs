@@ -1057,8 +1057,14 @@ public class DrtRequestFactory {
 	 *        {@code maxHubWaitSeconds}), each shifted earlier in {@code requestTime}
 	 *        and {@code earliestDeparture} and re-routed for the new departure.
 	 *        Requires {@code maxHubWaitSeconds > 0}. Offset 0 reproduces today's
-	 *        single access leg, so {@code false} (default) is byte-identical. Has
-	 *        NO effect on CONTINUATION (URBAN) legs.
+	 *        single access leg, so {@code false} (default) is byte-identical.
+	 *        EXT-2: the CONTINUATION (URBAN) wide-window branch co-shifts in
+	 *        lockstep — it emits one continuation variant per ACCESS offset
+	 *        {@code k}, anchored at that offset's own hub arrival
+	 *        {@code (requestTime − k·step) + firstLeg_k}, so every shifted access
+	 *        variant has a continuation ride inside its nesting window. Offset 0
+	 *        stays byte-identical; {@code false} leaves the single continuation
+	 *        leg unchanged.
 	 * @param hubSyncMaxAdvanceSeconds Paper-2 hub-sync v2: upper bound on the
 	 *        access variant offset (max seconds a commuter may depart earlier);
 	 *        only consulted when {@code hubSyncTwoSided == true}.
@@ -1248,9 +1254,9 @@ public class DrtRequestFactory {
 				// single-build tail below applies only to the CONTINUATION side.
 				continue;
 			} else {
-				// CONTINUATION leg hub->D. The pax reaches the hub at hubArrival =
-				// requestTime + firstLeg (direct, unbuffered).
-				double hubArrival = original.requestTime + firstLeg[0];
+				// CONTINUATION leg hub->D. The pax reaches the hub at
+				// requestTime + firstLeg (direct, unbuffered); each sub-branch
+				// computes that arrival for its own offset/departure.
 				if (maxHubWaitSeconds <= 0.0) {
 					// Legacy fixed-buffer split (backward-compat, byte-identical):
 					// departure pinned at hubArrival + buffer, buffer charged as wait.
@@ -1274,26 +1280,60 @@ public class DrtRequestFactory {
 					 .hubLegRole(DrtRequest.HubLegRole.CONTINUATION_LEG)
 					 .transferWaitSeconds(transferBufferSeconds);
 				} else {
-					// Hub-sync v1 wide window: the continuation leg may depart anywhere
-					// in [hubArrival, hubArrival + maxHubWait], so the urban graph pools
-					// continuation bundles at different slots. The served wait is realized
-					// by bundling, not a fixed buffer (transferWait = 0).
-					if (hubArrival + secondLeg[0] > original.latestArrival) { // can't make it even departing now
-						if (stats != null) {
-							stats.temporalInfeasible++;
-							recordDetour(stats, original, fleetSide, hub, ruralLegTime, urbanLegTime,
-									transferBufferSeconds, false, "temporal_infeasible");
-						}
-						continue;
+					// Hub-sync wide window. With twosided ON, co-shift the continuation:
+					// one variant per ACCESS offset k, anchored at that offset's own hub
+					// arrival — otherwise the shifted access variants have no continuation
+					// ride inside their nesting window and can never be selected (EXT-2).
+					int numContVariants = 1;
+					if (hubSyncTwoSided) {
+						numContVariants = (int) Math.floor(hubSyncMaxAdvanceSeconds / maxHubWaitSeconds) + 1;
 					}
-					double legLatestArrival = Math.min(original.latestArrival,
-							hubArrival + maxHubWaitSeconds + secondLeg[0]);
-					b.directTravelTime(secondLeg[0]).directDistance(secondLeg[1])
-					 .requestTime(hubArrival)
-					 .earliestDeparture(hubArrival)
-					 .latestArrival(legLatestArrival)
-					 .hubLegRole(DrtRequest.HubLegRole.CONTINUATION_LEG)
-					 .transferWaitSeconds(0.0);
+					double prevAnchor = Double.NaN;
+					for (int k = 0; k < numContVariants; k++) {
+						double offset = k * maxHubWaitSeconds;
+						double shiftedDeparture = original.requestTime - offset;
+						double[] varFirst;
+						if (offset == 0.0) {
+							varFirst = firstLeg; // byte-identical k=0 path
+						} else {
+							varFirst = legRouter.route(original.originLinkId, hubLinkId, shiftedDeparture);
+							if (varFirst == null || varFirst[0] <= 0.0 || varFirst[1] <= 0.0) {
+								if (stats != null) {
+									if (ruralEndIsOrigin) stats.unroutableRuralLeg++; else stats.unroutableUrbanLeg++;
+								}
+								continue;
+							}
+						}
+						double varHubArrival = shiftedDeparture + varFirst[0];
+						// Time-independent routing can collapse offsets onto one anchor; skip dups.
+						if (varHubArrival == prevAnchor) continue;
+						prevAnchor = varHubArrival;
+						if (varHubArrival + secondLeg[0] > original.latestArrival) {
+							if (stats != null) {
+								stats.temporalInfeasible++;
+								recordDetour(stats, original, fleetSide, hub, ruralLegTime, urbanLegTime,
+										transferBufferSeconds, false, "temporal_infeasible");
+							}
+							continue;
+						}
+						double legLatestArrival = Math.min(original.latestArrival,
+								varHubArrival + maxHubWaitSeconds + secondLeg[0]);
+						b.directTravelTime(secondLeg[0]).directDistance(secondLeg[1])
+						 .requestTime(varHubArrival)
+						 .earliestDeparture(varHubArrival)
+						 .latestArrival(legLatestArrival)
+						 .hubLegRole(DrtRequest.HubLegRole.CONTINUATION_LEG)
+						 .transferWaitSeconds(0.0);
+						DrtRequest variant = b.build();
+						variant.setScoringContext(original.getScoringContext());
+						copies.add(variant);
+						if (stats != null) {
+							stats.kept++;
+							recordDetour(stats, original, fleetSide, hub, ruralLegTime, urbanLegTime,
+									transferBufferSeconds, true, "kept");
+						}
+					}
+					continue; // variants already added; skip the shared single-build tail
 				}
 			}
 

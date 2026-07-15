@@ -531,6 +531,42 @@ public class DrtRequestFactoryVirtualTripTest {
         );
     }
 
+    // ---- EXT-2: hub-sync v2 continuation co-shift ----
+
+    @Test
+    void hubSyncTwoSided_continuationVariantsCoShiftWithAccessVariants() {
+        Network network = buildGridNetwork();
+        List<HubSetLoader.Hub> hubs = threeHubs().subList(0, 1); // one hub is enough
+        Predicate<Coord> isInsideMetropole = c -> c.getX() >= 500.0;
+        // Forward fixture, generous window so all variants fit.
+        DrtRequest fwd = TestRequestBuilder.connectingFixture(null).toBuilder()
+                .requestTime(7200.0).earliestDeparture(7200.0)
+                .latestArrival(14400.0)
+                .build();
+        double maxHubWait = 600.0, maxAdvance = 1200.0, buffer = 300.0;
+
+        List<DrtRequest> access = DrtRequestFactory.expandConnecting(
+                fwd, hubs, FleetSide.RURAL, isInsideMetropole, network,
+                fixedRouter(), buffer, maxHubWait, true, maxAdvance, null);
+        List<DrtRequest> continuation = DrtRequestFactory.expandConnecting(
+                fwd, hubs, FleetSide.URBAN, isInsideMetropole, network,
+                fixedRouter(), buffer, maxHubWait, true, maxAdvance, null);
+
+        assertEquals(3, access.size(), "k = 0, 600, 1200 -> 3 access variants");
+        assertEquals(3, continuation.size(), "continuation must co-shift: one variant per offset");
+
+        for (DrtRequest a : access) {
+            double hubArrival = a.requestTime + a.directTravelTime; // fixed router: +600
+            boolean hasNestedContinuation = continuation.stream().anyMatch(u ->
+                    Math.abs(u.requestTime - hubArrival) < 1e-9
+                    && u.earliestDeparture >= hubArrival - 1e-9
+                    && u.earliestDeparture <= hubArrival + maxHubWait + 1e-9);
+            assertTrue(hasNestedContinuation,
+                    "every access variant needs a same-offset continuation variant "
+                    + "(EXT-2: offsets >= 1 step were previously unusable)");
+        }
+    }
+
     @Test
     void sanity_metropoleStubMatchesFixtureEndpoints() {
         // The connecting fixture has origin=(0,0) (outside the x>=500 stub
