@@ -130,6 +130,10 @@ public class RunLyonEqasimDemandExtraction {
 		 *  earlier than their request to reach an earlier sync slot. NaN = unset
 		 *  (config default 900.0). */
 		public final double hubSyncMaxAdvance;
+		/** Degree-2 top-K partner cap (Paper-2, EXT-8): keep only the K best degree-2
+		 *  partners per request during pair generation. 0 = uncapped (setter clamps
+		 *  negatives to 0 = no-op). Mandatory at scale (design 2026-06-22 §3). */
+		public final int pairgenTopK;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
@@ -153,7 +157,8 @@ public class RunLyonEqasimDemandExtraction {
 				java.util.Map<String, Double> maxDetourFactorByClass,
 				double maxHubWait,
 				boolean hubSyncTwoSided,
-				double hubSyncMaxAdvance) {
+				double hubSyncMaxAdvance,
+				int pairgenTopK) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -192,6 +197,7 @@ public class RunLyonEqasimDemandExtraction {
 			this.maxHubWait = maxHubWait;
 			this.hubSyncTwoSided = hubSyncTwoSided;
 			this.hubSyncMaxAdvance = hubSyncMaxAdvance;
+			this.pairgenTopK = pairgenTopK;
 		}
 	}
 
@@ -234,6 +240,7 @@ public class RunLyonEqasimDemandExtraction {
 		double maxHubWait = Double.NaN;
 		boolean hubSyncTwoSided = false;
 		double hubSyncMaxAdvance = Double.NaN;
+		int pairgenTopK = 0;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -279,6 +286,7 @@ public class RunLyonEqasimDemandExtraction {
 				case "--max-hub-wait" -> maxHubWait = Double.parseDouble(args[++i]);
 				case "--hub-sync-twosided" -> hubSyncTwoSided = true;
 				case "--hub-sync-max-advance" -> hubSyncMaxAdvance = Double.parseDouble(args[++i]);
+				case "--pairgen-top-k" -> pairgenTopK = Integer.parseInt(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -293,7 +301,7 @@ public class RunLyonEqasimDemandExtraction {
 				extensionParentsSelectionRule, extensionParentsMmrLambda, extensionParentsTier2NodeCap,
 				checkpointForkBelowMinDegree,
 				expandConnectingBothSides, maxDetourFactorByClass, maxHubWait,
-				hubSyncTwoSided, hubSyncMaxAdvance);
+				hubSyncTwoSided, hubSyncMaxAdvance, pairgenTopK);
 	}
 
 	/**
@@ -413,7 +421,8 @@ public class RunLyonEqasimDemandExtraction {
 						"--max-ordering-nodes",
 						"--extension-parents-top-k", "--extension-parents-top-k-min-degree",
 						"--extension-parents-top-k-metric", "--extension-parents-selection-rule",
-						"--extension-parents-mmr-lambda", "--extension-parents-tier2-node-cap" -> true;
+						"--extension-parents-mmr-lambda", "--extension-parents-tier2-node-cap",
+						"--pairgen-top-k" -> true;
 				default -> false;
 			};
 		}
@@ -677,6 +686,10 @@ public class RunLyonEqasimDemandExtraction {
 			log.info("  Override: hubSyncMaxAdvanceSeconds = {}", p.hubSyncMaxAdvance);
 			exMas.setHubSyncMaxAdvanceSeconds(p.hubSyncMaxAdvance);
 		}
+		if (p.pairgenTopK > 0) {
+			log.info("  Override: pairgenTopK = {} (degree-2 top-K partner cap)", p.pairgenTopK);
+		}
+		exMas.setPairgenTopK(p.pairgenTopK);  // setter clamps at 0 = no-op default
 		if (p.maxOrderingNodes >= 0) {
 			log.info("  Override: maxOrderingNodesAfterFirstValid = {}", p.maxOrderingNodes);
 			exMas.setMaxOrderingNodesAfterFirstValid(p.maxOrderingNodes);

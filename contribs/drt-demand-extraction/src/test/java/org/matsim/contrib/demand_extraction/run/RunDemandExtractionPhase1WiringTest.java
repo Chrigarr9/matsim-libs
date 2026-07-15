@@ -145,7 +145,7 @@ class RunDemandExtractionPhase1WiringTest {
 				b.extensionParentsMmrLambda, b.extensionParentsTier2NodeCap,
 				b.checkpointForkBelowMinDegree,
 				b.expandConnectingBothSides, b.maxDetourFactorByClass, b.maxHubWait,
-				b.hubSyncTwoSided, b.hubSyncMaxAdvance);
+				b.hubSyncTwoSided, b.hubSyncMaxAdvance, b.pairgenTopK);
 	}
 
 	/** Mutable builder so tests can override individual fields in a lambda. */
@@ -190,6 +190,7 @@ class RunDemandExtractionPhase1WiringTest {
 		double maxHubWait = Double.NaN;
 		boolean hubSyncTwoSided = false;
 		double hubSyncMaxAdvance = Double.NaN;
+		int pairgenTopK = 0;
 	}
 
 }

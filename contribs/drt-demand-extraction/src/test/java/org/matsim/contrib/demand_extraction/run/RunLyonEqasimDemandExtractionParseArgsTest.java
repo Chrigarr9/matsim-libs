@@ -208,4 +208,26 @@ class RunLyonEqasimDemandExtractionParseArgsTest {
         assertTrue(p.hubSyncTwoSided);
         assertEquals(600.0, p.hubSyncMaxAdvance, 0.0);
     }
+
+    @Test
+    void defaultLeavesPairgenTopKZero() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+        });
+        assertEquals(0, p.pairgenTopK,
+                "pairgen-top-k unset (0) by default → setter clamps to no-op (uncapped)");
+    }
+
+    @Test
+    void parsesPairgenTopK() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+                "--pairgen-top-k", "32",
+        });
+        assertEquals(32, p.pairgenTopK);
+    }
 }
