@@ -42,9 +42,11 @@ import org.matsim.contrib.demand_extraction.demand.DrtRequest;
  * </ol>
  *
  * <h3>Ordering (origins / destinations)</h3>
- * The S2S ride inherits the D2D parent's pickup and dropoff orderings — the {@link Ride}
- * builder receives {@code originsOrderedRequests} and {@code destinationsOrderedRequests}
- * resolved from the stub's {@code requestIndices} + {@code originOrder} / {@code destOrder}.
+ * The per-passenger arrays are indexed by pickup order ({@code originsOrdered}), matching
+ * the fat path's {@code requests[] IS originsOrdered} convention (HYP-3). The S2S ride
+ * inherits the D2D parent's pickup and dropoff orderings — the {@link Ride} builder
+ * receives {@code originsOrderedRequests} and {@code destinationsOrderedRequests} resolved
+ * from the stub's {@code requestIndices} + {@code originOrder} / {@code destOrder}.
  *
  * <h3>Budget-aware vs legacy path</h3>
  * Replay uses the <em>budget-aware</em> delay convention (
@@ -96,10 +98,8 @@ public final class StopRideMaterializer {
 
 		DrtRequest[] originsOrdered = new DrtRequest[degree];
 		DrtRequest[] destsOrdered   = new DrtRequest[degree];
-		DrtRequest[] requests       = new DrtRequest[degree]; // sorted-set order
 
 		for (int i = 0; i < degree; i++) {
-			requests[i]       = requestById.get(sortedSet[i]);
 			originsOrdered[i] = requestById.get(sortedSet[originsLocal[i]]);
 			destsOrdered[i]   = requestById.get(sortedSet[destsLocal[i]]);
 		}
@@ -153,22 +153,27 @@ public final class StopRideMaterializer {
 			passengerNetUtilities[i] = inVehicleUtility;
 
 			// Delay convention mirrors StopBasedRideGenerator exactly.
+			// HYP-3: every per-pax quantity is indexed by PICKUP order
+			// (originsOrdered) — the order the stub stored the walk arrays in
+			// (BamasEngine.materializeS2SRide passes ride.getAccessWalkDistances()
+			// verbatim, and the fat path's requests[] IS originsOrdered). The
+			// sorted set is used ONLY to resolve the packed orderings above.
 			if (budgetAware) {
 				// A8 — preplanned service: pickup-wait = access walk time only.
 				delays[i] = accessTime;
 			} else {
 				// Legacy: total travel time - direct travel time.
-				delays[i] = passengerTravelTimes[i] - requests[i].getTravelTime();
+				delays[i] = passengerTravelTimes[i] - originsOrdered[i].getTravelTime();
 			}
 
-			detours[i] = requests[i].getTravelTime() > 0
-					? passengerTravelTimes[i] / requests[i].getTravelTime()
+			detours[i] = originsOrdered[i].getTravelTime() > 0
+					? passengerTravelTimes[i] / originsOrdered[i].getTravelTime()
 					: 1.0;
 		}
 
 		// --- 6. Remaining budgets ---
 		double[] remainingBudgets = calculateBudgets(
-				requests, delays, passengerTravelTimes, passengerDistances,
+				originsOrdered, delays, passengerTravelTimes, passengerDistances,
 				accessWalk, egressWalk);
 		if (remainingBudgets == null) {
 			throw new IllegalStateException(
