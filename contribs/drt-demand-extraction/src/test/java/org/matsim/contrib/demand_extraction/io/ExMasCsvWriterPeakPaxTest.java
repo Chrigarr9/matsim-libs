@@ -147,11 +147,11 @@ class ExMasCsvWriterPeakPaxTest {
         assertEquals(2, lines.size(), "expected header + 1 data row");
 
         String header = lines.get(0);
-        assertTrue(header.endsWith(",requestTags,hubIds,hubLegRoles,peak_pax"),
-                "Header must end with requestTags,hubIds,hubLegRoles,peak_pax — was: " + header);
+        assertTrue(header.contains(",requestTags,hubIds,hubLegRoles,peak_pax,"),
+                "Header must contain requestTags,hubIds,hubLegRoles,peak_pax in order — was: " + header);
 
         String[] headerCols = header.split(",", -1);
-        int peakIdx = headerCols.length - 1;
+        int peakIdx = java.util.Arrays.asList(headerCols).indexOf("peak_pax");
         assertEquals("peak_pax", headerCols[peakIdx]);
 
         String[] cols = lines.get(1).split(",", -1);

@@ -669,7 +669,12 @@ public final class ExMasCsvWriter {
 					"totalTravelTime,totalDistance,totalVKT," +
 					"passengerDelays,remainingBudgets," +
 					"requestTags,hubIds,hubLegRoles," +
-					"peak_pax");
+					"peak_pax," +
+					// EXP-7: per-pax request linkage (WHICH commuter each
+					// per-pax column position belongs to). Mirrors
+					// getRequests() order like every other per-pax column;
+					// appended at the END per the additive-schema convention.
+					"requestIndices,personIds");
 			writer.newLine();
 
 			List<HyperPooledRide> sortedRides = hyperPooledRides.stream()
@@ -736,8 +741,16 @@ public final class ExMasCsvWriter {
 						.map(r -> r.hubLegRole != null ? r.hubLegRole.name() : DrtRequest.HubLegRole.NONE.name())
 						.toArray(String[]::new));
 
+				// EXP-7: per-pax linkage columns, getRequests() order.
+				String requestIndicesStr = formatIntArray(Arrays.stream(paxRequests)
+						.mapToInt(r -> r.index)
+						.toArray());
+				String personIdsStr = formatStringArray(Arrays.stream(paxRequests)
+						.map(r -> r.personId.toString())
+						.toArray(String[]::new));
+
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.4f,%s,%s,%s,%s,%s,%d",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.4f,%s,%s,%s,%s,%s,%d,%s,%s",
 						ride.getIndex(), ride.getDegree(),
 						sourceRideIndicesStr,
 						stopSequenceStr, stopSequenceXStr, stopSequenceYStr,
@@ -746,7 +759,7 @@ public final class ExMasCsvWriter {
 						totalTravelTime, totalDistance, totalVKT,
 						delaysStr, remainingBudgetsStr,
 						requestTagsStr, hubIdsStr, hubLegRolesStr,
-						ride.getPeakPax()));
+						ride.getPeakPax(), requestIndicesStr, personIdsStr));
 				writer.newLine();
 			}
 		} catch (IOException e) {

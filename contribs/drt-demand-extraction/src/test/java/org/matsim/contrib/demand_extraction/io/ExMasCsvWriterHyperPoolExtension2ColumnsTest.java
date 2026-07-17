@@ -96,8 +96,9 @@ class ExMasCsvWriterHyperPoolExtension2ColumnsTest {
 
         String[] headerCols = header.split(",", -1);
         // requestTags / hubIds / hubLegRoles sit immediately before peak_pax.
-        int tagsIdx = headerCols.length - 4;
-        int hubsIdx = headerCols.length - 3;
+        List<String> headerList = java.util.Arrays.asList(headerCols);
+        int tagsIdx = headerList.indexOf("requestTags");
+        int hubsIdx = headerList.indexOf("hubIds");
         assertEquals("requestTags", headerCols[tagsIdx]);
         assertEquals("hubIds", headerCols[hubsIdx]);
 

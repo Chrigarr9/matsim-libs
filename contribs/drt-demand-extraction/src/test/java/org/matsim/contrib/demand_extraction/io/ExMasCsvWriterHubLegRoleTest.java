@@ -104,8 +104,8 @@ class ExMasCsvWriterHubLegRoleTest {
         String header = lines.get(0);
         assertTrue(header.contains(",hubIds,hubLegRoles,"),
                 "Header must contain ,hubIds,hubLegRoles, — was: " + header);
-        assertTrue(header.endsWith(",hubLegRoles,peak_pax"),
-                "hubLegRoles must immediately precede peak_pax (last column) — was: " + header);
+        assertTrue(header.contains(",hubLegRoles,peak_pax,"),
+                "hubLegRoles must immediately precede peak_pax — was: " + header);
     }
 
     @Test
