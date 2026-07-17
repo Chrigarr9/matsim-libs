@@ -712,8 +712,10 @@ public final class ExMasCsvWriter {
 				double totalDistance = ride.getTotalRideDistance();
 				double totalVKT = ride.getTotalVehicleKilometers();
 
-				// Calculate passenger delays from source rides
-				double[] passengerDelays = computePassengerDelaysFromSourceRides(ride);
+				// Per-pax hyperpooled delays (HYP-4): computed by HyperPoolGenerator
+				// against the bundled route — one delay definition, same value the
+				// budget score used. NOT the Stage-1 source-ride delays.
+				double[] passengerDelays = ride.getPassengerDelays();
 				String delaysStr = formatDoubleArray(passengerDelays);
 
 				// Format remaining budgets
@@ -750,36 +752,6 @@ public final class ExMasCsvWriter {
 		} catch (IOException e) {
 			throw new RuntimeException("Could not write hyper-pooled rides CSV: " + filename, e);
 		}
-	}
-
-	/**
-	 * Compute passenger delays from source rides bundled in a hyper-pooled ride.
-	 * Aggregates delays from all passengers across all source rides.
-	 */
-	private static double[] computePassengerDelaysFromSourceRides(HyperPooledRide hyperRide) {
-		List<Ride> sourceRides = hyperRide.getSourceRides();
-		if (sourceRides == null || sourceRides.isEmpty()) {
-			// Return zeros matching the degree if no source rides available
-			return new double[hyperRide.getDegree()];
-		}
-
-		// Collect delays from all source rides
-		java.util.List<Double> allDelays = new java.util.ArrayList<>();
-		for (Ride source : sourceRides) {
-			double[] sourceDelays = source.getDelays();
-			if (sourceDelays != null) {
-				for (double delay : sourceDelays) {
-					allDelays.add(delay);
-				}
-			}
-		}
-
-		// Convert to array
-		double[] result = new double[allDelays.size()];
-		for (int i = 0; i < allDelays.size(); i++) {
-			result[i] = allDelays.get(i);
-		}
-		return result;
 	}
 
 	/**

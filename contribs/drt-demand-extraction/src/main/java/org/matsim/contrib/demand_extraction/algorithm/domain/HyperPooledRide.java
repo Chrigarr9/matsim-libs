@@ -47,6 +47,7 @@ public final class HyperPooledRide {
     private final double[] egressWalkDistances;
     private final double[] inVehicleTimes;
     private final double[] remainingBudgets;
+    private final double[] passengerDelays;
 
     // Aggregated metrics
     private final double totalRideTime;
@@ -77,6 +78,7 @@ public final class HyperPooledRide {
         this.egressWalkDistances = builder.egressWalkDistances.clone();
         this.inVehicleTimes = builder.inVehicleTimes.clone();
         this.remainingBudgets = builder.remainingBudgets.clone();
+        this.passengerDelays = builder.passengerDelays.clone();
 
         // Aggregated metrics
         this.totalRideTime = builder.totalRideTime;
@@ -275,6 +277,23 @@ public final class HyperPooledRide {
     }
 
     /**
+     * Returns a defensive copy of per-passenger delays for THIS hyperpooled
+     * ride (HYP-4, one delay definition):
+     * {@code delay_i = (startTime + timeToBoardingStop_i) - (requestTime_i + accessWalkTime_i)}
+     * with {@code timeToBoardingStop_i} from the routed stop-sequence prefix.
+     * This is the value exported as the {@code passengerDelays} CSV column and
+     * the value the budget score was computed with.
+     */
+    public double[] getPassengerDelays() {
+        return passengerDelays.clone();
+    }
+
+    /** Returns the hyperpooled delay for the given passenger (seconds). */
+    public double getPassengerDelay(int passengerIndex) {
+        return passengerDelays[passengerIndex];
+    }
+
+    /**
      * Returns the total ride time from first pickup to last dropoff (seconds).
      */
     public double getTotalRideTime() {
@@ -467,6 +486,7 @@ public final class HyperPooledRide {
             .egressWalkDistances(this.egressWalkDistances)
             .inVehicleTimes(this.inVehicleTimes)
             .remainingBudgets(this.remainingBudgets)
+            .passengerDelays(this.passengerDelays)
             .totalRideTime(this.totalRideTime)
             .totalRideDistance(this.totalRideDistance)
             .startTime(this.startTime)
@@ -493,6 +513,7 @@ public final class HyperPooledRide {
         private double[] egressWalkDistances;
         private double[] inVehicleTimes;
         private double[] remainingBudgets;
+        private double[] passengerDelays;
         private double totalRideTime;
         private double totalRideDistance;
         private double startTime;
@@ -550,6 +571,11 @@ public final class HyperPooledRide {
 
         public Builder remainingBudgets(double[] remainingBudgets) {
             this.remainingBudgets = remainingBudgets;
+            return this;
+        }
+
+        public Builder passengerDelays(double[] passengerDelays) {
+            this.passengerDelays = passengerDelays;
             return this;
         }
 
@@ -656,6 +682,13 @@ public final class HyperPooledRide {
                 throw new IllegalArgumentException(
                     String.format("remainingBudgets length (%d) must equal degree (%d)",
                         remainingBudgets != null ? remainingBudgets.length : 0, degree)
+                );
+            }
+            if (passengerDelays == null || passengerDelays.length != degree) {
+                throw new IllegalArgumentException(
+                    String.format("passengerDelays length (%d) must equal degree (%d) — "
+                        + "required so the exported delays column describes THIS ride (HYP-4)",
+                        passengerDelays != null ? passengerDelays.length : 0, degree)
                 );
             }
 

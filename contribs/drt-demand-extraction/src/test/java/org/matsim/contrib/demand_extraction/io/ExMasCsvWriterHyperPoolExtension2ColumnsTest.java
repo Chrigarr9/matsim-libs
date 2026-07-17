@@ -65,6 +65,7 @@ class ExMasCsvWriterHyperPoolExtension2ColumnsTest {
                 .egressWalkDistances(zeros)
                 .inVehicleTimes(zeros)
                 .remainingBudgets(zeros)
+                .passengerDelays(zeros)
                 .totalRideTime(0.0)
                 .totalRideDistance(0.0)
                 .startTime(0.0)

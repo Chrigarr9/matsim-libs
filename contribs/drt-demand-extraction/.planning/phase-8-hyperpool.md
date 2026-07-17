@@ -22,7 +22,7 @@ Integrate the HyperPool algorithm for stop-based ride-pooling, enabling passenge
 | 8.7.3 Shareability Graph | ✅ Complete | 5/5 | HyperPoolShareabilityGraph |
 | 8.7.4 Stop Relocation | ✅ Complete | 5/5 | StopRelocator |
 | 8.7.5 Ride Generation | ✅ Complete | 6/6 | HyperPoolGenerator |
-| 8.7.6 Budget Validation | ✅ Complete | 5/5 | validateHyperPooledRide |
+| 8.7.6 Budget Validation | ✅ Complete (re-wired 2026-07-16) | 5/5 | inline in HyperPoolGenerator.generateHyperPooledRide — validateHyperPooledRide was written but NEVER wired (dead code, deleted; HYP-1) |
 | 8.7.7 Engine Integration | ✅ Complete | 4/4 | Phase 6 in ExMasEngine |
 | 8.7.8 Output Extensions | ✅ Complete | 4/4 | writeHyperPooledRides |
 
@@ -314,7 +314,7 @@ Output: D2D rides + S2S rides + HyperPooled rides
 **Date**: 2026-01-26
 
 **Modified Files**:
-- `algorithm/validation/BudgetValidator.java` - Added validateHyperPooledRide()
+- `algorithm/validation/BudgetValidator.java` - Added validateHyperPooledRide() — NOTE (2026-07-16): this method was never called from production code; Stage-2 budget + walk-cap acceptance is now wired inline in `HyperPoolGenerator.generateHyperPooledRide` with a boarding-time delay definition, and the dead block was deleted (methodology review HYP-1/HYP-9)
 - `algorithm/engine/ExMasEngine.java` - Added Phase 6 for hyper-pooling
 - `io/ExMasCsvWriter.java` - Added writeHyperPooledRides()
 

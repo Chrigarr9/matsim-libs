@@ -10,7 +10,6 @@ import org.matsim.api.core.v01.population.Activity;
 import org.matsim.api.core.v01.population.Leg;
 import org.matsim.api.core.v01.population.Person;
 import org.matsim.api.core.v01.population.Route;
-import org.matsim.contrib.demand_extraction.algorithm.domain.HyperPooledRide;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
@@ -192,83 +191,6 @@ public class BudgetValidator {
 				person, originActivity, destActivity, originDuration, destDuration,
 				scoringParams, accessLeg, accessRoute, egressLeg, egressRoute,
 				drtRouteTemplate, synOrigAct, synDestAct);
-	}
-
-	// ===========================================
-	// Hyper-Pooling (Stage 2) Validation
-	// ===========================================
-
-	public HyperPooledRide validateHyperPooledRide(HyperPooledRide ride) {
-		if (!validateWalkDistances(ride)) {
-			log.debug("Hyper-pooled ride {} failed walk distance validation", ride.getIndex());
-			return null;
-		}
-
-		DrtRequest[] requests = ride.getRequests();
-		double[] remainingBudgets = new double[ride.getDegree()];
-
-		for (int i = 0; i < ride.getDegree(); i++) {
-			DrtRequest request = requests[i];
-			double drtScore = calculateHyperPoolDrtScore(ride, i);
-			remainingBudgets[i] = drtScore - request.bestModeScore;
-
-			if (remainingBudgets[i] < 0) {
-				log.debug("Hyper-pooled ride {} failed budget validation for passenger {} (budget: {})",
-						ride.getIndex(), request.index, remainingBudgets[i]);
-				return null;
-			}
-		}
-
-		return ride.toBuilder().remainingBudgets(remainingBudgets).build();
-	}
-
-	public double calculateHyperPoolDrtScore(HyperPooledRide ride, int passengerIndex) {
-		DrtRequest request = ride.getRequest(passengerIndex);
-
-		double accessWalkDistance = ride.getAccessWalkDistance(passengerIndex);
-		double egressWalkDistance = ride.getEgressWalkDistance(passengerIndex);
-		double inVehicleTime = ride.getInVehicleTime(passengerIndex);
-
-		double accessWalkTime = accessWalkDistance / walkSpeed;
-		double passengerBoardingTime = ride.getStartTime() + calculateTimeToStop(ride, passengerIndex);
-		double passengerReadyTime = request.requestTime + accessWalkTime;
-		double delay = passengerBoardingTime - passengerReadyTime;
-
-		return calculateDrtScoreWithWalks(request, delay, inVehicleTime, request.directDistance,
-				accessWalkDistance, egressWalkDistance);
-	}
-
-	private double calculateTimeToStop(HyperPooledRide ride, int passengerIndex) {
-		int boardingStopIndex = ride.getBoardingStopIndex(passengerIndex);
-		if (boardingStopIndex == 0) {
-			return 0.0;
-		}
-		double fractionOfStops = (double) boardingStopIndex / (ride.getStopCount() - 1);
-		return fractionOfStops * ride.getTotalRideTime();
-	}
-
-	public boolean validateWalkDistances(HyperPooledRide ride) {
-		double maxWalkDistance = exMasConfig.getMaxWalkDistanceMeters();
-
-		for (int i = 0; i < ride.getDegree(); i++) {
-			double totalWalkDistance = ride.getPassengerTotalWalkDistance(i);
-			if (totalWalkDistance > maxWalkDistance) {
-				log.debug("Passenger {} total walk distance ({} m) exceeds max ({} m)",
-						ride.getRequest(i).index, totalWalkDistance, maxWalkDistance);
-				return false;
-			}
-			if (ride.getAccessWalkDistance(i) > maxWalkDistance) {
-				log.debug("Passenger {} access walk distance ({} m) exceeds max ({} m)",
-						ride.getRequest(i).index, ride.getAccessWalkDistance(i), maxWalkDistance);
-				return false;
-			}
-			if (ride.getEgressWalkDistance(i) > maxWalkDistance) {
-				log.debug("Passenger {} egress walk distance ({} m) exceeds max ({} m)",
-						ride.getRequest(i).index, ride.getEgressWalkDistance(i), maxWalkDistance);
-				return false;
-			}
-		}
-		return true;
 	}
 
 	/**

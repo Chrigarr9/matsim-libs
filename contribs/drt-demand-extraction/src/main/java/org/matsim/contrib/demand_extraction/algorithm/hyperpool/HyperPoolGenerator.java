@@ -99,6 +99,8 @@ public class HyperPoolGenerator {
     private int clustersAttempted = 0;
     private int clustersSucceeded = 0;
     private int clustersFailed = 0;
+    private int failedBudgetExceeded = 0;
+    private int failedWalkCapExceeded = 0;
     private int totalHyperPooledRides = 0;
     private int totalPassengersHyperPooled = 0;
     private double totalVktHyperPooled = 0.0;
@@ -563,6 +565,60 @@ public class HyperPoolGenerator {
         return new double[]{totalTravelTime, totalDistance};
     }
 
+    /**
+     * Walks the stop sequence ONCE from {@code startTime} and returns the
+     * cumulative drive profile: {@code result[0][s]} = drive time (s) and
+     * {@code result[1][s]} = drive distance (m) from stop 0 to stop {@code s}.
+     *
+     * <p>HYP-4: this is the single source of truth for total route metrics,
+     * per-pax in-vehicle times ({@code cum[alight] - cum[board]}), per-pax
+     * routed distances, and boarding times ({@code startTime + cumTime[board]}).
+     * Each segment is queried at its actual arrival time, so later boarders no
+     * longer inherit the time-bin error of routing their prefix from startTime.
+     *
+     * @return {time[], distance[]} arrays of length stopCount, or null if any
+     *         consecutive stop pair is unroutable
+     */
+    private double[][] computeRouteProfile(StopSequence sequence, double startTime) {
+        List<StopLocation> stops = sequence.getStops();
+        int n = stops.size();
+        double[] cumTime = new double[n];
+        double[] cumDist = new double[n];
+        double currentTime = startTime;
+        for (int i = 0; i < n - 1; i++) {
+            TravelSegment segment = networkCache.getSegment(
+                stops.get(i).getLinkId(), stops.get(i + 1).getLinkId(), currentTime);
+            if (!segment.isReachable()) {
+                log.warn("No route between stops {} and {}",
+                    stops.get(i).getLinkId(), stops.get(i + 1).getLinkId());
+                return null;
+            }
+            currentTime += segment.getTravelTime();
+            cumTime[i + 1] = cumTime[i] + segment.getTravelTime();
+            cumDist[i + 1] = cumDist[i] + segment.getDistance();
+        }
+        return new double[][]{cumTime, cumDist};
+    }
+
+    /**
+     * HYP-4: pins the per-pax column-alignment invariant — the bundled request
+     * count must equal the sum of source-ride degrees. Every per-pax array
+     * (walks, delays, budgets, and every per-pax CSV column) is built by
+     * concatenating the source rides in cluster iteration order; a mismatch
+     * means the columns are scrambled and the ride must never be exported.
+     */
+    static void checkPerPaxAlignment(int totalRequests, List<Ride> sourceRides) {
+        int sumDegrees = 0;
+        for (Ride source : sourceRides) {
+            sumDegrees += source.getDegree();
+        }
+        if (totalRequests != sumDegrees) {
+            throw new IllegalStateException(String.format(
+                "HyperPool per-pax alignment violated: %d bundled requests != %d "
+                + "(sum of source-ride degrees)", totalRequests, sumDegrees));
+        }
+    }
+
     // ==================== Passenger Metrics ====================
 
     /**
@@ -946,15 +1002,18 @@ public class HyperPoolGenerator {
     }
 
     /**
-     * Generates a hyper-pooled ride from a cluster.
+     * Generates a hyper-pooled ride from a cluster, applying Stage-2 acceptance
+     * validation inline (HYP-1): a cluster is rejected (null) if any passenger's
+     * walk distances exceed the hard cap or any remaining budget is negative.
+     *
+     * <p>ONE delay definition (HYP-4), also exported as passengerDelays:
+     * {@code delay_i = (startTime + timeToBoardingStop_i) - (requestTime_i + accessWalkTime_i)}.
      */
     private HyperPooledRide generateHyperPooledRide(
             Set<StopToStopRideWrapper> cluster,
             int index) {
 
         // Plan A2 Task 6: materialize each wrapper ONCE for the entire cluster processing.
-        // In fat mode materialize() is a no-op lambda; in stub mode it runs pinned-stop replay.
-        // Building the cache here ensures all downstream reads share the same Ride instances.
         Map<StopToStopRideWrapper, Ride> clusterRideCache = buildClusterRideCache(cluster);
 
         // Compute per-pax relocation caps (null when flag is off)
@@ -972,22 +1031,35 @@ public class HyperPoolGenerator {
             .mapToDouble(StopToStopRideWrapper::getDepartureTime)
             .min().orElse(0.0);
 
-        // Calculate route metrics
-        double[] routeMetrics = calculateRouteMetrics(sequence, networkCache, startTime);
-        double totalTravelTime = routeMetrics[0];
-        double totalDistance = routeMetrics[1];
-
-        if (Double.isInfinite(totalTravelTime)) {
+        // ONE cumulative route profile drives totals, per-pax IVT/distance and
+        // boarding times (HYP-4).
+        double[][] profile = computeRouteProfile(sequence, startTime);
+        if (profile == null) {
             log.warn("Could not route through stop sequence for cluster");
             return null;
         }
+        double[] cumTime = profile[0];
+        double[] cumDist = profile[1];
+        int lastStop = sequence.getStopCount() - 1;
+        double totalTravelTime = cumTime[lastStop];
+        double totalDistance = cumDist[lastStop];
 
-        // Collect all requests and build passenger arrays
+        // Collect all requests and build passenger arrays. NOTE: this loop and
+        // the metrics loop below MUST iterate the same LinkedHashSet `cluster`
+        // in the same order as generateStopSequence's passenger-index mapping —
+        // that shared iteration order IS the per-pax column alignment.
         List<DrtRequest> allRequests = new ArrayList<>();
         List<Ride> sourceRides = new ArrayList<>();
 
         for (StopToStopRideWrapper wrapper : cluster) {
-            Ride clusterRide = clusterRideCache.get(wrapper); // pre-materialized once per cluster
+            Ride clusterRide = clusterRideCache.get(wrapper);
+            if (clusterRide.getDegree() != wrapper.getPassengerCount()) {
+                throw new IllegalStateException(String.format(
+                    "HyperPool per-pax alignment violated: wrapper %d claims %d pax "
+                    + "but its materialized ride has degree %d",
+                    wrapper.getRideIndex(), wrapper.getPassengerCount(),
+                    clusterRide.getDegree()));
+            }
             sourceRides.add(clusterRide);
             DrtRequest[] rideRequests = clusterRide.getRequests();
             for (DrtRequest req : rideRequests) {
@@ -996,6 +1068,7 @@ public class HyperPoolGenerator {
         }
 
         int passengerCount = allRequests.size();
+        checkPerPaxAlignment(passengerCount, sourceRides);
 
         // Build passenger arrays
         DrtRequest[] requests = allRequests.toArray(new DrtRequest[0]);
@@ -1006,37 +1079,73 @@ public class HyperPoolGenerator {
         double[] egressWalkDistances = new double[passengerCount];
         double[] inVehicleTimes = new double[passengerCount];
         double[] remainingBudgets = new double[passengerCount];
+        double[] passengerDelays = new double[passengerCount];
 
-        // Calculate per-passenger metrics
+        double maxWalk = config.getMaxWalkDistanceMeters();
+
+        // Calculate per-passenger metrics + acceptance validation (HYP-1/HYP-4)
         int passengerIdx = 0;
         for (StopToStopRideWrapper wrapper : cluster) {
-            Ride sourceRide = clusterRideCache.get(wrapper); // pre-materialized once per cluster
+            Ride sourceRide = clusterRideCache.get(wrapper);
             double[] sourceAccessWalks = sourceRide.getAccessWalkDistances();
             double[] sourceEgressWalks = sourceRide.getEgressWalkDistances();
 
             for (int i = 0; i < wrapper.getPassengerCount(); i++) {
-                boardingIndices[passengerIdx] = sequence.getBoardingIndex(passengerIdx);
-                alightingIndices[passengerIdx] = sequence.getAlightingIndex(passengerIdx);
+                int boardIdx = sequence.getBoardingIndex(passengerIdx);
+                int alightIdx = sequence.getAlightingIndex(passengerIdx);
+                boardingIndices[passengerIdx] = boardIdx;
+                alightingIndices[passengerIdx] = alightIdx;
 
-                // Use walk distances from source ride, plus any additional relocation walk
-                accessWalkDistances[passengerIdx] = sourceAccessWalks != null ? sourceAccessWalks[i] : 0.0;
-                egressWalkDistances[passengerIdx] = sourceEgressWalks != null ? sourceEgressWalks[i] : 0.0;
+                double accessWalk = sourceAccessWalks != null ? sourceAccessWalks[i] : 0.0;
+                double egressWalk = sourceEgressWalks != null ? sourceEgressWalks[i] : 0.0;
+                accessWalkDistances[passengerIdx] = accessWalk;
+                egressWalkDistances[passengerIdx] = egressWalk;
 
-                // Calculate in-vehicle time from boarding to alighting
-                int boardIdx = boardingIndices[passengerIdx];
-                int alightIdx = alightingIndices[passengerIdx];
-                double ivt = calculateInVehicleTime(sequence, boardIdx, alightIdx, networkCache, startTime);
+                // Walk-cap enforcement (HYP-1; semantics of the former dead
+                // BudgetValidator.validateWalkDistances: each leg AND the total
+                // must respect maxWalkDistanceMeters).
+                if (accessWalk > maxWalk || egressWalk > maxWalk
+                        || accessWalk + egressWalk > maxWalk) {
+                    failedWalkCapExceeded++;
+                    log.debug("Cluster rejected: pax {} walk {}+{} m exceeds cap {} m",
+                        passengerIdx, accessWalk, egressWalk, maxWalk);
+                    return null;
+                }
+
+                double ivt = cumTime[alightIdx] - cumTime[boardIdx];
                 inVehicleTimes[passengerIdx] = ivt;
 
-                // Budget validation (if validator available)
+                DrtRequest request = requests[passengerIdx];
+                double accessWalkTime = accessWalk / walkSpeed;
+
+                // ONE delay definition (HYP-4): boarding time vs pax readiness.
+                double delay = (startTime + cumTime[boardIdx])
+                        - (request.requestTime + accessWalkTime);
+                passengerDelays[passengerIdx] = delay;
+
+                double walkTime = (accessWalk + egressWalk) / walkSpeed;
+                double actualTravelTime = ivt + walkTime;
+                // Per-pax routed distance (boarding->alighting segment sums)
+                // plus walks — mirrors the Stage-1 S2S convention; replaces
+                // totalDistance / passengerCount (HYP-4).
+                double paxDistance = accessWalk
+                        + (cumDist[alightIdx] - cumDist[boardIdx]) + egressWalk;
+
                 if (budgetValidator != null) {
-                    DrtRequest request = requests[passengerIdx];
-                    double delay = startTime - request.requestTime;
-                    double actualTravelTime = ivt + (accessWalkDistances[passengerIdx] + egressWalkDistances[passengerIdx]) / walkSpeed;
                     double score = budgetValidator.calculateDrtScoreWithWalks(
-                        request, delay, actualTravelTime, totalDistance / passengerCount,
-                        accessWalkDistances[passengerIdx], egressWalkDistances[passengerIdx]);
+                        request, delay, actualTravelTime, paxDistance,
+                        accessWalk, egressWalk);
                     remainingBudgets[passengerIdx] = score - request.bestModeScore;
+                    if (remainingBudgets[passengerIdx] < 0) {
+                        // HYP-1: the central acceptance criterion — budget =
+                        // DRT score - best-mode score >= 0 — now REJECTS the
+                        // bundle instead of exporting it.
+                        failedBudgetExceeded++;
+                        log.debug("Cluster rejected: pax {} (request {}) budget {}",
+                            passengerIdx, request.index,
+                            remainingBudgets[passengerIdx]);
+                        return null;
+                    }
                 } else {
                     remainingBudgets[passengerIdx] = 0.0;
                 }
@@ -1057,6 +1166,7 @@ public class HyperPoolGenerator {
                 .egressWalkDistances(egressWalkDistances)
                 .inVehicleTimes(inVehicleTimes)
                 .remainingBudgets(remainingBudgets)
+                .passengerDelays(passengerDelays)
                 .totalRideTime(totalTravelTime)
                 .totalRideDistance(totalDistance)
                 .startTime(startTime)
@@ -1070,34 +1180,6 @@ public class HyperPoolGenerator {
         }
     }
 
-    /**
-     * Calculates in-vehicle time between boarding and alighting stops.
-     */
-    private double calculateInVehicleTime(
-            StopSequence sequence,
-            int boardingIndex,
-            int alightingIndex,
-            MatsimNetworkCache networkCache,
-            double baseTime) {
-
-        double ivt = 0.0;
-        double currentTime = baseTime;
-
-        // Sum travel times from boarding to alighting
-        for (int i = boardingIndex; i < alightingIndex; i++) {
-            StopLocation from = sequence.getStop(i);
-            StopLocation to = sequence.getStop(i + 1);
-
-            TravelSegment segment = networkCache.getSegment(from.getLinkId(), to.getLinkId(), currentTime);
-            if (segment.isReachable()) {
-                ivt += segment.getTravelTime();
-                currentTime += segment.getTravelTime();
-            }
-        }
-
-        return ivt;
-    }
-
     // ==================== Statistics ====================
 
     /**
@@ -1107,6 +1189,8 @@ public class HyperPoolGenerator {
         clustersAttempted = 0;
         clustersSucceeded = 0;
         clustersFailed = 0;
+        failedBudgetExceeded = 0;
+        failedWalkCapExceeded = 0;
         totalHyperPooledRides = 0;
         totalPassengersHyperPooled = 0;
         totalVktHyperPooled = 0.0;
@@ -1122,6 +1206,8 @@ public class HyperPoolGenerator {
         log.info("Clusters succeeded: {} ({:.1f}%)", clustersSucceeded,
             clustersAttempted > 0 ? 100.0 * clustersSucceeded / clustersAttempted : 0.0);
         log.info("Clusters failed: {}", clustersFailed);
+        log.info("Clusters rejected - budget exceeded: {}", failedBudgetExceeded);
+        log.info("Clusters rejected - walk cap exceeded: {}", failedWalkCapExceeded);
         log.info("Total hyper-pooled rides: {}", totalHyperPooledRides);
         log.info("Total passengers hyper-pooled: {}", totalPassengersHyperPooled);
 
@@ -1150,6 +1236,16 @@ public class HyperPoolGenerator {
      */
     public int getClustersFailed() {
         return clustersFailed;
+    }
+
+    /** Clusters rejected because a passenger's remaining budget was negative (HYP-1). */
+    public int getFailedBudgetExceeded() {
+        return failedBudgetExceeded;
+    }
+
+    /** Clusters rejected because a passenger's walk distances exceeded maxWalkDistanceMeters (HYP-1). */
+    public int getFailedWalkCapExceeded() {
+        return failedWalkCapExceeded;
     }
 
     /**
