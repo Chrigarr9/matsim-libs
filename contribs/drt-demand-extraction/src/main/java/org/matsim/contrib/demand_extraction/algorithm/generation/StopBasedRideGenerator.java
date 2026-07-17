@@ -217,7 +217,11 @@ public final class StopBasedRideGenerator {
 			origins.add(new Coord(requests[i].originX, requests[i].originY));
 			// Max walk = min(budget-based, hard cap)
 			// Use remaining budget from D2D ride to derive walk budget
-			double budgetBasedMax = deriveBudgetBasedMaxWalk(requests[i], doorToDoor.getRemainingBudgets()[i]);
+			double budgetBasedMax = deriveBudgetBasedMaxWalk(requests[i],
+					doorToDoor.getRemainingBudgets()[i],
+					doorToDoor.getPassengerTravelTimes()[i],
+					doorToDoor.getPassengerDistances()[i],
+					doorToDoor.getDelays()[i]);
 			maxWalkDistances[i] = Math.min(budgetBasedMax, hardCap);
 		}
 
@@ -261,12 +265,16 @@ public final class StopBasedRideGenerator {
 			accessWalkDistances[i] = walkCalculator.calculateWalkDistance(origins.get(i), pickupLink);
 			egressWalkDistances[i] = walkCalculator.calculateWalkDistance(destinations.get(i), dropoffLink);
 
-			// Validate against hard cap
-			double totalWalk = accessWalkDistances[i] + egressWalkDistances[i];
-			if (totalWalk > hardCap * 2) { // Allow access + egress each up to hardCap
+			// Validate against hard cap — EACH LEG individually (HYP-7). The
+			// old `sum > hardCap * 2` check let a single leg reach twice the
+			// cap (e.g. 1000 m access + 0 m egress at a 500 m cap). This now
+			// matches the budget-aware path's per-leg rule (step 5 there).
+			if (accessWalkDistances[i] > hardCap || egressWalkDistances[i] > hardCap) {
 				failedWalkDistanceExceeded.incrementAndGet();
-				log.trace("Ride {} rejected: passenger {} total walk {:.1f}m > cap {:.1f}m",
-						doorToDoor.getIndex(), i, totalWalk, hardCap * 2);
+				log.trace("Ride {} rejected: passenger {} walk exceeds hard cap "
+						+ "(access {} m, egress {} m, cap {} m)",
+						doorToDoor.getIndex(), i,
+						accessWalkDistances[i], egressWalkDistances[i], hardCap);
 				return null;
 			}
 		}
@@ -540,22 +548,26 @@ public final class StopBasedRideGenerator {
 	}
 
 	/**
-	 * Derive budget-based maximum walk distance for a passenger.
-	 * Uses remaining budget from D2D ride and walk disutility parameters.
+	 * Derive the per-passenger walk cap for the LEGACY (non-budget-aware) path.
+	 *
+	 * <p>Priority (HYP-7): the request's pre-computed {@code maxWalkDistance}
+	 * (stamped by BudgetToConstraintsCalculator at request construction), else
+	 * the injected {@link WalkBudgetProvider} (which routes through
+	 * {@code BudgetToConstraintsCalculator.budgetToMaxWalkDistance} — see the
+	 * provider lambda in BamasEngine), else the hard cap. The old fallback
+	 * divided remaining budget (utils) by walk speed (m/s) and treated the
+	 * result as seconds — dimensionally meaningless.
 	 */
-	private double deriveBudgetBasedMaxWalk(DrtRequest request, double remainingBudget) {
-		// Use the request's pre-calculated maxWalkDistance if available
+	private double deriveBudgetBasedMaxWalk(DrtRequest request, double remainingBudget,
+			double actualTravelTime, double actualDistance, double delay) {
 		if (request.maxWalkDistance > 0) {
 			return request.maxWalkDistance;
 		}
-
-		// Otherwise, derive from remaining budget using walk utility parameters
-		// This is a simplified calculation - the actual calculation should use
-		// BudgetToConstraintsCalculator.budgetToMaxWalkDistance()
-		// For now, use a conservative estimate based on walking speed
-		double walkSpeed = config.getWalkSpeedMps();
-		double maxWalkTime = Math.min(remainingBudget / walkSpeed, 600); // Max 10 minutes walk
-		return maxWalkTime * walkSpeed;
+		if (walkBudgetProvider != null) {
+			return walkBudgetProvider.getMid(remainingBudget, request,
+					actualTravelTime, actualDistance, delay);
+		}
+		return config.getMaxWalkDistanceMeters();
 	}
 
 	/**

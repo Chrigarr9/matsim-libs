@@ -263,6 +263,33 @@ final class StopBasedTestFixtures {
             boolean enableBudgetAware,
             StopFinder stopFinder,
             BudgetValidator validator) {
+        WalkBudgetProvider provider = enableBudgetAware
+                ? (budget, req, actualTT, dist, delay) -> MID_M
+                : null;
+        // WalkingDistanceCalculator is a concrete class, not a functional
+        // interface, so a stub instance needs an anonymous subclass rather
+        // than a lambda.
+        WalkingDistanceCalculator constantWalk = new WalkingDistanceCalculator() {
+            @Override
+            public double calculateWalkDistance(Coord coord, Link link) {
+                return WALK_M;
+            }
+        };
+        return buildGenerator(enableBudgetAware, stopFinder, validator,
+                constantWalk, provider);
+    }
+
+    /**
+     * Full-control overload: custom walk calculator and walk-budget provider
+     * (provider may be non-null with the budget-aware flag OFF — the legacy
+     * path's fallback uses it, HYP-7).
+     */
+    static StopBasedRideGenerator buildGenerator(
+            boolean enableBudgetAware,
+            StopFinder stopFinder,
+            BudgetValidator validator,
+            WalkingDistanceCalculator walkCalc,
+            WalkBudgetProvider walkBudgetProvider) {
 
         // Use createWithRouting (real network needed for link lookups in the walk calculator),
         // but pre-populate the "stop"→"dropoff" segment so the cache never falls through to
@@ -279,18 +306,7 @@ final class StopBasedTestFixtures {
                 Id.createLinkId("dropoff"),
                 new TravelSegment(IN_VEHICLE_TIME_S, 1000.0, 0.0));
 
-        WalkingDistanceCalculator walkCalc = new WalkingDistanceCalculator() {
-            @Override
-            public double calculateWalkDistance(Coord coord, Link link) {
-                return WALK_M;
-            }
-        };
-
         ExMasConfigGroup exMasConfig = buildExMasConfig(enableBudgetAware);
-
-        WalkBudgetProvider walkBudgetProvider = enableBudgetAware
-                ? (budget, req, actualTT, dist, delay) -> MID_M
-                : null;
 
         return new StopBasedRideGenerator(
                 networkCache,
