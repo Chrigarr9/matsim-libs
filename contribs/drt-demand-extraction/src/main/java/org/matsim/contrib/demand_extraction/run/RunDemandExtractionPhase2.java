@@ -71,7 +71,7 @@ public final class RunDemandExtractionPhase2 {
 				     "--extension-parents-mmr-lambda", "--checkpoint-dir",
 				     "--algorithm-process-count", "--heuristics-process-count",
 				     "--max-degree", "--calc-predecessors", "--calc-shapley-values",
-				     "--cache-eviction-watermark", "--pairgen-top-k",
+				     "--cache-eviction-watermark", "--pairgen-top-k", "--hyperpool-vehicle-capacity",
 				     "--max-ordering-nodes-after-first-valid", "--predecessors-filter-time",
 				     "--predecessors-spatial-prefilter", "--predecessors-prefilter-max-speed-mps",
 				     "--predecessors-filter-distance-factor",
@@ -120,6 +120,11 @@ public final class RunDemandExtractionPhase2 {
 				case "--extension-parents-selection-rule" -> cfg.setExtensionParentsSelectionRule(ExMasConfigGroup.ExtensionParentsSelectionRule.valueOf(args[++i].toUpperCase()));
 				case "--extension-parents-mmr-lambda" -> cfg.setExtensionParentsMmrLambda(Double.parseDouble(args[++i]));
 				case "--pairgen-top-k" -> cfg.setPairgenTopK(Integer.parseInt(args[++i]));
+				// HYP-5: HyperPool Stage 2 max vehicle capacity. Must be re-applied here because
+				// Phase 2 rebuilds ExMasConfigGroup from phase1_config.xml (Phase 1 never sets this
+				// knob), so CLI is the only way to override it away from the class default (-1 =
+				// unlimited) in a fresh Phase-2 JVM. Mirrors --pairgen-top-k above.
+				case "--hyperpool-vehicle-capacity" -> cfg.setHyperPoolMaxVehicleCapacity(Integer.parseInt(args[++i]));
 				// Plan A3: per-degree checkpoint/resume. Set ⇒ the engine writes stubs +
 				// pair universe + connection-cache journal at each barrier, and resumes from
 				// the dir if a matching manifest is already present. Off ("") reproduces master.

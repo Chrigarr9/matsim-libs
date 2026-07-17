@@ -228,6 +228,36 @@ class RunDemandExtractionPhase2ArgsTest {
 	}
 
 	// ------------------------------------------------------------------ //
+	// --hyperpool-vehicle-capacity CLI wiring (HYP-5: Phase 2 rebuilds     //
+	// ExMasConfigGroup from phase1_config.xml, which never serialises     //
+	// this knob, so it must be re-applied here like --pairgen-top-k)       //
+	// ------------------------------------------------------------------ //
+
+	@Test
+	void hyperPoolVehicleCapacityOverrideAppliesToConfig() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		RunDemandExtractionPhase2.applyPhase2KnobOverrides(
+				new String[]{"--hyperpool-vehicle-capacity", "4"}, cfg);
+		assertEquals(4, cfg.getHyperPoolMaxVehicleCapacity(),
+				"--hyperpool-vehicle-capacity 4 should set hyperPoolMaxVehicleCapacity on the config");
+	}
+
+	@Test
+	void parseArgsToleratesHyperPoolVehicleCapacityWithoutMisreadingNext() {
+		// --hyperpool-vehicle-capacity takes a value; parseArgs must skip both tokens and still find --network.
+		String[] args = {
+				"--phase1-dir", "/tmp/dump",
+				"--hyperpool-vehicle-capacity", "4",
+				"--network", "/tmp/net.xml.gz",
+				"--travel-times", "/tmp/tt.tsv",
+				"--output-dir", "/tmp/out"
+		};
+		RunDemandExtractionPhase2.Phase2Args parsed = RunDemandExtractionPhase2.parseArgs(args);
+		assertEquals(java.nio.file.Path.of("/tmp/net.xml.gz"), parsed.networkXml());
+	}
+
+	// ------------------------------------------------------------------ //
 	// --max-ordering-nodes-after-first-valid + --predecessors-filter-time  //
 	// CLI wiring (no-max-degree production run knobs)                      //
 	// ------------------------------------------------------------------ //
