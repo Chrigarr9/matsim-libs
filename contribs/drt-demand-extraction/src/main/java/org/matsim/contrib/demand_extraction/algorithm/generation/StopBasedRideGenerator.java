@@ -60,6 +60,7 @@ public final class StopBasedRideGenerator {
 	private final AtomicInteger failedBudgetExceeded = new AtomicInteger();
 	private final AtomicInteger failedWaitTimeExceeded = new AtomicInteger();
 	private final AtomicInteger skippedSingleRides = new AtomicInteger();
+	private final AtomicInteger skippedHubLegRides = new AtomicInteger();
 	private final AtomicLong totalAccessWalkDistance = new AtomicLong();
 	private final AtomicLong totalEgressWalkDistance = new AtomicLong();
 	private final AtomicLong totalPassengers = new AtomicLong();
@@ -99,12 +100,28 @@ public final class StopBasedRideGenerator {
 
 		resetStatistics();
 
-		// Filter to rides with degree >= 2 (single rides stay door-to-door)
+		// Filter to rides with degree >= 2 (single rides stay door-to-door).
+		// HYP-8: rides containing a hub-leg request copy (hubLegRole != NONE)
+		// must stay door-to-door in ALL cases — the hub-transfer nesting
+		// contract (arrival <= departure <= arrival + maxHubWait at the hub)
+		// requires the physical transfer point to remain at the hub. Snapping
+		// it to a shared stop would (1) move the transfer point away from the
+		// hub coordinates the adapter/MIP pair on, (2) charge a phantom origin
+		// access walk on CONTINUATION legs (double-charged across the leg
+		// pair, see BudgetValidator.calculateRemainingBudgets), and (3) apply
+		// a door-to-door wait semantic to a hub dwell.
 		List<Ride> eligibleRides = doorToDoorRides.stream()
 				.filter(ride -> {
 					if (ride.getDegree() < 2) {
 						skippedSingleRides.incrementAndGet();
 						return false;
+					}
+					for (DrtRequest req : ride.getRequests()) {
+						if (req.hubLegRole != null
+								&& req.hubLegRole != DrtRequest.HubLegRole.NONE) {
+							skippedHubLegRides.incrementAndGet();
+							return false;
+						}
 					}
 					return true;
 				})
@@ -112,6 +129,10 @@ public final class StopBasedRideGenerator {
 
 		int total = eligibleRides.size();
 		log.info("  {} rides eligible for stop-based conversion (degree >= 2)", total);
+		if (skippedHubLegRides.get() > 0) {
+			log.info("  {} rides skipped: contain hub-leg request copies (stay door-to-door, HYP-8)",
+					skippedHubLegRides.get());
+		}
 
 		if (total == 0) {
 			log.info("  No eligible rides to convert");
@@ -582,6 +603,7 @@ public final class StopBasedRideGenerator {
 		failedBudgetExceeded.set(0);
 		failedWaitTimeExceeded.set(0);
 		skippedSingleRides.set(0);
+		skippedHubLegRides.set(0);
 		totalAccessWalkDistance.set(0);
 		totalEgressWalkDistance.set(0);
 		totalPassengers.set(0);
@@ -594,6 +616,7 @@ public final class StopBasedRideGenerator {
 		log.info("Stop-based ride generation completed in {}ms", elapsedMs);
 		log.info("  Conversion rate: {}/{} ({:.1f}%)", success, total, conversionRate);
 		log.info("  Skipped (degree 1): {}", skippedSingleRides.get());
+		log.info("  Skipped (hub-leg copies, stay D2D): {}", skippedHubLegRides.get());
 		log.info("  Failed - no pickup stop: {}", failedNoPickupStop.get());
 		log.info("  Failed - no dropoff stop: {}", failedNoDropoffStop.get());
 		log.info("  Failed - walk distance exceeded: {}", failedWalkDistanceExceeded.get());
@@ -659,5 +682,10 @@ public final class StopBasedRideGenerator {
 					.egressWalkDistances(egressWalkDistances)
 					.build();
 		}
+	}
+
+	/** Number of D2D rides excluded from S2S conversion because they contain hub-leg copies (HYP-8). */
+	int getSkippedHubLegRides() {
+		return skippedHubLegRides.get();
 	}
 }

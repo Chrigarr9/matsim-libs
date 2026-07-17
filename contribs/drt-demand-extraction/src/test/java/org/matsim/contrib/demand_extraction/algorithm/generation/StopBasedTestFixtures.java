@@ -173,6 +173,41 @@ final class StopBasedTestFixtures {
         return buildD2DRide(600.0);
     }
 
+    /**
+     * Degree-2 D2D ride whose SECOND pax is a hub-leg copy (ACCESS_LEG).
+     * HYP-8: such rides must never receive an S2S variant — the physical
+     * transfer point must stay at the hub.
+     */
+    static Ride buildD2DRideWithHubLegPax() {
+        DrtRequest req0 = buildRequest(0, "pax0", "g0", 50.0, 1050.0, 600.0);
+        DrtRequest req1 = buildRequest(1, "pax1", "g1", 100.0, 1100.0, 600.0)
+                .toBuilder()
+                .requestTag("connecting")
+                .hubId("hub_01")
+                .hubLegRole(DrtRequest.HubLegRole.ACCESS_LEG)
+                .build();
+        DrtRequest[] reqs = {req0, req1};
+        return Ride.builder()
+                .index(1)
+                .degree(2)
+                .kind(RideKind.FIFO)
+                .requests(reqs)
+                .originsOrderedRequests(reqs)
+                .destinationsOrderedRequests(reqs)
+                .passengerTravelTimes(new double[]{720.0, 720.0})
+                .passengerDistances(new double[]{7200.0, 7200.0})
+                .passengerNetworkUtilities(new double[]{0.0, 0.0})
+                .delays(new double[]{120.0, 120.0})
+                .detours(new double[]{1.2, 1.2})
+                .remainingBudgets(new double[]{0.5, 0.5})
+                .connectionTravelTimes(new double[]{600.0})
+                .connectionDistances(new double[]{6000.0})
+                .connectionNetworkUtilities(new double[]{0.0})
+                .startTime(8.0 * 3600)
+                .variant(RideVariant.DOOR_TO_DOOR)
+                .build();
+    }
+
     private static DrtRequest buildRequest(int index, String personId, String groupId,
             double originX, double destX, double directTravelTime) {
         return DrtRequest.builder()
