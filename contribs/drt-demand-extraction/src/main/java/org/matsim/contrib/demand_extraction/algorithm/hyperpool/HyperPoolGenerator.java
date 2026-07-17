@@ -1101,8 +1101,23 @@ public class HyperPoolGenerator {
                 boardingIndices[passengerIdx] = boardIdx;
                 alightingIndices[passengerIdx] = alightIdx;
 
-                double accessWalk = sourceAccessWalks != null ? sourceAccessWalks[i] : 0.0;
-                double egressWalk = sourceEgressWalks != null ? sourceEgressWalks[i] : 0.0;
+                // HYP-6: charge the realized stop-relocation walk to the pax.
+                // The stop the pax actually uses is the (possibly merged)
+                // sequence stop; the wrapper still carries the original
+                // Stage-1 stop. calculateRelocationDistance is 0 when no
+                // merge happened (identical coordinates).
+                double accessReloc = 0.0;
+                double egressReloc = 0.0;
+                if (stopRelocator != null) {
+                    accessReloc = stopRelocator.calculateRelocationDistance(
+                            wrapper.getPickupStop(), stopSequenceArray[boardIdx]);
+                    egressReloc = stopRelocator.calculateRelocationDistance(
+                            wrapper.getDropoffStop(), stopSequenceArray[alightIdx]);
+                }
+                double accessWalk = (sourceAccessWalks != null ? sourceAccessWalks[i] : 0.0)
+                        + accessReloc;
+                double egressWalk = (sourceEgressWalks != null ? sourceEgressWalks[i] : 0.0)
+                        + egressReloc;
                 accessWalkDistances[passengerIdx] = accessWalk;
                 egressWalkDistances[passengerIdx] = egressWalk;
 
