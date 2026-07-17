@@ -389,11 +389,11 @@ public final class ExMasCsvWriter {
 				String delays = formatDoubleArray(ride.getDelays());
 				String detours = formatDoubleArray(ride.getDetours());
 				String budgets = ride.getRemainingBudgets() != null
-						? formatDoubleArray(ride.getRemainingBudgets())
+						? formatDoubleArray(ride.getRemainingBudgets(), "%.4f")
 						: "[]";
-				String maxCosts = ride.getMaxCosts() != null ? formatDoubleArray(ride.getMaxCosts()) : "[]";
+				String maxCosts = ride.getMaxCosts() != null ? formatDoubleArray(ride.getMaxCosts(), "%.4f") : "[]";
 				String maxCostsPerKm = ride.getMaxCostsPerKm() != null ? formatDoubleArray(ride.getMaxCostsPerKm()) : "[]";
-				String shapleyValues = ride.getShapleyValues() != null ? formatDoubleArray(ride.getShapleyValues()) : "[]";
+				String shapleyValues = ride.getShapleyValues() != null ? formatDoubleArray(ride.getShapleyValues(), "%.4f") : "[]";
 				String successors;
 				if (ride.getSuccessors() != null) {
 					int[] sortedSucc = ride.getSuccessors().clone();
@@ -469,9 +469,21 @@ public final class ExMasCsvWriter {
 	}
 
 	/**
-	 * Format double array for CSV output: [1.5, 2.7, 3.9] -> [1.5 | 2.7 | 3.9]
+	 * Format double array for CSV output at the default %.2f:
+	 * [1.5, 2.7, 3.9] -> [1.50 | 2.70 | 3.90]
 	 */
 	private static String formatDoubleArray(double[] array) {
+		return formatDoubleArray(array, "%.2f");
+	}
+
+	/**
+	 * Format double array with an explicit per-element format. EXP-5: utility
+	 * (utils-of-money) columns are emitted at %.4f — %.2f (0.01 utils, about
+	 * 1 EUR-equivalent at eqasim margUtilOfMoney) quantizes serve/reject
+	 * decisions at the MIP boundary 100x coarser than the request-side
+	 * budget/baseModeScore columns.
+	 */
+	private static String formatDoubleArray(double[] array, String elementFormat) {
 		if (array == null || array.length == 0) {
 			return "[]";
 		}
@@ -481,7 +493,7 @@ public final class ExMasCsvWriter {
 			if (i > 0) {
 				sb.append(ARRAY_SEPARATOR);
 			}
-			sb.append(String.format(java.util.Locale.US, "%.2f", array[i]));
+			sb.append(String.format(java.util.Locale.US, elementFormat, array[i]));
 		}
 		sb.append("]");
 		return sb.toString();
@@ -724,7 +736,8 @@ public final class ExMasCsvWriter {
 				String delaysStr = formatDoubleArray(passengerDelays);
 
 				// Format remaining budgets
-				String remainingBudgetsStr = formatDoubleArray(ride.getRemainingBudgets());
+				String remainingBudgetsStr =
+						formatDoubleArray(ride.getRemainingBudgets(), "%.4f");
 
 				// Extension-2 per-pax columns: same iteration order as
 				// HyperPooledRide.getRequests(), same `[a | b | c]` format used
