@@ -134,6 +134,8 @@ public class RunLyonEqasimDemandExtraction {
 		 *  partners per request during pair generation. 0 = uncapped (setter clamps
 		 *  negatives to 0 = no-op). Mandatory at scale (design 2026-06-22 §3). */
 		public final int pairgenTopK;
+		/** HyperPool Stage-2 vehicle capacity cap (peak_pax), HYP-5. -1 = unlimited (config default). */
+		public final int hyperPoolVehicleCapacity;
 
 		ParsedArgs(int sample, String scenarioDir, String prefix, String travelTimesPath,
 				String outputDir, double searchHorizon, double maxDetourFactor,
@@ -158,7 +160,8 @@ public class RunLyonEqasimDemandExtraction {
 				double maxHubWait,
 				boolean hubSyncTwoSided,
 				double hubSyncMaxAdvance,
-				int pairgenTopK) {
+				int pairgenTopK,
+				int hyperPoolVehicleCapacity) {
 			this.sample = sample;
 			this.scenarioDir = scenarioDir;
 			this.prefix = prefix;
@@ -198,6 +201,7 @@ public class RunLyonEqasimDemandExtraction {
 			this.hubSyncTwoSided = hubSyncTwoSided;
 			this.hubSyncMaxAdvance = hubSyncMaxAdvance;
 			this.pairgenTopK = pairgenTopK;
+			this.hyperPoolVehicleCapacity = hyperPoolVehicleCapacity;
 		}
 	}
 
@@ -241,6 +245,7 @@ public class RunLyonEqasimDemandExtraction {
 		boolean hubSyncTwoSided = false;
 		double hubSyncMaxAdvance = Double.NaN;
 		int pairgenTopK = 0;
+		int hyperPoolVehicleCapacity = -1;
 
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -287,6 +292,7 @@ public class RunLyonEqasimDemandExtraction {
 				case "--hub-sync-twosided" -> hubSyncTwoSided = true;
 				case "--hub-sync-max-advance" -> hubSyncMaxAdvance = Double.parseDouble(args[++i]);
 				case "--pairgen-top-k" -> pairgenTopK = Integer.parseInt(args[++i]);
+				case "--hyperpool-vehicle-capacity" -> hyperPoolVehicleCapacity = Integer.parseInt(args[++i]);
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -301,7 +307,7 @@ public class RunLyonEqasimDemandExtraction {
 				extensionParentsSelectionRule, extensionParentsMmrLambda, extensionParentsTier2NodeCap,
 				checkpointForkBelowMinDegree,
 				expandConnectingBothSides, maxDetourFactorByClass, maxHubWait,
-				hubSyncTwoSided, hubSyncMaxAdvance, pairgenTopK);
+				hubSyncTwoSided, hubSyncMaxAdvance, pairgenTopK, hyperPoolVehicleCapacity);
 	}
 
 	/**
@@ -472,6 +478,7 @@ public class RunLyonEqasimDemandExtraction {
 					+ "[--no-predecessors] [--no-shapley] "
 					+ "[--max-pooling-degree <int>] "
 					+ "[--enable-stop-based] [--enable-hyperpooling] "
+					+ "[--hyperpool-vehicle-capacity <int>] "
 					+ "[--enable-budget-aware-constraints] [--max-walk-distance-meters <m>] "
 					+ "[--hub-set <geojson-path>] "
 					+ "[--hub-transfer-buffer <seconds>] "
@@ -637,6 +644,10 @@ public class RunLyonEqasimDemandExtraction {
 		if (p.enableHyperPooling) {
 			log.info("  Override: hyper-pooling enabled");
 			exMas.setEnableHyperPooling(true);
+		}
+		if (p.hyperPoolVehicleCapacity > 0) {
+			log.info("  Override: hyperPoolMaxVehicleCapacity = {}", p.hyperPoolVehicleCapacity);
+			exMas.setHyperPoolMaxVehicleCapacity(p.hyperPoolVehicleCapacity);
 		}
 		if (p.enableBudgetAwareConstraints) {
 			log.info("  Override: budget-aware per-pax caps enabled");

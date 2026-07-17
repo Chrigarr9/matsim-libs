@@ -94,6 +94,7 @@ public class HyperPoolGenerator {
     private final double timeWindowSeconds;
     private final double stopProximityMeters;
     private final double walkSpeed;
+    private final int maxVehicleCapacity;
 
     // Statistics
     private int clustersAttempted = 0;
@@ -101,6 +102,9 @@ public class HyperPoolGenerator {
     private int clustersFailed = 0;
     private int failedBudgetExceeded = 0;
     private int failedWalkCapExceeded = 0;
+    private int failedTemporalInfeasible = 0;
+    private int failedWaitTimeExceeded = 0;
+    private int failedCapacityExceeded = 0;
     private int totalHyperPooledRides = 0;
     private int totalPassengersHyperPooled = 0;
     private double totalVktHyperPooled = 0.0;
@@ -147,6 +151,7 @@ public class HyperPoolGenerator {
         this.timeWindowSeconds = config.getHyperPoolTimeWindowSeconds();
         this.stopProximityMeters = config.getHyperPoolStopProximityMeters();
         this.walkSpeed = config.getWalkSpeedMps();
+        this.maxVehicleCapacity = config.getHyperPoolMaxVehicleCapacity();
 
         // Log configuration
         if (maxStops > 0) {
@@ -1123,6 +1128,26 @@ public class HyperPoolGenerator {
                         - (request.requestTime + accessWalkTime);
                 passengerDelays[passengerIdx] = delay;
 
+                // HYP-5: rider-level temporal re-validation against the bundled
+                // schedule. Stage 2 does not reschedule: a route that reaches
+                // the boarding stop before the pax can be there (requestTime +
+                // access walk) is infeasible as planned.
+                if (delay < -1e-6) {
+                    failedTemporalInfeasible++;
+                    log.debug("Cluster rejected: pax {} boards {} s before readiness",
+                        passengerIdx, -delay);
+                    return null;
+                }
+                // Same wait-cap semantics as Stage-1 S2S (StopBasedRideGenerator
+                // step 7b): cap == 0 means uncapped.
+                double waitCap = request.maxWaitTime;
+                if (waitCap > 0 && delay > waitCap + 1e-6) {
+                    failedWaitTimeExceeded++;
+                    log.debug("Cluster rejected: pax {} wait {} s exceeds maxWaitTime {} s",
+                        passengerIdx, delay, waitCap);
+                    return null;
+                }
+
                 double walkTime = (accessWalk + egressWalk) / walkSpeed;
                 double actualTravelTime = ivt + walkTime;
                 // Per-pax routed distance (boarding->alighting segment sums)
@@ -1156,7 +1181,7 @@ public class HyperPoolGenerator {
 
         // Build the HyperPooledRide
         try {
-            return HyperPooledRide.builder()
+            HyperPooledRide built = HyperPooledRide.builder()
                 .index(index)
                 .stopSequence(stopSequenceArray)
                 .requests(requests)
@@ -1174,6 +1199,15 @@ public class HyperPoolGenerator {
                 .sourceRides(sourceRides)
                 .orderedStopSequence(sequence)
                 .build();
+            // HYP-5: no real fleet vehicle can execute a bundle whose peak
+            // simultaneous occupancy exceeds the vehicle capacity.
+            if (maxVehicleCapacity > 0 && built.getPeakPax() > maxVehicleCapacity) {
+                failedCapacityExceeded++;
+                log.debug("Cluster rejected: peakPax {} > vehicle capacity {}",
+                    built.getPeakPax(), maxVehicleCapacity);
+                return null;
+            }
+            return built;
         } catch (IllegalArgumentException e) {
             log.warn("Failed to build HyperPooledRide: {}", e.getMessage());
             return null;
@@ -1191,6 +1225,9 @@ public class HyperPoolGenerator {
         clustersFailed = 0;
         failedBudgetExceeded = 0;
         failedWalkCapExceeded = 0;
+        failedTemporalInfeasible = 0;
+        failedWaitTimeExceeded = 0;
+        failedCapacityExceeded = 0;
         totalHyperPooledRides = 0;
         totalPassengersHyperPooled = 0;
         totalVktHyperPooled = 0.0;
@@ -1208,6 +1245,9 @@ public class HyperPoolGenerator {
         log.info("Clusters failed: {}", clustersFailed);
         log.info("Clusters rejected - budget exceeded: {}", failedBudgetExceeded);
         log.info("Clusters rejected - walk cap exceeded: {}", failedWalkCapExceeded);
+        log.info("Clusters rejected - temporal infeasible: {}", failedTemporalInfeasible);
+        log.info("Clusters rejected - wait time exceeded: {}", failedWaitTimeExceeded);
+        log.info("Clusters rejected - capacity exceeded: {}", failedCapacityExceeded);
         log.info("Total hyper-pooled rides: {}", totalHyperPooledRides);
         log.info("Total passengers hyper-pooled: {}", totalPassengersHyperPooled);
 
@@ -1246,6 +1286,21 @@ public class HyperPoolGenerator {
     /** Clusters rejected because a passenger's walk distances exceeded maxWalkDistanceMeters (HYP-1). */
     public int getFailedWalkCapExceeded() {
         return failedWalkCapExceeded;
+    }
+
+    /** Clusters rejected because the bundled route reaches a pax's stop before requestTime + access walk (HYP-5). */
+    public int getFailedTemporalInfeasible() {
+        return failedTemporalInfeasible;
+    }
+
+    /** Clusters rejected because a pax's bundled wait exceeds their maxWaitTime cap (HYP-5). */
+    public int getFailedWaitTimeExceeded() {
+        return failedWaitTimeExceeded;
+    }
+
+    /** Clusters rejected because peak occupancy exceeds hyperPoolMaxVehicleCapacity (HYP-5). */
+    public int getFailedCapacityExceeded() {
+        return failedCapacityExceeded;
     }
 
     /**

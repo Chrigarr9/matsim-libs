@@ -488,6 +488,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	/** Minimum occupancy for hyper-pooled rides to be attractive */
 	private int hyperPoolMinOccupancy = 4;
 
+	/** Max simultaneous in-vehicle passengers (peak_pax) a hyper-pooled ride may
+	 *  imply — the fleet's vehicle capacity. -1 = unlimited (legacy behaviour).
+	 *  Checked against {@code HyperPooledRide.getPeakPax()} before a cluster is
+	 *  accepted (HYP-5). */
+	private int hyperPoolMaxVehicleCapacity = -1;
+
 	/** Stop proximity threshold for considering stops as "same" (meters) */
 	private double hyperPoolStopProximityMeters = 100.0;
 
@@ -1642,6 +1648,16 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.hyperPoolMinOccupancy = hyperPoolMinOccupancy;
 	}
 
+	@StringGetter("hyperPoolMaxVehicleCapacity")
+	public int getHyperPoolMaxVehicleCapacity() {
+		return hyperPoolMaxVehicleCapacity;
+	}
+
+	@StringSetter("hyperPoolMaxVehicleCapacity")
+	public void setHyperPoolMaxVehicleCapacity(int hyperPoolMaxVehicleCapacity) {
+		this.hyperPoolMaxVehicleCapacity = hyperPoolMaxVehicleCapacity;
+	}
+
 	@StringGetter("hyperPoolStopProximityMeters")
 	public double getHyperPoolStopProximityMeters() {
 		return hyperPoolStopProximityMeters;
@@ -1957,6 +1973,8 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Time window for compatible stop-to-stop rides (seconds). Rides within this window can be bundled. Default: 900.0 (15 min)");
 		map.put("hyperPoolMinOccupancy",
 				"Minimum occupancy for hyper-pooled rides to be attractive. Bundles with fewer passengers are not created. Default: 4");
+		map.put("hyperPoolMaxVehicleCapacity",
+				"Maximum simultaneous in-vehicle passengers (peak_pax) a hyper-pooled ride may imply (vehicle capacity). -1 = unlimited. Checked before a cluster is accepted (HYP-5). Default: -1");
 		map.put("hyperPoolStopProximityMeters",
 				"Stop proximity threshold for considering stops as 'same' (meters). Stops within this distance can be merged. Default: 100.0");
 		map.put("hyperPoolEnableSpatialFilter",
