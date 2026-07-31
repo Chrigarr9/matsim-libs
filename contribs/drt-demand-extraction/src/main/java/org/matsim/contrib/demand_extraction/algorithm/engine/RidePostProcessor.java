@@ -722,19 +722,26 @@ public final class RidePostProcessor {
                 Id<Link> to = firstOrigins[j];
                 if (from == null || to == null) continue;
 
-                // Disjoint requests check
-                if (!disjointSorted(requestSets[i], requestSets[j])) {
-                    continue;
-                }
-
                 // Pre-filter: skip provably-droppable handoffs BEFORE routing them. Time-reach cut
                 // (euclidean > maxSpeed*gap => routed_tt > gap => arrivalTime > startTime[j]) and/or
                 // absolute distance cap (euclidean > rideDist_i*factor => routed > cap => post-route
                 // distance filter drops it). Both are lossless; this avoids the getSegment route +
                 // retain + window-record for the far pairs that dominate the window at 100% scale.
+                //
+                // Ordered BEFORE the disjointness test deliberately: this is a handful of
+                // multiplications and comparisons on primitives already in registers, whereas
+                // disjointSorted is a merge walk over two arrays that must be pulled from memory.
+                // Both are pure predicates, so the conjunction — and therefore the window-key set —
+                // is unchanged; only the order in which pairs are rejected differs. At the hundreds
+                // of billions of pairs the 100% pool reaches, cheapest-first is worth real time.
                 if (coordsNeeded && !preRouteKeep(spatialPrefilter, startTimes[j] - endTime, maxSpeed,
                         distancePrefilter, rideDistances[i], filterDistanceFactor,
                         originX[j] - destX[i], originY[j] - destY[i])) {
+                    continue;
+                }
+
+                // Disjoint requests check
+                if (!disjointSorted(requestSets[i], requestSets[j])) {
                     continue;
                 }
 
