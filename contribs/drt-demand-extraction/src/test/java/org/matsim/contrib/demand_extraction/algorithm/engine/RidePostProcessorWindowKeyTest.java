@@ -148,6 +148,50 @@ class RidePostProcessorWindowKeyTest {
 		assertEquals(-1.0, out.get(7).getReposTimeMeanOutgoing(), 1e-9, "ride 7 sentinel");
 	}
 
+	// ─── Fixture C: shared-passenger pairs ────────────────────────────────────
+
+	@Test
+	void aPairSharingAPassengerIsNotInTheWindowAtAll() {
+		// A vehicle cannot hand off to a ride that carries one of its own passengers, so the pair
+		// is dropped before the connection is ever resolved -- its key must therefore be ABSENT
+		// from the export domain. Pinned because the plan reorders this test against the geometric
+		// pre-filter: both are pure predicates, so the conjunction (and this key set) must not move.
+		//
+		//   ride 0: request 100, ends on S1 at t=100
+		//   ride 1: request 100 as well -> the pair (S1, T1) is never evaluated
+		//   ride 2: request 101         -> the pair (S1, T2) is evaluated normally
+		//
+		// Ride 2 starts at 800, not 600: ride 1 ends at 600 and every handoff here costs 50 s, so
+		// a 600 start would arrive late and drop the ride 1 -> ride 2 edge for a reason that has
+		// nothing to do with passenger sharing.
+		List<Ride> rides = List.of(
+				sharedRequestRide(0, 100, "SA", "S1",   0.0, 100.0),
+				sharedRequestRide(1, 100, "T1", "TB", 500.0, 100.0),
+				sharedRequestRide(2, 101, "T2", "TC", 800.0, 100.0));
+
+		RidePostProcessor pp = processor(maxSuccessors(50), sharedRequestLookup());
+		Map<Integer, Ride> out = byIndex(pp.process(new MaterializedRideStore(rides)));
+
+		LongOpenHashSet expected = new LongOpenHashSet();
+		addKey(expected, "S1", "T2");   // ride 0 -> ride 2, disjoint
+		addKey(expected, "TB", "T2");   // ride 1 -> ride 2, disjoint
+		assertEquals(expected, pp.getWindowKeys(),
+				"the shared-passenger pair (S1, T1) must never reach the connection lookup");
+
+		assertArrayEquals(new int[] {2}, out.get(0).getSuccessors(),
+				"ride 1 shares a passenger with ride 0 and cannot succeed it");
+		assertArrayEquals(new int[] {2}, out.get(1).getSuccessors(), "ride 1 -> ride 2");
+	}
+
+	/** Every relevant pair is reachable, so only the disjointness test can remove one. */
+	private static TravelSegmentLookup sharedRequestLookup() {
+		Map<String, Double> table = new HashMap<>();
+		table.put(pair("S1", "T1"), 50.0);
+		table.put(pair("S1", "T2"), 50.0);
+		table.put(pair("TB", "T2"), 50.0);
+		return tableLookup(table, 10.0);
+	}
+
 	// ─── Fixture B: top-K boundary ────────────────────────────────────────────
 
 	@Test
@@ -284,11 +328,23 @@ class RidePostProcessorWindowKeyTest {
 		return byIndex;
 	}
 
+	/** Like {@link #ride} but with the passenger index decoupled from the ride index, so two rides
+	 *  can be made to carry the SAME passenger and exercise the disjointness test. */
+	private static Ride sharedRequestRide(int rideIndex, int requestIndex, String originLink,
+			String destLink, double startTime, double rideTravelTime) {
+		return buildRide(rideIndex, requestIndex, originLink, destLink, startTime, rideTravelTime);
+	}
+
 	private static Ride ride(int rideIndex, String originLink, String destLink,
 			double startTime, double rideTravelTime) {
+		return buildRide(rideIndex, rideIndex, originLink, destLink, startTime, rideTravelTime);
+	}
+
+	private static Ride buildRide(int rideIndex, int requestIndex, String originLink, String destLink,
+			double startTime, double rideTravelTime) {
 		DrtRequest request = new DrtRequest.Builder()
-				.index(rideIndex)
-				.personId(Id.createPersonId("p" + rideIndex))
+				.index(requestIndex)
+				.personId(Id.createPersonId("p" + requestIndex))
 				.originLinkId(link(originLink))
 				.destinationLinkId(link(destLink))
 				.directTravelTime(0)
