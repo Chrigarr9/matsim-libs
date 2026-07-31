@@ -68,6 +68,21 @@ public final class RideFixtures {
                 .build();
     }
 
+    /**
+     * Like {@link #ride(int, int...)} but with a controllable ride distance.
+     *
+     * <p>{@code Ride.rideDistance} is derived as {@code round(sum(connectionDistances)*10)/10}, so the
+     * requested distance is placed in the first connection leg. Pass a value that survives that
+     * rounding (one decimal place) if the test asserts on it exactly.
+     */
+    public static Ride rideWithDistance(int rideIndex, double rideDistance, int... requestIndices) {
+        double[] connections = new double[requestIndices.length * 2 - 1];
+        connections[0] = rideDistance;
+        return ride(rideIndex, requestIndices).toBuilder()
+                .connectionDistances(connections)
+                .build();
+    }
+
     /** A degree-1 ride (index 0) + a degree-2 ride (index 1), already in index order. */
     public static List<Ride> singleAndPair() {
         return List.of(

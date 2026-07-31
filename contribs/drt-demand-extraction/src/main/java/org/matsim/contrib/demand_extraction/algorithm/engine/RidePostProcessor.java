@@ -2,14 +2,8 @@ package org.matsim.contrib.demand_extraction.algorithm.engine;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ForkJoinPool;
@@ -17,7 +11,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntConsumer;
 import java.util.function.UnaryOperator;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import org.apache.logging.log4j.LogManager;
@@ -33,7 +26,15 @@ import org.matsim.contrib.demand_extraction.algorithm.util.PackedKeyCodec;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
+import it.unimi.dsi.fastutil.ints.Int2DoubleMap;
+import it.unimi.dsi.fastutil.ints.Int2DoubleMaps;
+import it.unimi.dsi.fastutil.ints.Int2DoubleOpenHashMap;
+import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+import it.unimi.dsi.fastutil.ints.Int2ObjectMaps;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.ints.IntArrays;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.objects.Object2DoubleOpenCustomHashMap;
 
 /**
  * Post-process ExMAS rides to enrich them with:
@@ -125,20 +126,35 @@ public final class RidePostProcessor {
 		log.info("Post-processing {} rides...", rides.size());
 		long startTime = System.currentTimeMillis();
 
+        // Barrier eviction BEFORE any cross-ride pass. Enumeration leaves the speculative tier full
+        // (at 100% Lyon: 250M segments, retained 0), and none of the passes below re-read those
+        // within-ride segments — maxCost and Shapley do no routing at all, and the predecessor pass
+        // routes ride-to-ride handoffs, which are different OD pairs. Holding them here is what
+        // pushed the 100% degree-8 run into a full-GC death spiral inside computeShapleyValues.
+        // Output-invariant: an evicted speculative segment re-routes bit-identically, and the
+        // retained tier (the export domain) is untouched. computePredecessors repeats this drop at
+        // its own barrier; with nothing repopulating in between that call is simply a no-op.
+        if (networkCache instanceof MatsimNetworkCache cache) {
+            cache.dropSpeculativeTier();
+        }
+
 		log.info("  Computing max costs...");
 		long maxCostStart = System.currentTimeMillis();
-        Map<Integer, MaxCostResult> maxCostByRide = computeMaxCosts(rides);
+        // Position-indexed, NOT keyed by ride index: a HashMap<Integer,...> over 29.6M rides costs
+        // ~56 B/entry in nodes and boxed keys before the value. The parallel passes and the
+        // enrichment loop below both walk `rides` in order, so the list position IS the key.
+        MaxCostResult[] maxCostByPos = computeMaxCosts(rides);
 		log.info("  Max costs computed in {} ms", System.currentTimeMillis() - maxCostStart);
 
-		Map<Integer, double[]> shapleyByRide;
+		double[][] shapleyByPos;
 		if (config.isCalcShapleyValues()) {
 			log.info("  Computing Shapley values...");
 			long shapleyStart = System.currentTimeMillis();
-			shapleyByRide = computeShapleyValues(rides);
+			shapleyByPos = computeShapleyValues(rides);
 			log.info("  Shapley values computed in {} ms", System.currentTimeMillis() - shapleyStart);
 		} else {
 			log.info("  Shapley values disabled (skipped)");
-			shapleyByRide = Collections.emptyMap();
+			shapleyByPos = null;
 		}
 
 		PredSucc predsAndSuccs;
@@ -149,41 +165,53 @@ public final class RidePostProcessor {
 			log.info("  Predecessors/successors computed in {} ms", System.currentTimeMillis() - predStart);
 		} else {
 			log.info("  Predecessors/successors disabled (skipped)");
-			predsAndSuccs = new PredSucc(Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap());
+			predsAndSuccs = new PredSucc(Int2ObjectMaps.emptyMap(), Int2ObjectMaps.emptyMap(),
+					Int2DoubleMaps.EMPTY_MAP);
 		}
 
-        List<Ride> enriched = new ArrayList<>(rides.size());
-        for (Ride ride : rides) {
-            double[] shapley = shapleyByRide.get(ride.getIndex());
-            int[] preds = predsAndSuccs.predecessors().getOrDefault(ride.getIndex(), new int[0]);
-            int[] succs = predsAndSuccs.successors().getOrDefault(ride.getIndex(), new int[0]);
-            MaxCostResult maxCostResult = maxCostByRide.get(ride.getIndex());
-            double reposMean = predsAndSuccs.reposTimeMeans().getOrDefault(ride.getIndex(), -1.0);
+        // Enrich IN PLACE. The previous version accumulated a second `enriched` list while `rides`
+        // was still fully referenced, so both generations of 29.6M Ride objects were alive at the
+        // peak. Overwriting each slot lets the pre-enrichment ride become collectable immediately,
+        // and drops the per-ride result slots as they are consumed.
+        int rideCount = rides.size();
+        for (int pos = 0; pos < rideCount; pos++) {
+            Ride ride = rides.get(pos);
+            int rideId = ride.getIndex();
+            double[] shapley = shapleyByPos != null ? shapleyByPos[pos] : null;
+            int[] preds = predsAndSuccs.predecessors().getOrDefault(rideId, EMPTY_INTS);
+            int[] succs = predsAndSuccs.successors().getOrDefault(rideId, EMPTY_INTS);
+            MaxCostResult maxCostResult = maxCostByPos[pos];
+            double reposMean = predsAndSuccs.reposTimeMeans().getOrDefault(rideId, -1.0);
 
-            Ride rebuilt = ride.toBuilder()
+            rides.set(pos, ride.toBuilder()
                     .maxCosts(maxCostResult.maxCosts())
                     .maxCostsPerKm(maxCostResult.maxCostsPerKm())
                     .shapleyValues(shapley)
                     .predecessors(preds)
                     .successors(succs)
                     .reposTimeMeanOutgoing(reposMean)
-                    .build();
-            enriched.add(rebuilt);
+                    .build());
+            maxCostByPos[pos] = null;
+            if (shapleyByPos != null) shapleyByPos[pos] = null;
         }
 
 		long totalTime = System.currentTimeMillis() - startTime;
 		log.info("Post-processing complete in {} ms", totalTime);
-        return enriched;
+        return rides;
     }
+
+    /** Shared empty successor/predecessor array — the old code allocated one per ride lookup. */
+    private static final int[] EMPTY_INTS = new int[0];
 
     private record MaxCostResult(double[] maxCosts, double[] maxCostsPerKm) {}
 
-    private Map<Integer, MaxCostResult> computeMaxCosts(List<Ride> rides) {
-        Map<Integer, MaxCostResult> maxCostByRide = new HashMap<>(rides.size());
-        for (Ride ride : rides) {
-            maxCostByRide.put(ride.getIndex(), computeMaxCostsForRide(ride));
+    /** Results in list-position order (see the note in {@link #process}). */
+    private MaxCostResult[] computeMaxCosts(List<Ride> rides) {
+        MaxCostResult[] byPos = new MaxCostResult[rides.size()];
+        for (int pos = 0; pos < byPos.length; pos++) {
+            byPos[pos] = computeMaxCostsForRide(rides.get(pos));
         }
-        return maxCostByRide;
+        return byPos;
     }
 
     /**
@@ -252,64 +280,143 @@ public final class RidePostProcessor {
         };
     }
 
-    private Map<Integer, double[]> computeShapleyValues(List<Ride> rides) {
-        Map<Set<Integer>, Double> subsetDistance = new HashMap<>();
-        for (Ride ride : rides) {
-            Set<Integer> subset = Arrays.stream(ride.getRequestIndices())
-                    .boxed()
-                    .collect(Collectors.toCollection(HashSet::new));
-            double rideDistance = ride.getRideDistance();
-            subsetDistance.merge(subset, rideDistance, Math::min);
-        }
-        subsetDistance.put(Collections.emptySet(), 0.0);
+    /**
+     * Largest ride degree this pass will attempt. The Shapley value is a sum over all {@code 2^n}
+     * sub-coalitions, so the work and the scratch buffer both double with every extra passenger.
+     * The previous implementation was equally exponential (it allocated {@code 2^(n-1)} HashSets per
+     * player), so this bound rejects nothing that used to succeed — it just fails loudly instead of
+     * exhausting the heap.
+     */
+    static final int MAX_SHAPLEY_DEGREE = 20;
 
-        Map<Integer, double[]> shapleyByRide = new ConcurrentHashMap<>();
+    /**
+     * Per-worker scratch for {@link #computeShapleyValues}: the sub-coalition value table and one
+     * exact-length key buffer per subset size. Reused across every ride a worker touches, so the
+     * subset enumeration allocates nothing at all.
+     */
+    private static final class ShapleyScratch {
+        private double[] values = new double[0];
+        private int[][] keyByLength = new int[0][];
+
+        void ensureCapacity(int degree) {
+            int subsetCount = 1 << degree;
+            if (values.length < subsetCount) {
+                values = new double[subsetCount];
+            }
+            if (keyByLength.length <= degree) {
+                int[][] grown = new int[degree + 1][];
+                System.arraycopy(keyByLength, 0, grown, 0, keyByLength.length);
+                for (int len = keyByLength.length; len <= degree; len++) {
+                    grown[len] = new int[len];
+                }
+                keyByLength = grown;
+            }
+        }
+    }
+
+    /**
+     * Shapley distance shares per ride, in list-position order.
+     *
+     * <p>The characteristic function is {@code v(S) = } the shortest ride distance that serves
+     * exactly the request set {@code S}, or 0 when no such ride exists. Keys are SORTED request-index
+     * arrays under fastutil's array hash strategy rather than {@code HashSet<Integer>}: a HashSet of
+     * 8 numbers costs ~590 B (set + inner map + table + a node and a boxed Integer per element) to
+     * carry 32 B of data, and the map holds one per ride. At 29.6M rides that packaging alone was
+     * ~12 GB. A sorted {@code int[]} key is ~56 B.
+     *
+     * <p>Request indices within a ride are distinct by construction, so the sorted array is exactly
+     * the set the old code built.
+     */
+    private double[][] computeShapleyValues(List<Ride> rides) {
+        Object2DoubleOpenCustomHashMap<int[]> subsetDistance =
+                new Object2DoubleOpenCustomHashMap<>(IntArrays.HASH_STRATEGY);
+        // Absent sub-coalition => value 0, matching the old getOrDefault(subset, 0.0). The empty set
+        // is covered by the same default, so it needs no explicit entry.
+        subsetDistance.defaultReturnValue(0.0);
+        for (Ride ride : rides) {
+            // getRequestIndices() returns a fresh array per call, so sorting and retaining it as a
+            // map key cannot alias the ride's own state.
+            int[] key = ride.getRequestIndices();
+            Arrays.sort(key);
+            double rideDistance = ride.getRideDistance();
+            if (rideDistance < subsetDistance.getOrDefault(key, Double.POSITIVE_INFINITY)) {
+                subsetDistance.put(key, rideDistance);
+            }
+        }
+
+        double[][] shapleyByPos = new double[rides.size()][];
+        ThreadLocal<ShapleyScratch> scratch = ThreadLocal.withInitial(ShapleyScratch::new);
         int availableParallelism = resolveParallelism();
-        runIndexedParallel(rides.size(), availableParallelism, idx -> {
-            Ride ride = rides.get(idx);
+        runIndexedParallel(rides.size(), availableParallelism, pos -> {
+            Ride ride = rides.get(pos);
             int[] requests = ride.getRequestIndices();
             int n = requests.length;
-            Set<Integer> rideSet = Arrays.stream(requests).boxed().collect(Collectors.toCollection(HashSet::new));
+
+            ShapleyScratch buf = scratch.get();
+            buf.ensureCapacity(Math.min(n, MAX_SHAPLEY_DEGREE));
 
             if (n == 1) {
-                Set<Integer> singleton = new HashSet<>(rideSet);
-                shapleyByRide.put(ride.getIndex(), new double[] { subsetDistance.getOrDefault(singleton, ride.getRideDistance()) });
+                int[] singleton = buf.keyByLength[1];
+                singleton[0] = requests[0];
+                // Preserves the old fallback: a degree-1 ride whose singleton is somehow absent
+                // scores its own distance, NOT 0.
+                shapleyByPos[pos] = new double[] {
+                        subsetDistance.containsKey(singleton)
+                                ? subsetDistance.getDouble(singleton)
+                                : ride.getRideDistance()
+                };
                 return;
+            }
+            if (n > MAX_SHAPLEY_DEGREE) {
+                throw new IllegalStateException("Shapley value needs 2^degree sub-coalitions; ride "
+                        + ride.getIndex() + " has degree " + n + ", above the supported maximum of "
+                        + MAX_SHAPLEY_DEGREE + ". Disable calcShapleyValues or cap maxDegree.");
+            }
+
+            // Enumerate sub-coalitions over the SORTED request order so each key comes out ascending
+            // with no per-subset sort, while `rank` maps every original position back to its bit.
+            int[] sorted = requests.clone();
+            Arrays.sort(sorted);
+            int[] rank = new int[n];
+            for (int i = 0; i < n; i++) {
+                rank[i] = Arrays.binarySearch(sorted, requests[i]);
+            }
+
+            int subsetCount = 1 << n;
+            double[] values = buf.values;
+            // One lookup per sub-coalition, cached. The old loop re-looked-up v(S) and v(S+i) inside
+            // the per-player loop, doing n*2^n map probes per ride instead of 2^n.
+            values[0] = 0.0;
+            for (int mask = 1; mask < subsetCount; mask++) {
+                int len = Integer.bitCount(mask);
+                int[] key = buf.keyByLength[len];
+                int p = 0;
+                for (int bit = 0; bit < n; bit++) {
+                    if ((mask & (1 << bit)) != 0) {
+                        key[p++] = sorted[bit];
+                    }
+                }
+                values[mask] = subsetDistance.getDouble(key);
             }
 
             double nFactorial = factorial(n);
             double[] shapley = new double[n];
-            List<Integer> restList;
-
             for (int i = 0; i < n; i++) {
-                int player = requests[i];
-                Set<Integer> rest = new HashSet<>(rideSet);
-                rest.remove(player);
-                restList = new ArrayList<>(rest);
-                int restSize = restList.size();
-                int subsetCount = 1 << restSize;
-
+                int bit = 1 << rank[i];
+                double acc = 0.0;
                 for (int mask = 0; mask < subsetCount; mask++) {
-                    Set<Integer> subset = new HashSet<>();
-                    for (int bit = 0; bit < restSize; bit++) {
-                        if ((mask & (1 << bit)) != 0) {
-                            subset.add(restList.get(bit));
-                        }
-                    }
-                    double vS = subsetDistance.getOrDefault(subset, 0.0);
-                    Set<Integer> withPlayer = new HashSet<>(subset);
-                    withPlayer.add(player);
-                    double vSi = subsetDistance.getOrDefault(withPlayer, 0.0);
-                    int sSize = subset.size();
+                    if ((mask & bit) != 0) continue;
+                    int sSize = Integer.bitCount(mask);
                     double weight = (factorial(sSize) * factorial(n - sSize - 1)) / nFactorial;
-                    shapley[i] += weight * (vSi - vS);
+                    acc += weight * (values[mask | bit] - values[mask]);
                 }
+                shapley[i] = acc;
             }
 
-            shapleyByRide.put(ride.getIndex(), shapley);
+            shapleyByPos[pos] = shapley;
         });
 
-        return shapleyByRide;
+        return shapleyByPos;
     }
 
     private PredSucc computePredecessors(List<Ride> rides) {
@@ -325,7 +432,10 @@ public final class RidePostProcessor {
         Id<Link>[] firstOrigins = (Id<Link>[]) new Id[total];
         @SuppressWarnings("unchecked")
         Id<Link>[] lastDests = (Id<Link>[]) new Id[total];
-        List<Set<Integer>> requestSets = new ArrayList<>(total);
+        // Sorted request indices per ride, used only for the pairwise overlap test below. Same
+        // reasoning as the Shapley keys: a HashSet<Integer> per ride cost ~590 B to hold ~32 B of
+        // data, ~12 GB across the 100% pool. Sorted int[] plus a merge walk is ~56 B and faster.
+        int[][] requestSets = new int[total][];
 
         for (int idx = 0; idx < total; idx++) {
             Ride ride = sortedByStart.get(idx);
@@ -336,7 +446,9 @@ public final class RidePostProcessor {
             Id<Link>[] destinations = ride.getDestinationsOrdered();
             firstOrigins[idx] = origins.length > 0 ? origins[0] : null;
             lastDests[idx] = destinations.length > 0 ? destinations[destinations.length - 1] : null;
-            requestSets.add(Arrays.stream(ride.getRequestIndices()).boxed().collect(Collectors.toSet()));
+            int[] reqs = ride.getRequestIndices();
+            Arrays.sort(reqs);
+            requestSets[idx] = reqs;
         }
 
         // -1 or null => unbounded (no filter)
@@ -419,9 +531,15 @@ public final class RidePostProcessor {
             }
         }
 
-        Map<Integer, List<Integer>> predecessors = new ConcurrentHashMap<>();
-        Map<Integer, List<Integer>> successors = new ConcurrentHashMap<>();
-        Map<Integer, Double> reposTimeMeans = new ConcurrentHashMap<>();
+        // Position-indexed, primitive, no concurrent map. Each parallel task owns exactly one slot i,
+        // so plain array writes are safe and need no synchronization. The previous version kept
+        // ConcurrentHashMap<Integer, List<Integer>> for BOTH directions: an ArrayList of boxed
+        // Integers per ride is ~820 B at 32 successors, so the two maps together held ~48 GB at the
+        // 100% pool, and the int[] conversion at the end doubled the successor side again. Successor
+        // POSITIONS are stored here and mapped to ride ids once, at the end.
+        int[][] successorsByPos = new int[total][];
+        double[] reposTimeByPos = new double[total];
+        Arrays.fill(reposTimeByPos, -1.0);
 
         int parallelism = resolveParallelism();
 		log.info("    Computing predecessor/successor connections (parallelism: {})...", parallelism);
@@ -538,7 +656,7 @@ public final class RidePostProcessor {
                 if (from == null || to == null) continue;
 
                 // Disjoint requests check
-                if (!Collections.disjoint(requestSets.get(i), requestSets.get(j))) {
+                if (!disjointSorted(requestSets[i], requestSets[j])) {
                     continue;
                 }
 
@@ -596,7 +714,7 @@ public final class RidePostProcessor {
                 }
 
                 double idlingTime = startTimes[j] - arrivalTime;
-                candidates.add(new ConnectionCandidate(sortedByStart.get(j).getIndex(), to, connection.getDistance(), idlingTime, connection.getTravelTime()));
+                candidates.add(new ConnectionCandidate(j, to, connection.getDistance(), idlingTime, connection.getTravelTime()));
             }
 
             // Prune to Top-K closest successors
@@ -617,10 +735,13 @@ public final class RidePostProcessor {
                 }
                 meanReposTime = sum / candidates.size();
             }
-            reposTimeMeans.put(sortedByStart.get(i).getIndex(), meanReposTime);
+            reposTimeByPos[i] = meanReposTime;
 
-            List<Integer> succIds = candidates.stream().map(c -> c.rideId).collect(Collectors.toList());
-            successors.put(sortedByStart.get(i).getIndex(), succIds);
+            int[] succPositions = new int[candidates.size()];
+            for (int c = 0; c < succPositions.length; c++) {
+                succPositions[c] = candidates.get(c).position();
+            }
+            successorsByPos[i] = succPositions;
 
             // Per-ride barrier: sample heap and rotate the older speculative generation under
             // pressure, so a large scenario evicts this ride's (and earlier rides') dead batch fills
@@ -670,32 +791,77 @@ public final class RidePostProcessor {
 		log.info("    Network routing completed in {} ms", routingTime);
 
 		log.info("    Deriving predecessor relationships...");
-        // Derive predecessors from successors
-        for (Map.Entry<Integer, List<Integer>> entry : successors.entrySet()) {
-            int predId = entry.getKey();
-            for (int succId : entry.getValue()) {
-                predecessors.computeIfAbsent(succId, k -> new ArrayList<>()).add(predId);
+        // Counting pass then exact-size fill: builds the reverse map without ever holding a
+        // growable list per ride (the old ArrayList<Integer> reverse map was the second ~24 GB).
+        int[] predCounts = new int[total];
+        for (int i = 0; i < total; i++) {
+            int[] succ = successorsByPos[i];
+            if (succ == null) continue;
+            for (int succPos : succ) {
+                predCounts[succPos]++;
+            }
+        }
+        int[][] predecessorsByPos = new int[total][];
+        for (int p = 0; p < total; p++) {
+            if (predCounts[p] > 0) {
+                predecessorsByPos[p] = new int[predCounts[p]];
+            }
+        }
+        int[] fillCursor = new int[total];
+        for (int i = 0; i < total; i++) {
+            int[] succ = successorsByPos[i];
+            if (succ == null) continue;
+            for (int succPos : succ) {
+                predecessorsByPos[succPos][fillCursor[succPos]++] = i;
             }
         }
 
 		log.info("    Converting to arrays...");
-        Map<Integer, int[]> predArrays = new HashMap<>();
-        Map<Integer, int[]> succArrays = new HashMap<>();
-        predecessors.forEach((rideId, list) -> {
-            Collections.sort(list);
-            predArrays.put(rideId, list.stream().mapToInt(Integer::intValue).toArray());
-        });
-        successors.forEach((rideId, list) -> {
-            // Already sorted by distance if pruned, but let's sort by ID for consistency or keep distance order?
-            // The original code sorted by ID. Let's stick to ID sort for deterministic output.
-            Collections.sort(list);
-            succArrays.put(rideId, list.stream().mapToInt(Integer::intValue).toArray());
-        });
+        // Positions -> ride ids, then sort by ride id, exactly as before (the pruned successor list
+        // arrives in score order; the export has always been id-sorted for determinism). Rides with
+        // no connections are left out: the read site substitutes an empty array for a missing key,
+        // so this is the same output with fewer entries held.
+        int[] rideIdByPos = new int[total];
+        for (int p = 0; p < total; p++) {
+            rideIdByPos[p] = sortedByStart.get(p).getIndex();
+        }
+        Int2ObjectOpenHashMap<int[]> predArrays = new Int2ObjectOpenHashMap<>();
+        Int2ObjectOpenHashMap<int[]> succArrays = new Int2ObjectOpenHashMap<>();
+        long totalPreds = 0;
+        for (int p = 0; p < total; p++) {
+            int[] succ = successorsByPos[p];
+            if (succ != null && succ.length > 0) {
+                succArrays.put(rideIdByPos[p], toSortedRideIds(succ, rideIdByPos));
+            }
+            successorsByPos[p] = null;
+            int[] pred = predecessorsByPos[p];
+            if (pred != null && pred.length > 0) {
+                predArrays.put(rideIdByPos[p], toSortedRideIds(pred, rideIdByPos));
+                totalPreds += pred.length;
+            }
+            predecessorsByPos[p] = null;
+        }
 
-		int totalPreds = predArrays.values().stream().mapToInt(arr -> arr.length).sum();
+        Int2DoubleOpenHashMap reposTimeMeans = new Int2DoubleOpenHashMap(total);
+        for (int p = 0; p < total; p++) {
+            if (reposTimeByPos[p] != -1.0) {
+                reposTimeMeans.put(rideIdByPos[p], reposTimeByPos[p]);
+            }
+        }
+
 		log.info("    Found {} predecessor connections", totalPreds);
 
         return new PredSucc(predArrays, succArrays, reposTimeMeans);
+    }
+
+    /** Map sorted-by-start positions to ride ids and sort ascending (the export order). */
+    private static int[] toSortedRideIds(int[] positions, int[] rideIdByPos) {
+        int[] ids = new int[positions.length];
+        for (int k = 0; k < positions.length; k++) {
+            ids[k] = rideIdByPos[positions[k]];
+        }
+        Arrays.sort(ids);
+        return ids;
     }
 
     /**
@@ -709,10 +875,27 @@ public final class RidePostProcessor {
         return windowKeys;
     }
 
-    private record ConnectionCandidate(int rideId, Id<Link> toLink, double distance, double idlingTime, double travelTime) {
+    private record ConnectionCandidate(int position, Id<Link> toLink, double distance, double idlingTime, double travelTime) {
         double getScore() {
             return distance * Math.max(1.0, idlingTime);
         }
+    }
+
+    /**
+     * Do two ASCENDING-sorted index arrays share no element? Replaces
+     * {@code Collections.disjoint(Set<Integer>, Set<Integer>)} in the predecessor pass. A single
+     * merge walk is O(a+b) with no hashing and no boxing, and it lets the caller hold the request
+     * indices as {@code int[]} instead of one HashSet per ride.
+     */
+    static boolean disjointSorted(int[] a, int[] b) {
+        int i = 0;
+        int j = 0;
+        while (i < a.length && j < b.length) {
+            if (a[i] == b[j]) return false;
+            if (a[i] < b[j]) i++;
+            else j++;
+        }
+        return true;
     }
 
     /**
@@ -826,8 +1009,8 @@ public final class RidePostProcessor {
     }
 
     private record PredSucc(
-        Map<Integer, int[]> predecessors,
-        Map<Integer, int[]> successors,
-        Map<Integer, Double> reposTimeMeans
+        Int2ObjectMap<int[]> predecessors,
+        Int2ObjectMap<int[]> successors,
+        Int2DoubleMap reposTimeMeans
     ) {}
 }
