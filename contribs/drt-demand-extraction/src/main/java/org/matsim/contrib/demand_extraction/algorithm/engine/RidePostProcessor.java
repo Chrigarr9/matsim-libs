@@ -642,6 +642,10 @@ public final class RidePostProcessor {
             DoubleArrayList memoDistance = new DoubleArrayList();
             BooleanArrayList memoReachable = new BooleanArrayList();
 
+            // Top-K selector, allocated once per group and reset per ride: the candidate loop below
+            // used to allocate one record per feasible candidate and then full-sort them.
+            TopKScratch topK = new TopKScratch();
+
             for (int i : groupRides) {
 			int done = processed.incrementAndGet();
 			if (done == total || (int)(100.0 * done / total) > (int)(100.0 * (done - 1) / total)) {
@@ -712,7 +716,7 @@ public final class RidePostProcessor {
                 }
             }
 
-            List<ConnectionCandidate> candidates = new ArrayList<>();
+            topK.reset(maxSuccessors);
 
             for (int j = sliceStart; j < sliceEnd; j++) {
                 if (i == j) continue;
@@ -802,35 +806,17 @@ public final class RidePostProcessor {
                     continue;
                 }
 
+                // Selection score: keep the smallest distance * idling. "Short distance doesn't help
+                // us if we have a low idling time" -> minimize the product; max(1.0, idling) keeps
+                // distance the primary factor when idling is near zero. The heap applies the cap as
+                // candidates arrive, so nothing beyond K is ever retained or sorted.
                 double idlingTime = startTimes[j] - arrivalTime;
-                candidates.add(new ConnectionCandidate(j, to, connectionDistance, idlingTime, connectionTravelTime));
+                topK.offer(connectionDistance * Math.max(1.0, idlingTime), j, connectionTravelTime);
             }
 
-            // Prune to Top-K closest successors
-            if (maxSuccessors > 0 && candidates.size() > maxSuccessors) {
-                // Keep smallest score (distance * idling)
-                // "Short distance doesn't help us if we have a low idling time" -> interpreted as minimizing the product
-                // We use Math.max(1.0, idling) to ensure distance is still the primary factor when idling is near zero
-                candidates.sort(Comparator.comparingDouble(ConnectionCandidate::getScore));
-                candidates = candidates.subList(0, maxSuccessors);
-            }
-
-            // Compute mean outgoing repositioning travel time over the (post-pruning) candidate set
-            double meanReposTime = -1.0;
-            if (!candidates.isEmpty()) {
-                double sum = 0.0;
-                for (ConnectionCandidate c : candidates) {
-                    sum += c.travelTime();
-                }
-                meanReposTime = sum / candidates.size();
-            }
-            reposTimeByPos[i] = meanReposTime;
-
-            int[] succPositions = new int[candidates.size()];
-            for (int c = 0; c < succPositions.length; c++) {
-                succPositions[c] = candidates.get(c).position();
-            }
-            successorsByPos[i] = succPositions;
+            // Mean outgoing repositioning travel time over the KEPT (post-pruning) successors.
+            reposTimeByPos[i] = topK.isEmpty() ? -1.0 : topK.meanTravelTime();
+            successorsByPos[i] = topK.positions();
             }
 
             // Per-group barrier: sample heap and rotate the older speculative generation under
@@ -968,11 +954,138 @@ public final class RidePostProcessor {
         return windowKeys;
     }
 
-    private record ConnectionCandidate(int position, Id<Link> toLink, double distance, double idlingTime, double travelTime) {
-        double getScore() {
-            return distance * Math.max(1.0, idlingTime);
+    /**
+     * Bounded top-K successor selector, reused across every ride in a group.
+     *
+     * <p>Replaces "allocate a record per feasible candidate, collect them in a growable list,
+     * full-sort by score, take the first K". At the Lyon 25% pool that allocated billions of
+     * short-lived objects and sorted thousands of them per ride; here three primitive arrays are
+     * allocated once per group and reset per ride, and nothing is sorted.
+     *
+     * <p><b>The selection is identical to the sort it replaces.</b> The previous code appended
+     * candidates in ascending ride position and sorted with a STABLE comparator on score alone, so
+     * equal scores retained ascending position, and {@code subList(0, K)} therefore took the K
+     * smallest by the pair {@code (score, position)}. This is a max-heap keyed on exactly that
+     * pair: the root is the worst element currently kept, and an incoming candidate displaces it
+     * only when strictly smaller. The surviving K are the same K.
+     *
+     * <p>{@code capacity <= 0} means "keep every feasible successor" (an unlimited
+     * {@code maxSuccessors}). No selection happens then, so no ordering is imposed and the arrays
+     * simply grow.
+     */
+    static final class TopKScratch {   // package-private: RidePostProcessorTopKParityTest
+        private double[] score = new double[0];
+        private int[] position = new int[0];
+        private double[] travelTime = new double[0];
+        private int size;
+        private int capacity;
+
+        /** Start a new ride. {@code k <= 0} selects unbounded mode. */
+        void reset(int k) {
+            capacity = k;
+            size = 0;
+            int need = k > 0 ? k : 16;
+            if (score.length < need) {
+                growTo(need);
+            }
+        }
+
+        void offer(double candidateScore, int candidatePosition, double candidateTravelTime) {
+            if (capacity <= 0) {
+                if (size == score.length) {
+                    growTo(size + 1);
+                }
+                store(size++, candidateScore, candidatePosition, candidateTravelTime);
+                return;
+            }
+            if (size < capacity) {
+                store(size, candidateScore, candidatePosition, candidateTravelTime);
+                siftUp(size++);
+                return;
+            }
+            // Heap is full: the root is the worst kept pair. Positions are unique and scanned in
+            // ascending order, so this comparison is never an exact tie against the root.
+            if (candidateScore < score[0]
+                    || (candidateScore == score[0] && candidatePosition < position[0])) {
+                store(0, candidateScore, candidatePosition, candidateTravelTime);
+                siftDown();
+            }
+        }
+
+        boolean isEmpty() {
+            return size == 0;
+        }
+
+        /** Mean over the KEPT set — the post-pruning semantics the repos-time resolver expects. */
+        double meanTravelTime() {
+            double sum = 0.0;
+            for (int i = 0; i < size; i++) {
+                sum += travelTime[i];
+            }
+            return sum / size;
+        }
+
+        /** Successor POSITIONS, in heap order; the caller maps them to ride ids and sorts. */
+        int[] positions() {
+            return Arrays.copyOf(position, size);
+        }
+
+        private void store(int i, double s, int p, double tt) {
+            score[i] = s;
+            position[i] = p;
+            travelTime[i] = tt;
+        }
+
+        private void growTo(int need) {
+            int n = Math.max(need, Math.max(16, score.length * 2));
+            score = Arrays.copyOf(score, n);
+            position = Arrays.copyOf(position, n);
+            travelTime = Arrays.copyOf(travelTime, n);
+        }
+
+        /** True when slot {@code a} sorts AFTER slot {@code b} under (score, position). */
+        private boolean worse(int a, int b) {
+            return score[a] > score[b] || (score[a] == score[b] && position[a] > position[b]);
+        }
+
+        private void siftUp(int i) {
+            while (i > 0) {
+                int parent = (i - 1) >>> 1;
+                if (!worse(i, parent)) {
+                    break;
+                }
+                swap(i, parent);
+                i = parent;
+            }
+        }
+
+        private void siftDown() {
+            int i = 0;
+            while (true) {
+                int left = 2 * i + 1;
+                if (left >= size) {
+                    break;
+                }
+                int worst = left;
+                int right = left + 1;
+                if (right < size && worse(right, left)) {
+                    worst = right;
+                }
+                if (!worse(worst, i)) {
+                    break;
+                }
+                swap(i, worst);
+                i = worst;
+            }
+        }
+
+        private void swap(int a, int b) {
+            double s = score[a]; score[a] = score[b]; score[b] = s;
+            int p = position[a]; position[a] = position[b]; position[b] = p;
+            double t = travelTime[a]; travelTime[a] = travelTime[b]; travelTime[b] = t;
         }
     }
+
 
     /**
      * Do two ASCENDING-sorted index arrays share no element? Replaces
