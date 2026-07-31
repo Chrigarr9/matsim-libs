@@ -26,13 +26,18 @@ import org.matsim.contrib.demand_extraction.algorithm.util.PackedKeyCodec;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
+import it.unimi.dsi.fastutil.booleans.BooleanArrayList;
+import it.unimi.dsi.fastutil.doubles.DoubleArrayList;
 import it.unimi.dsi.fastutil.ints.Int2DoubleMap;
 import it.unimi.dsi.fastutil.ints.Int2DoubleMaps;
 import it.unimi.dsi.fastutil.ints.Int2DoubleOpenHashMap;
+import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMaps;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrays;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.Object2DoubleOpenCustomHashMap;
 
@@ -541,7 +546,45 @@ public final class RidePostProcessor {
         double[] reposTimeByPos = new double[total];
         Arrays.fill(reposTimeByPos, -1.0);
 
+        // ── Group rides by (last-destination link, end-time bin) ─────────────────
+        // Every ride in a group resolves exactly the SAME connection keys: getSegment keys on
+        // (origin, dest, timeBin) and routes at the bin's canonical MIDPOINT
+        // (MatsimNetworkCache.getSegment), so a segment value is a pure function of that triple —
+        // independent of which ride asks and of the order they ask in. A group therefore needs one
+        // cache read, one retain and one window-key append per distinct destination link, not one
+        // per ride PAIR.
+        //
+        // This is the pass's dominant cost. Measured on the Lyon 25% pool (2,134,934 rides):
+        // 7,824,389,388 cache lookups at a 100.0% hit rate, producing 3,228,231 distinct exported
+        // keys — 2,423 redundant lookups per distinct route, and 47.5 min of wall clock in which
+        // only 0.03% of lookups needed routing at all. The window-key buffer is the same story in
+        // memory: it appended one long per evaluated pair, tens of GB to carry 3.2M distinct keys.
+        //
+        // The dedup is MEMOISATION, NOT FILTERING: the per-pair prefilter and disjointness tests
+        // stay exactly where they were, so a key is recorded precisely when some pair passes the
+        // same tests it passes today. RidePostProcessorWindowKeyTest pins that set.
+        final int binSize = config.getNetworkTimeBinSize();
+        Long2ObjectOpenHashMap<IntArrayList> groupIndex = new Long2ObjectOpenHashMap<>();
+        for (int pos = 0; pos < total; pos++) {
+            Id<Link> from = lastDests[pos];
+            // A ride with no destination link gets its own group (index -1): the inner loop drops
+            // every candidate for it, so it still yields an empty successor list, as before.
+            long gk = ((long) (from != null ? from.index() : -1) << 32)
+                    | ((int) (endTimes[pos] / binSize) & 0xFFFFFFFFL);
+            groupIndex.computeIfAbsent(gk, k -> new IntArrayList()).add(pos);
+        }
+        int[][] groupMembers = new int[groupIndex.size()][];
+        int groupFill = 0;
+        for (IntArrayList members : groupIndex.values()) {
+            groupMembers[groupFill++] = members.toIntArray();
+        }
+        groupIndex = null;   // release the index before the parallel pass allocates
+        final int groupCount = groupMembers.length;
+
         int parallelism = resolveParallelism();
+        log.info("    Grouped {} rides into {} (dest-link, bin) groups ({} rides per group)",
+                total, groupCount,
+                String.format("%.1f", (double) total / Math.max(1, groupCount)));
 		log.info("    Computing predecessor/successor connections (parallelism: {})...", parallelism);
 		log.info("    Filter: time={}, distanceFactor={}, maxSuccessors={}",
 				Double.isInfinite(filterTime) ? "unbounded" : String.format("%.0fs", filterTime),
@@ -584,8 +627,22 @@ public final class RidePostProcessor {
         // extension): snapshot before the loop, snapshot after the join, report the delta.
         long[] routingBefore = networkCache.routingCountersSnapshot();
 
-        // Forward search: For each ride i, find successors j
-        runIndexedParallel(total, parallelism, i -> {
+        // Forward search: for each GROUP, then each ride i within it, find successors j.
+        runIndexedParallel(groupCount, parallelism, g -> {
+            int[] groupRides = groupMembers[g];
+
+            // Group-local memo: destination link index -> slot in the three value lists below.
+            // The group fixes (from, bin), so the destination link alone identifies the connection
+            // key. First sight of a link pays the global-cache read, the retain (a map WRITE) and
+            // the window-key append; every later pair in the group reads an array slot instead.
+            // Lifetime is one group on one thread, so no synchronisation is needed.
+            Int2IntOpenHashMap toSlot = new Int2IntOpenHashMap();
+            toSlot.defaultReturnValue(-1);
+            DoubleArrayList memoTravelTime = new DoubleArrayList();
+            DoubleArrayList memoDistance = new DoubleArrayList();
+            BooleanArrayList memoReachable = new BooleanArrayList();
+
+            for (int i : groupRides) {
 			int done = processed.incrementAndGet();
 			if (done == total || (int)(100.0 * done / total) > (int)(100.0 * (done - 1) / total)) {
 				double elapsedSeconds = (System.nanoTime() - routingStartNanos) / 1e9;
@@ -595,6 +652,8 @@ public final class RidePostProcessor {
 						done, total, String.format("%.1f", percent), formatDuration(remainingSeconds));
 			}
             double endTime = endTimes[i];
+            // Constant across the group by construction — the group key IS (lastDest, bin).
+            int bin = (int) (endTime / binSize);
             double minStartTime = endTime; // Successor must start after predecessor ends
             double maxStartTime = endTime + filterTime;
 
@@ -634,6 +693,14 @@ public final class RidePostProcessor {
                     if (coordsNeeded && !preRouteKeep(spatialPrefilter, startTimes[j] - endTime, maxSpeed,
                             distancePrefilter, rideDistances[i], filterDistanceFactor,
                             originX[j] - destX[i], originY[j] - destY[i])) {
+                        continue;
+                    }
+                    // Already resolved for this group: no getSegment will ask about it, so seeding
+                    // the tree with it is wasted work. Dropping a target can only turn a later
+                    // cache hit into a point-to-point route, which is bit-identical (both settle
+                    // the same optimum at the bin midpoint) — the same invariance watermark
+                    // eviction already relies on.
+                    if (toSlot.get(to.index()) >= 0) {
                         continue;
                     }
                     candidateLinksList.add(to);
@@ -681,23 +748,38 @@ public final class RidePostProcessor {
                 // Skipping such a miss silently drops feasible successors (confirmed at Kelheim scale:
                 // a single ride losing 41 of 50 successors). getSegment routes the true optimal on
                 // demand — correct, eviction-invariant, and only ~1% of lookups.
-                TravelSegment connection = networkCache.getSegment(from, to, endTime);
-                // Cache-memory tiers: pin this evaluated handoff into the never-evicted retained tier.
-                // This window domain — the lookup set of Python's compute_dynamic_successors — must
-                // survive watermark eviction so the connection_cache export is stable. We retain BY
-                // VALUE (the cached segment), NOT promoteSegment (a spec→retained move): this pass
-                // evicts the speculative tier *during* the parallel routing (checkWatermark at the end
-                // of each ride), so a move-based promote could find the entry already evicted and
-                // silently drop the handoff from the export, whereas a by-value retain always lands it.
-                networkCache.retainSegment(from, to, endTime,
-                        connection.getTravelTime(), connection.getDistance(), connection.getNetworkUtility());
-                // Record this evaluated handoff in the "window" export domain. Pack with the same
-                // time-bin convention getSegment uses, so the export's cache.get(key) resolves it.
-                windowKeyBuffer.get().add(PackedKeyCodec.segmentKey(
-                        from.index(), to.index(), (int) (endTime / config.getNetworkTimeBinSize())));
-                if (!connection.isReachable()) continue;
+                // Group memo. The group fixes (from, bin) and getSegment routes at the bin's
+                // canonical midpoint, so the segment is a pure function of the destination link:
+                // resolving it once per group is exactly equivalent to resolving it per pair.
+                int toIdx = to.index();
+                int slot = toSlot.get(toIdx);
+                if (slot < 0) {
+                    TravelSegment connection = networkCache.getSegment(from, to, endTime);
+                    // Cache-memory tiers: pin this evaluated handoff into the never-evicted retained tier.
+                    // This window domain — the lookup set of Python's compute_dynamic_successors — must
+                    // survive watermark eviction so the connection_cache export is stable. We retain BY
+                    // VALUE (the cached segment), NOT promoteSegment (a spec→retained move): this pass
+                    // evicts the speculative tier *during* the parallel routing (checkWatermark at the end
+                    // of each group), so a move-based promote could find the entry already evicted and
+                    // silently drop the handoff from the export, whereas a by-value retain always lands it.
+                    networkCache.retainSegment(from, to, endTime,
+                            connection.getTravelTime(), connection.getDistance(), connection.getNetworkUtility());
+                    // Record this evaluated handoff in the "window" export domain. Pack with the same
+                    // time-bin convention getSegment uses, so the export's cache.get(key) resolves it.
+                    // Once per DISTINCT key rather than once per pair: the buffer previously grew by
+                    // one long per evaluated pair, which is the pass's second scaling wall.
+                    windowKeyBuffer.get().add(PackedKeyCodec.segmentKey(from.index(), toIdx, bin));
+                    slot = memoTravelTime.size();
+                    toSlot.put(toIdx, slot);
+                    memoTravelTime.add(connection.getTravelTime());
+                    memoDistance.add(connection.getDistance());
+                    memoReachable.add(connection.isReachable());
+                }
+                if (!memoReachable.getBoolean(slot)) continue;
+                double connectionTravelTime = memoTravelTime.getDouble(slot);
+                double connectionDistance = memoDistance.getDouble(slot);
 
-                double arrivalTime = endTime + connection.getTravelTime();
+                double arrivalTime = endTime + connectionTravelTime;
                 // Arrival at successor start must be feasible? 
                 // Actually, successor starts at startTimes[j].
                 // We arrive at 'arrivalTime'.
@@ -709,12 +791,12 @@ public final class RidePostProcessor {
                 // So the gap is bounded.
 
                 if (Double.isFinite(filterDistanceFactor)
-                        && connection.getDistance() > rideDistances[i] * filterDistanceFactor) {
+                        && connectionDistance > rideDistances[i] * filterDistanceFactor) {
                     continue;
                 }
 
                 double idlingTime = startTimes[j] - arrivalTime;
-                candidates.add(new ConnectionCandidate(j, to, connection.getDistance(), idlingTime, connection.getTravelTime()));
+                candidates.add(new ConnectionCandidate(j, to, connectionDistance, idlingTime, connectionTravelTime));
             }
 
             // Prune to Top-K closest successors
@@ -742,15 +824,19 @@ public final class RidePostProcessor {
                 succPositions[c] = candidates.get(c).position();
             }
             successorsByPos[i] = succPositions;
+            }
 
-            // Per-ride barrier: sample heap and rotate the older speculative generation under
-            // pressure, so a large scenario evicts this ride's (and earlier rides') dead batch fills
-            // instead of letting the speculative tier grow until OOM. Output-invariant: an evicted
-            // segment re-routes bit-identically (a feasible handoff is within filterTime, so the
-            // bounded batch tree settled it optimally = the unbounded point-to-point value), and the
-            // evaluated handoffs are already retained by value, so eviction never drops an export key.
-            // HeapWatermark is synchronized (safe under the parallel pass) and a no-op below the
-            // watermark; at watermark 1.0 (tests) it never fires, keeping them bit-reproducible.
+            // Per-group barrier: sample heap and rotate the older speculative generation under
+            // pressure, so a large scenario evicts this group's (and earlier groups') dead batch
+            // fills instead of letting the speculative tier grow until OOM. Output-invariant: an
+            // evicted segment re-routes bit-identically (a feasible handoff is within filterTime, so
+            // the bounded batch tree settled it optimally = the unbounded point-to-point value), and
+            // the evaluated handoffs are already retained by value, so eviction never drops an
+            // export key. HeapWatermark is synchronized (safe under the parallel pass) and a no-op
+            // below the watermark; at watermark 1.0 (tests) it never fires, keeping them
+            // bit-reproducible. Per group rather than per ride: groups average ~10 rides at the 25%
+            // pool, so the eviction cadence is materially unchanged while the synchronized call
+            // count drops with it.
             networkCache.checkWatermark();
         });
 
