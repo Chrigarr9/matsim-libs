@@ -57,8 +57,6 @@ public final class Ride {
 
     // Optional advanced metrics (can be null)
     private final double[] shapleyValues;
-    private final int[] predecessors;
-    private final int[] successors;
     private final double reposTimeMeanOutgoing;
 
     // Stop-based pooling support (HyperPool integration)
@@ -99,8 +97,6 @@ public final class Ride {
 
         // Optional fields
         this.shapleyValues = builder.shapleyValues != null ? builder.shapleyValues.clone() : null;
-        this.predecessors = builder.predecessors != null ? builder.predecessors.clone() : null;
-        this.successors = builder.successors != null ? builder.successors.clone() : null;
         this.reposTimeMeanOutgoing = builder.reposTimeMeanOutgoing;
 
         // Stop-based pooling fields
@@ -219,8 +215,13 @@ public final class Ride {
     public double getEndTime() { return endTime; }
 
     public double[] getShapleyValues() { return shapleyValues != null ? shapleyValues.clone() : null; }
-    public int[] getPredecessors() { return predecessors != null ? predecessors.clone() : null; }
-    public int[] getSuccessors() { return successors != null ? successors.clone() : null; }
+    /**
+     * Mean travel time of the outgoing handoff repositionings kept by the top-K selection in
+     * {@code RidePostProcessor.computePredecessors}, or {@code -1.0} when the ride has no feasible
+     * successor or the pass was disabled. The successor and predecessor LISTS the pass used to
+     * carry were dropped: Python recomputes successors over the MIP-selected ride set, so the
+     * static edges were never read.
+     */
     public double getReposTimeMeanOutgoing() { return reposTimeMeanOutgoing; }
 
     // Stop-based pooling getters
@@ -296,8 +297,6 @@ public final class Ride {
             .connectionNetworkUtilities(this.connectionNetworkUtilities)
             .startTime(this.startTime)
             .shapleyValues(this.shapleyValues)
-            .predecessors(this.predecessors)
-            .successors(this.successors)
             .reposTimeMeanOutgoing(this.reposTimeMeanOutgoing)
             .variant(this.variant)
             .pickupStop(this.pickupStop)
@@ -326,8 +325,6 @@ public final class Ride {
         private double[] connectionNetworkUtilities;
         private double startTime;
         private double[] shapleyValues;
-        private int[] predecessors;
-        private int[] successors;
         private double reposTimeMeanOutgoing = -1.0;  // sentinel: no successors / not computed
 
         // Stop-based pooling fields
@@ -431,16 +428,6 @@ public final class Ride {
 
         public Builder maxCostsPerKm(double[] maxCostsPerKm) {
             this.maxCostsPerKm = maxCostsPerKm;
-            return this;
-        }
-
-        public Builder predecessors(int[] predecessors) {
-            this.predecessors = predecessors;
-            return this;
-        }
-
-        public Builder successors(int[] successors) {
-            this.successors = successors;
             return this;
         }
 

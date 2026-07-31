@@ -1,6 +1,5 @@
 package org.matsim.contrib.demand_extraction.algorithm.engine;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -43,6 +42,16 @@ import org.matsim.core.network.NetworkUtils;
  *   <li>rideC: firstOrigin (5000,0), start 250 — dist 5000, tt 500, arrive 600 &gt; 250 ✗ (also far)</li>
  *   <li>rideD: firstOrigin (300,0), start 1000 — dist 300, tt 30, arrive 130 &le; 1000 ✓ (time-feasible)</li>
  * </ul>
+ *
+ * <h3>Why the observable is a mean</h3>
+ *
+ * <p>These tests used to compare the successor LISTS the pass attached to each ride. That column is
+ * gone — the pass now emits only {@code reposTimeMeanOutgoing}, the mean handoff travel time over
+ * the kept successors ({@code maxSuccessors = 0} here, so over ALL feasible ones). The mean is a
+ * faithful witness for THIS fixture because rideA's three candidate handoffs have pairwise distinct
+ * travel times (B 10 s / C 500 s / D 30 s), so no two successor sets share a mean:
+ * A -&gt; {B,D} = 20 s, A -&gt; {B} = 10 s, A -&gt; {D} = 30 s, and a spurious A -&gt; {B,C,D} would
+ * read 180 s. Any successor a pre-filter wrongly dropped, or wrongly admitted, moves the number.
  */
 class RidePostProcessorSpatialPrefilterTest {
 
@@ -73,17 +82,22 @@ class RidePostProcessorSpatialPrefilterTest {
 		List<Ride> rides = fixtureRides();
 		TravelSegmentLookup lookup = coordConsistentLookup(net, 10.0);
 
-		Map<Integer, int[]> succOff = runAndCollectSuccessors(rides, net, lookup, false);
-		Map<Integer, int[]> succOn  = runAndCollectSuccessors(rides, net, lookup, true);
+		Map<Integer, Double> succOff = runAndCollectReposMeans(rides, net, lookup, false);
+		Map<Integer, Double> succOn  = runAndCollectReposMeans(rides, net, lookup, true);
 
-		assertArrayEquals(new int[] {1, 3}, succOff.get(0), "OFF: rideA -> {B,D}");
-		assertFalse(containsRide(succOff, 2), "OFF: rideC is never a successor");
+		// 20 s == mean(B 10, D 30): rideA reaches both, and rideC (500 s) is excluded — admitting it
+		// would read 180 s.
+		assertEquals(20.0, succOff.get(0), 1e-9, "OFF: rideA -> {B,D}");
+		// rideB ends at 300, so rideD (start 1000) is its only candidate: DB(100,0) -> OD(300,0)
+		// is 200 m = 20 s.
+		assertEquals(20.0, succOff.get(1), 1e-9, "OFF: rideB -> {D}");
+		// rideC likewise reaches only rideD, but from 5000 m out: 4700 m = 470 s.
+		assertEquals(470.0, succOff.get(2), 1e-9, "OFF: rideC -> {D}");
+		// rideD starts last, so nothing can follow it.
+		assertEquals(-1.0, succOff.get(3), 1e-9, "OFF: rideD has no successor");
 
-		assertEquals(succOff.keySet(), succOn.keySet(), "same rides have successor entries");
-		for (Integer rideId : succOff.keySet()) {
-			assertArrayEquals(succOff.get(rideId), succOn.get(rideId),
-					"successors of ride " + rideId + " must be identical with pre-filter ON vs OFF");
-		}
+		assertEquals(succOff, succOn,
+				"the time-reach pre-filter must not change any ride's kept successor set");
 	}
 
 	// ─── Parity: distance-cap pre-route vs post-route (+ it drops a far handoff) ──
@@ -96,31 +110,28 @@ class RidePostProcessorSpatialPrefilterTest {
 
 		// factor 0.2 => cap = rideDist_A(1000) * 0.2 = 200 m. rideA->D (300 m) is time-feasible but
 		// exceeds the cap; rideA->B (100 m) is kept.
-		Map<Integer, int[]> withNet = runWithDistanceFactor(rides, net, lookup, 0.2);   // pre-route + post-route
-		Map<Integer, int[]> noNet   = runWithDistanceFactor(rides, null, lookup, 0.2);  // post-route only
-		Map<Integer, int[]> unbounded = runAndCollectSuccessors(rides, net, lookup, true); // no distance cap
+		Map<Integer, Double> withNet = runWithDistanceFactor(rides, net, lookup, 0.2);   // pre-route + post-route
+		Map<Integer, Double> noNet   = runWithDistanceFactor(rides, null, lookup, 0.2);  // post-route only
+		Map<Integer, Double> unbounded = runAndCollectReposMeans(rides, net, lookup, true); // no distance cap
 
 		// Lossless: pre-route (network) == post-route-only (no network).
-		assertEquals(noNet.keySet(), withNet.keySet(), "same successor-entry keys");
-		for (Integer rideId : noNet.keySet()) {
-			assertArrayEquals(noNet.get(rideId), withNet.get(rideId),
-					"ride " + rideId + " successors: distance pre-route must equal post-route");
-		}
+		assertEquals(noNet, withNet,
+				"applying the distance cap before routing must select exactly what the post-route cap did");
 		// Cap is active and meaningful: D dropped by distance (was a successor unbounded).
-		assertArrayEquals(new int[] {1, 3}, unbounded.get(0), "unbounded: rideA -> {B,D}");
-		assertArrayEquals(new int[] {1}, withNet.get(0), "factor 0.2: rideA -> {B} (D dropped by distance cap)");
+		assertEquals(20.0, unbounded.get(0), 1e-9, "unbounded: rideA -> {B,D}");
+		assertEquals(10.0, withNet.get(0), 1e-9, "factor 0.2: rideA -> {B} (D dropped by distance cap)");
 	}
 
 	// ─── Helpers ──────────────────────────────────────────────────────────────
 
-	private static Map<Integer, int[]> runAndCollectSuccessors(
+	private static Map<Integer, Double> runAndCollectReposMeans(
 			List<Ride> rides, Network net, TravelSegmentLookup lookup, boolean prefilter) {
 		ExMasConfigGroup cfg = baseConfig();
 		cfg.setPredecessorsSpatialPrefilter(prefilter);
 		return run(rides, net, lookup, cfg);
 	}
 
-	private static Map<Integer, int[]> runWithDistanceFactor(
+	private static Map<Integer, Double> runWithDistanceFactor(
 			List<Ride> rides, Network net, TravelSegmentLookup lookup, double factor) {
 		ExMasConfigGroup cfg = baseConfig();
 		cfg.setPredecessorsSpatialPrefilter(false); // isolate the distance cap
@@ -138,21 +149,14 @@ class RidePostProcessorSpatialPrefilterTest {
 		return cfg;
 	}
 
-	private static Map<Integer, int[]> run(List<Ride> rides, Network net,
+	private static Map<Integer, Double> run(List<Ride> rides, Network net,
 			TravelSegmentLookup lookup, ExMasConfigGroup cfg) {
 		RidePostProcessor processor = new RidePostProcessor(
 				cfg, lookup, (budget, request, tt, dist) -> 0.0, net);
 		List<Ride> enriched = processor.process(new MaterializedRideStore(new ArrayList<>(rides)));
-		Map<Integer, int[]> byIndex = new HashMap<>();
-		for (Ride r : enriched) byIndex.put(r.getIndex(), r.getSuccessors());
+		Map<Integer, Double> byIndex = new HashMap<>();
+		for (Ride r : enriched) byIndex.put(r.getIndex(), r.getReposTimeMeanOutgoing());
 		return byIndex;
-	}
-
-	private static boolean containsRide(Map<Integer, int[]> succ, int rideId) {
-		for (int[] arr : succ.values()) {
-			for (int v : arr) if (v == rideId) return true;
-		}
-		return false;
 	}
 
 	private static TravelSegmentLookup coordConsistentLookup(Network net, double speed) {

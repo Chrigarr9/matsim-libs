@@ -1,6 +1,5 @@
 package org.matsim.contrib.demand_extraction.algorithm.engine;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.util.HashMap;
@@ -116,35 +115,29 @@ class RidePostProcessorWindowKeyTest {
 	}
 
 	@Test
-	void successorsArePinned() {
+	void keptSuccessorSetsArePinnedIncludingTheEmptySentinel() {
 		Map<Integer, Ride> out = runCollidingFixture(50);
 
-		// Rides 0-2 all end on D1 and all reach O1 (rides 3,4,5) and O2 (ride 6).
-		// OC is absent from the routing table and O3 is unreachable, so neither is a successor.
-		assertArrayEquals(new int[] {3, 4, 5, 6}, out.get(0).getSuccessors(), "ride 0");
-		assertArrayEquals(new int[] {3, 4, 5, 6}, out.get(1).getSuccessors(), "ride 1");
-		assertArrayEquals(new int[] {3, 4, 5, 6}, out.get(2).getSuccessors(), "ride 2");
-		// Ride 3 ends at 600; ride 4 starts at 600 and needs 50 s, so it arrives late (650 > 600).
-		assertArrayEquals(new int[] {5, 6}, out.get(3).getSuccessors(), "ride 3");
-		// Rides 4-7 have no routing entries out of their destinations.
-		assertArrayEquals(new int[] {}, out.get(4).getSuccessors(), "ride 4");
-		assertArrayEquals(new int[] {}, out.get(5).getSuccessors(), "ride 5");
-		assertArrayEquals(new int[] {}, out.get(6).getSuccessors(), "ride 6");
-		assertArrayEquals(new int[] {}, out.get(7).getSuccessors(), "ride 7");
-	}
+		// The successor LISTS are no longer emitted (Python recomputes them over the MIP-selected
+		// ride set), so the kept set is observed through its mean handoff travel time. Each value
+		// below is unique to one set, which is what makes it a pin and not just a number.
 
-	@Test
-	void reposTimeMeansArePinnedIncludingTheEmptySentinel() {
-		Map<Integer, Ride> out = runCollidingFixture(50);
-
-		// Rides 0-2: three O1 handoffs at 200 s and one O2 handoff at 300 s.
-		assertEquals(225.0, out.get(0).getReposTimeMeanOutgoing(), 1e-9, "ride 0");
-		assertEquals(225.0, out.get(1).getReposTimeMeanOutgoing(), 1e-9, "ride 1");
-		assertEquals(225.0, out.get(2).getReposTimeMeanOutgoing(), 1e-9, "ride 2");
-		// Ride 3: one O1 handoff at 50 s and one O2 handoff at 60 s.
-		assertEquals(55.0, out.get(3).getReposTimeMeanOutgoing(), 1e-9, "ride 3");
-		// No successors -> the sentinel repos_time.py:68 keys on.
+		// Rides 0-2 all end on D1 and all reach O1 (rides 3,4,5 -- 200 s) and O2 (ride 6 -- 300 s).
+		// OC is absent from the routing table and O3 is unreachable, so neither is a successor:
+		// mean = (200 + 200 + 200 + 300) / 4. Admitting O3 would move it, dropping any O1 handoff
+		// would raise it to 233.33, and losing O2 would collapse it to 200.
+		assertEquals(225.0, out.get(0).getReposTimeMeanOutgoing(), 1e-9, "ride 0 -> {3,4,5,6}");
+		assertEquals(225.0, out.get(1).getReposTimeMeanOutgoing(), 1e-9, "ride 1 -> {3,4,5,6}");
+		assertEquals(225.0, out.get(2).getReposTimeMeanOutgoing(), 1e-9, "ride 2 -> {3,4,5,6}");
+		// Ride 3 -> {5,6}: one O1 handoff at 50 s and one O2 handoff at 60 s. Ride 4 is excluded
+		// because ride 3 ends at 600 and ride 4 starts at 600, so the 50 s handoff arrives late
+		// (650 > 600) -- admitting it would read 53.33, not 55.
+		assertEquals(55.0, out.get(3).getReposTimeMeanOutgoing(), 1e-9, "ride 3 -> {5,6}");
+		// Rides 4-7 have no routing entries out of their destinations -> the sentinel that
+		// repos_time.py:68 keys on.
 		assertEquals(-1.0, out.get(4).getReposTimeMeanOutgoing(), 1e-9, "ride 4 sentinel");
+		assertEquals(-1.0, out.get(5).getReposTimeMeanOutgoing(), 1e-9, "ride 5 sentinel");
+		assertEquals(-1.0, out.get(6).getReposTimeMeanOutgoing(), 1e-9, "ride 6 sentinel");
 		assertEquals(-1.0, out.get(7).getReposTimeMeanOutgoing(), 1e-9, "ride 7 sentinel");
 	}
 
@@ -178,9 +171,12 @@ class RidePostProcessorWindowKeyTest {
 		assertEquals(expected, pp.getWindowKeys(),
 				"the shared-passenger pair (S1, T1) must never reach the connection lookup");
 
-		assertArrayEquals(new int[] {2}, out.get(0).getSuccessors(),
-				"ride 1 shares a passenger with ride 0 and cannot succeed it");
-		assertArrayEquals(new int[] {2}, out.get(1).getSuccessors(), "ride 1 -> ride 2");
+		// Ride 0 -> {2} only. Every handoff here costs 50 s, so a mean of 50 is consistent with
+		// {2} and with the forbidden {1,2} alike -- the window assertion above is what separates
+		// them, and it is the load-bearing one for passenger sharing.
+		assertEquals(50.0, out.get(0).getReposTimeMeanOutgoing(), 1e-9,
+				"ride 0 reaches ride 2; ride 1 shares a passenger and cannot succeed it");
+		assertEquals(50.0, out.get(1).getReposTimeMeanOutgoing(), 1e-9, "ride 1 -> ride 2");
 	}
 
 	/** Every relevant pair is reachable, so only the disjointness test can remove one. */
@@ -202,10 +198,9 @@ class RidePostProcessorWindowKeyTest {
 		RidePostProcessor pp = processor(maxSuccessors(50), tiedScoreLookup());
 		Map<Integer, Ride> out = byIndex(pp.process(new MaterializedRideStore(tiedScoreFixture())));
 
-		assertArrayEquals(new int[] {1, 2, 3, 4}, out.get(0).getSuccessors(),
-				"uncapped: every candidate including the tied ride 4 is feasible");
 		assertEquals(232.5, out.get(0).getReposTimeMeanOutgoing(), 1e-9,
-				"uncapped mean spans all four: (10 + 20 + 30 + 870) / 4");
+				"uncapped: every candidate including the tied ride 4 is feasible, "
+				+ "so the mean spans all four: (10 + 20 + 30 + 870) / 4");
 	}
 
 	@Test
@@ -215,13 +210,12 @@ class RidePostProcessorWindowKeyTest {
 
 		// Scores: E1 89,000 | E2 176,000 | E3 261,000 | E4 261,000.
 		// K = 3, so exactly one of the tied pair survives, and a stable sort over an
-		// ascending-index scan keeps ride 3 over ride 4.
-		assertArrayEquals(new int[] {1, 2, 3}, out.get(0).getSuccessors(),
-				"tie at the K boundary must resolve to the lower ride index");
-		// The mean is taken over the POST-pruning set: (10 + 20 + 30) / 3. The contrast with
-		// the uncapped 232.5 above is what makes this assertion load-bearing.
+		// ascending-index scan keeps ride 3 over ride 4. The mean over the POST-pruning set is
+		// (10 + 20 + 30) / 3 = 20; had the tie gone to ride 4 it would read (10 + 20 + 870) / 3 =
+		// 300, so this single number pins BOTH the cap and its tie-break. The contrast with the
+		// uncapped 232.5 above is what makes it load-bearing.
 		assertEquals(20.0, out.get(0).getReposTimeMeanOutgoing(), 1e-9,
-				"repos mean covers the kept top-K only");
+				"tie at the K boundary must resolve to the lower ride index");
 	}
 
 	// ─── Fixtures ─────────────────────────────────────────────────────────────

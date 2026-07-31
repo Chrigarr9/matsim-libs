@@ -170,8 +170,8 @@ public final class ExtractionDataManager {
 		}
 		Path out = path("connection_cache.csv");
 		try {
-			ConnectionCacheWriter.writeConnectionCache(out.toString(), rides, networkCache,
-					config.getNetworkTimeBinSize(), config.getConnectionCacheExportMode(), windowKeys);
+			ConnectionCacheWriter.writeConnectionCache(out.toString(), networkCache,
+					config.getConnectionCacheExportMode(), windowKeys);
 		} catch (IOException e) {
 			log.error("Failed to write connection cache", e);
 			return null;

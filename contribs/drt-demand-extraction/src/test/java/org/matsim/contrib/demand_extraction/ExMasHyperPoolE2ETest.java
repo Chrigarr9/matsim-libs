@@ -253,6 +253,24 @@ public class ExMasHyperPoolE2ETest {
 			Assertions.assertTrue(header.contains("pickupStopX"), "Header should contain pickupStopX");
 			Assertions.assertTrue(header.contains("accessWalkDistances"), "Header should contain accessWalkDistances");
 
+			// Resolve every column BY NAME. This used to hard-code positions, which silently read
+			// the neighbouring column each time a column was added or removed in the middle of the
+			// schema -- and an assertion like "budget >= 0" passes just as happily against the
+			// detour column next door, so the drift stayed invisible until a numeric parse hit a
+			// string field.
+			Map<String, Integer> col = new HashMap<>();
+			String[] headerNames = header.split(",");
+			for (int i = 0; i < headerNames.length; i++) {
+				col.put(headerNames[i].trim(), i);
+			}
+			for (String required : new String[] {
+					"degree", "variant", "requestIndices", "remainingBudgets", "rideTravelTime",
+					"rideDistance", "pickupStopLinkId", "pickupStopX", "pickupStopY",
+					"dropoffStopLinkId", "accessWalkDistances", "egressWalkDistances" }) {
+				Assertions.assertTrue(col.containsKey(required),
+						"exmas_rides.csv header is missing the '" + required + "' column");
+			}
+
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
@@ -261,19 +279,17 @@ public class ExMasHyperPoolE2ETest {
 				// of exmas_rides.csv: peak_pax (Task 7.2) + reposTimeMeanOutgoing (Task 4).
 				Assertions.assertEquals(40, parts.length, "Each ride should have 40 fields (with HyperPool)");
 
-				int degree = Integer.parseInt(parts[1]);
-				String variant = parts[3]; // DOOR_TO_DOOR, STOP_TO_STOP, or HYPER_POOLED
-				String requestIndices = parts[4];
-				String remainingBudgets = parts[17];
+				int degree = Integer.parseInt(parts[col.get("degree")]);
+				String variant = parts[col.get("variant")]; // DOOR_TO_DOOR, STOP_TO_STOP, or HYPER_POOLED
+				String requestIndices = parts[col.get("requestIndices")];
+				String remainingBudgets = parts[col.get("remainingBudgets")];
 
-				// Stop-related fields (current schema: pickupStop* 26-29,
-				// dropoffStop* 30-33, access/egressWalkDistances 34-35).
-				String pickupStopLinkId = parts[26];
-				String pickupStopX = parts[27];
-				String pickupStopY = parts[28];
-				String dropoffStopLinkId = parts[30];
-				String accessWalkDistances = parts[34];
-				String egressWalkDistances = parts[35];
+				String pickupStopLinkId = parts[col.get("pickupStopLinkId")];
+				String pickupStopX = parts[col.get("pickupStopX")];
+				String pickupStopY = parts[col.get("pickupStopY")];
+				String dropoffStopLinkId = parts[col.get("dropoffStopLinkId")];
+				String accessWalkDistances = parts[col.get("accessWalkDistances")];
+				String egressWalkDistances = parts[col.get("egressWalkDistances")];
 
 				// Track by degree and variant
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
@@ -324,7 +340,8 @@ public class ExMasHyperPoolE2ETest {
 
 				// Store ride for comparison
 				RideRecord record = new RideRecord(variant, degree, budgets,
-					Double.parseDouble(parts[24]), Double.parseDouble(parts[25])); // rideTravelTime, rideDistance
+					Double.parseDouble(parts[col.get("rideTravelTime")]),
+					Double.parseDouble(parts[col.get("rideDistance")]));
 				ridesByRequestSet.computeIfAbsent(requestIndices, k -> new ArrayList<>()).add(record);
 
 				rideCount++;

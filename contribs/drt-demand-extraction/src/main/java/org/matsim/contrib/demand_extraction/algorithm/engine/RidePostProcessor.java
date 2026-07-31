@@ -9,6 +9,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.IntConsumer;
 import java.util.function.UnaryOperator;
 import java.util.stream.IntStream;
@@ -32,9 +33,6 @@ import it.unimi.dsi.fastutil.ints.Int2DoubleMap;
 import it.unimi.dsi.fastutil.ints.Int2DoubleMaps;
 import it.unimi.dsi.fastutil.ints.Int2DoubleOpenHashMap;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
-import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
-import it.unimi.dsi.fastutil.ints.Int2ObjectMaps;
-import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrays;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -164,14 +162,13 @@ public final class RidePostProcessor {
 
 		PredSucc predsAndSuccs;
 		if (config.isCalcPredecessors()) {
-			log.info("  Computing predecessors/successors...");
+			log.info("  Computing handoff repositioning times...");
 			long predStart = System.currentTimeMillis();
 			predsAndSuccs = computePredecessors(rides);
-			log.info("  Predecessors/successors computed in {} ms", System.currentTimeMillis() - predStart);
+			log.info("  Handoff repositioning times computed in {} ms", System.currentTimeMillis() - predStart);
 		} else {
-			log.info("  Predecessors/successors disabled (skipped)");
-			predsAndSuccs = new PredSucc(Int2ObjectMaps.emptyMap(), Int2ObjectMaps.emptyMap(),
-					Int2DoubleMaps.EMPTY_MAP);
+			log.info("  Handoff repositioning pass disabled (skipped)");
+			predsAndSuccs = new PredSucc(Int2DoubleMaps.EMPTY_MAP);
 		}
 
         // Enrich IN PLACE. The previous version accumulated a second `enriched` list while `rides`
@@ -183,8 +180,6 @@ public final class RidePostProcessor {
             Ride ride = rides.get(pos);
             int rideId = ride.getIndex();
             double[] shapley = shapleyByPos != null ? shapleyByPos[pos] : null;
-            int[] preds = predsAndSuccs.predecessors().getOrDefault(rideId, EMPTY_INTS);
-            int[] succs = predsAndSuccs.successors().getOrDefault(rideId, EMPTY_INTS);
             MaxCostResult maxCostResult = maxCostByPos[pos];
             double reposMean = predsAndSuccs.reposTimeMeans().getOrDefault(rideId, -1.0);
 
@@ -192,8 +187,6 @@ public final class RidePostProcessor {
                     .maxCosts(maxCostResult.maxCosts())
                     .maxCostsPerKm(maxCostResult.maxCostsPerKm())
                     .shapleyValues(shapley)
-                    .predecessors(preds)
-                    .successors(succs)
                     .reposTimeMeanOutgoing(reposMean)
                     .build());
             maxCostByPos[pos] = null;
@@ -204,9 +197,6 @@ public final class RidePostProcessor {
 		log.info("Post-processing complete in {} ms", totalTime);
         return rides;
     }
-
-    /** Shared empty successor/predecessor array — the old code allocated one per ride lookup. */
-    private static final int[] EMPTY_INTS = new int[0];
 
     private record MaxCostResult(double[] maxCosts, double[] maxCostsPerKm) {}
 
@@ -261,7 +251,7 @@ public final class RidePostProcessor {
 
     /**
      * A per-ride enrichment equivalent to {@link #process} when {@link #isStreamingPostProcessSupported()}:
-     * computes this ride's maxCosts/maxCostsPerKm and leaves Shapley/predecessors/successors empty.
+     * computes this ride's maxCosts/maxCostsPerKm and leaves Shapley and the repositioning mean unset.
      * Stateless over the shared resolver; intended for {@code ExMasCsvWriter.writeRidesStreaming}.
      *
      * @throws IllegalStateException if a cross-ride pass is enabled (then the full {@link #process} is required)
@@ -278,8 +268,6 @@ public final class RidePostProcessor {
                     .maxCosts(mc.maxCosts())
                     .maxCostsPerKm(mc.maxCostsPerKm())
                     .shapleyValues(null)
-                    .predecessors(new int[0])
-                    .successors(new int[0])
                     .reposTimeMeanOutgoing(-1.0)
                     .build();
         };
@@ -537,14 +525,19 @@ public final class RidePostProcessor {
         }
 
         // Position-indexed, primitive, no concurrent map. Each parallel task owns exactly one slot i,
-        // so plain array writes are safe and need no synchronization. The previous version kept
-        // ConcurrentHashMap<Integer, List<Integer>> for BOTH directions: an ArrayList of boxed
-        // Integers per ride is ~820 B at 32 successors, so the two maps together held ~48 GB at the
-        // 100% pool, and the int[] conversion at the end doubled the successor side again. Successor
-        // POSITIONS are stored here and mapped to ride ids once, at the end.
-        int[][] successorsByPos = new int[total][];
+        // so plain array writes are safe and need no synchronization.
+        //
+        // The pass no longer materialises the successor LISTS at all. It used to keep the kept
+        // positions per ride, derive the reverse (predecessor) map from them, translate both to ride
+        // ids and hand them to Ride — ~48 GB of boxed collections at the 100% pool before the int[]
+        // conversion doubled the successor side again. Nothing consumed either column: Python's
+        // solver_input_builder overwrites `successors` with the dynamically recomputed edges over the
+        // MIP-selected ride set, and `predecessors` was already dropped from the emit as a redundant
+        // reverse map. Only the aggregate below survives the pass.
         double[] reposTimeByPos = new double[total];
         Arrays.fill(reposTimeByPos, -1.0);
+        // Diagnostic only: how many handoff edges survived the top-K cap, summed over all rides.
+        final LongAdder keptHandoffs = new LongAdder();
 
         // ── Group rides by (last-destination link, end-time bin) ─────────────────
         // Every ride in a group resolves exactly the SAME connection keys: getSegment keys on
@@ -816,7 +809,7 @@ public final class RidePostProcessor {
 
             // Mean outgoing repositioning travel time over the KEPT (post-pruning) successors.
             reposTimeByPos[i] = topK.isEmpty() ? -1.0 : topK.meanTravelTime();
-            successorsByPos[i] = topK.positions();
+            keptHandoffs.add(topK.size());
             }
 
             // Per-group barrier: sample heap and rotate the older speculative generation under
@@ -869,78 +862,19 @@ public final class RidePostProcessor {
 		long routingTime = System.currentTimeMillis() - routingStartTime;
 		log.info("    Network routing completed in {} ms", routingTime);
 
-		log.info("    Deriving predecessor relationships...");
-        // Counting pass then exact-size fill: builds the reverse map without ever holding a
-        // growable list per ride (the old ArrayList<Integer> reverse map was the second ~24 GB).
-        int[] predCounts = new int[total];
-        for (int i = 0; i < total; i++) {
-            int[] succ = successorsByPos[i];
-            if (succ == null) continue;
-            for (int succPos : succ) {
-                predCounts[succPos]++;
-            }
-        }
-        int[][] predecessorsByPos = new int[total][];
-        for (int p = 0; p < total; p++) {
-            if (predCounts[p] > 0) {
-                predecessorsByPos[p] = new int[predCounts[p]];
-            }
-        }
-        int[] fillCursor = new int[total];
-        for (int i = 0; i < total; i++) {
-            int[] succ = successorsByPos[i];
-            if (succ == null) continue;
-            for (int succPos : succ) {
-                predecessorsByPos[succPos][fillCursor[succPos]++] = i;
-            }
-        }
-
-		log.info("    Converting to arrays...");
-        // Positions -> ride ids, then sort by ride id, exactly as before (the pruned successor list
-        // arrives in score order; the export has always been id-sorted for determinism). Rides with
-        // no connections are left out: the read site substitutes an empty array for a missing key,
-        // so this is the same output with fewer entries held.
-        int[] rideIdByPos = new int[total];
-        for (int p = 0; p < total; p++) {
-            rideIdByPos[p] = sortedByStart.get(p).getIndex();
-        }
-        Int2ObjectOpenHashMap<int[]> predArrays = new Int2ObjectOpenHashMap<>();
-        Int2ObjectOpenHashMap<int[]> succArrays = new Int2ObjectOpenHashMap<>();
-        long totalPreds = 0;
-        for (int p = 0; p < total; p++) {
-            int[] succ = successorsByPos[p];
-            if (succ != null && succ.length > 0) {
-                succArrays.put(rideIdByPos[p], toSortedRideIds(succ, rideIdByPos));
-            }
-            successorsByPos[p] = null;
-            int[] pred = predecessorsByPos[p];
-            if (pred != null && pred.length > 0) {
-                predArrays.put(rideIdByPos[p], toSortedRideIds(pred, rideIdByPos));
-                totalPreds += pred.length;
-            }
-            predecessorsByPos[p] = null;
-        }
-
+        // Positions -> ride ids. Rides with no feasible handoff are left out: the read site
+        // substitutes -1 for a missing key, so this is the same result with fewer entries held.
         Int2DoubleOpenHashMap reposTimeMeans = new Int2DoubleOpenHashMap(total);
         for (int p = 0; p < total; p++) {
             if (reposTimeByPos[p] != -1.0) {
-                reposTimeMeans.put(rideIdByPos[p], reposTimeByPos[p]);
+                reposTimeMeans.put(sortedByStart.get(p).getIndex(), reposTimeByPos[p]);
             }
         }
 
-		log.info("    Found {} predecessor connections", totalPreds);
+		log.info("    Found {} handoff connections over {} rides with a feasible successor",
+				String.format("%,d", keptHandoffs.sum()), String.format("%,d", reposTimeMeans.size()));
 
-        return new PredSucc(predArrays, succArrays, reposTimeMeans);
-    }
-
-    /** Map sorted-by-start positions to ride ids and sort ascending (the export order). */
-    private static int[] toSortedRideIds(int[] positions, int[] rideIdByPos) {
-        int[] ids = new int[positions.length];
-        for (int k = 0; k < positions.length; k++) {
-            ids[k] = rideIdByPos[positions[k]];
-        }
-        Arrays.sort(ids);
-        return ids;
+        return new PredSucc(reposTimeMeans);
     }
 
     /**
@@ -1016,6 +950,11 @@ public final class RidePostProcessor {
             return size == 0;
         }
 
+        /** Number of candidates currently kept. */
+        int size() {
+            return size;
+        }
+
         /** Mean over the KEPT set — the post-pruning semantics the repos-time resolver expects. */
         double meanTravelTime() {
             double sum = 0.0;
@@ -1025,7 +964,15 @@ public final class RidePostProcessor {
             return sum / size;
         }
 
-        /** Successor POSITIONS, in heap order; the caller maps them to ride ids and sorts. */
+        /**
+         * Candidate POSITIONS of the kept set, in heap order.
+         *
+         * <p>The pass itself only reads {@link #meanTravelTime()} — the successor lists are no
+         * longer materialised. This accessor is what makes the selection observable, and
+         * {@code RidePostProcessorTopKParityTest} asserts on it to prove the heap keeps the same K
+         * elements the stable sort did. Without it the only witness to a selection fault would be a
+         * mean, which can coincide across different sets.
+         */
         int[] positions() {
             return Arrays.copyOf(position, size);
         }
@@ -1214,9 +1161,10 @@ public final class RidePostProcessor {
         return result;
     }
 
-    private record PredSucc(
-        Int2ObjectMap<int[]> predecessors,
-        Int2ObjectMap<int[]> successors,
-        Int2DoubleMap reposTimeMeans
-    ) {}
+    /**
+     * The only surviving output of the handoff pass: ride id -> mean repositioning travel time over
+     * the kept top-K successors. The successor and predecessor lists this pass used to return were
+     * both dead downstream (see the note on {@code reposTimeByPos}).
+     */
+    private record PredSucc(Int2DoubleMap reposTimeMeans) {}
 }

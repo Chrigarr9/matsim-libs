@@ -81,10 +81,10 @@ class KelheimHyperPoolStubParityTest {
     private static final String RUN_ID = "kelheim-mini";
     /** SHA-256 of the frozen kelheim-mini exmas_rides.csv (D2D + S2S rows), single-threaded. */
     private static final String RIDES_GOLDEN_SHA =
-            "3e02d6a111a12710f4232974f621450ea157d04b52394b61e034b5c56588edb2";
+            "4e64d53c1c043e242dadb3faa13cd8d48c61e74a22f8a3fc739ca5c350eea80d";
     /** SHA-256 of the frozen kelheim-mini hyperpool_rides.csv (Phase-6 bundles), single-threaded. */
     private static final String HYPERPOOL_GOLDEN_SHA =
-            "68d2577e2f877f379330f1c1eccb3eaf4ad9dfb8a76ed9b4dde032c848b77ce1";
+            "611db1a30ddaea0fc9ffa0de6380a7744871dd81fc163d5ca7f0428e1acc7422";
 
     @Test
     void kelheimHyperPoolOutputMatchesFrozenGoldens() throws IOException, NoSuchAlgorithmException {

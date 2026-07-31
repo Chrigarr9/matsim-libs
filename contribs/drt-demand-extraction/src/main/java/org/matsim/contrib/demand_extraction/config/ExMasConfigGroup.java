@@ -429,12 +429,12 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// this effective speed. Must stay >= the true max achievable handoff speed to remain sound.
 	private double predecessorsPrefilterMaxSpeedMps = 0.0;
 
-	// Connection cache export mode (allowed: window|all|successors_only):
-	// - "window" (default): Export only the OD/bin segments the predecessor/successor pass
-	//   evaluated (accepted AND rejected handoffs) — the lookup domain of Python's
-	//   compute_dynamic_successors. Rows are promoted-to-retained so eviction never drops them.
+	// Connection cache export mode (allowed: window|all):
+	// - "window" (default): Export only the OD/bin segments the handoff pass evaluated (accepted
+	//   AND rejected handoffs) — the lookup domain of Python's compute_dynamic_successors. Rows
+	//   are promoted-to-retained so eviction never drops them.
 	// - "all": Export ALL cached connections. Debug-only (full cache footprint, much larger).
-	// - "successors_only": Export only connections between top-K-capped successor ride pairs.
+	// A former "successors_only" mode was removed together with the successor column it read.
 	private String connectionCacheExportMode = "window";
 
 	// Optional intermediate writes (parity with Python, currently unused)
@@ -1490,10 +1490,9 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter("connectionCacheExportMode")
 	public void setConnectionCacheExportMode(String connectionCacheExportMode) {
 		if (!"window".equals(connectionCacheExportMode)
-				&& !"all".equals(connectionCacheExportMode)
-				&& !"successors_only".equals(connectionCacheExportMode)) {
+				&& !"all".equals(connectionCacheExportMode)) {
 			throw new IllegalArgumentException("Unknown connectionCacheExportMode '"
-					+ connectionCacheExportMode + "' (allowed: window|all|successors_only)");
+					+ connectionCacheExportMode + "' (allowed: window|all)");
 		}
 		this.connectionCacheExportMode = connectionCacheExportMode;
 	}
@@ -1942,11 +1941,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Maximum connection distance as factor of predecessor ride distance. " +
 				"-1 or null/omitted => unbounded.");
 		map.put("maxSuccessors",
-				"Maximum number of successors to keep per ride (closest by distance). " +
-				"0 or -1 => keep all (no pruning). Default: 50");
+				"Maximum number of handoff successors kept per ride when averaging the outgoing " +
+				"repositioning time (smallest distance x idling first). " +
+				"0 or -1 => average over every feasible successor. Default: 50");
 		map.put("connectionCacheExportMode",
-				"Connection cache export mode: 'all' exports all cached OD pairs (default, needed for Python dynamic successor computation), " +
-				"'successors_only' exports only connections between successor ride pairs (legacy, smaller file). Default: all");
+				"Connection cache export mode: 'window' (default) exports the OD/bin segments the handoff pass " +
+				"evaluated - the lookup domain of Python's dynamic successor computation; " +
+				"'all' exports every cached OD pair (debug-only, much larger). Default: window");
 
 		// Stop-Based Pooling (Stage 1) comments
 		map.put("enableStopBased",

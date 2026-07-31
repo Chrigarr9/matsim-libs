@@ -45,7 +45,7 @@ import org.matsim.examples.ExamplesUtils;
  * SHA-256 equal. The BAMAS cleanup deleted the fat path, so the fat comparand no longer exists.
  * Before deleting it, the fat output (== the then-passing stub output) was frozen as the committed
  * golden {@code hyperpool-stopbased-golden.exmas_rides.csv} (SHA-256
- * {@code d98ce19fe44732d7e099646a5bd67a435fb90e13f7a38da77d0c1e795ca01e01}). This test now pins the
+ * {@code aca73f22257b4295d9d66af9288f472600c920847a76e326bc9a90fceffde5fe}). This test now pins the
  * single-path output to that golden, so the original fat-vs-stub guarantee survives the deletion:
  * a regression that changed the stop-based/hyperpool output would change the SHA here.
  *
@@ -57,7 +57,7 @@ class HyperPoolStubParityTest {
 
     /** SHA-256 of the frozen golden — recorded for traceability; the test compares the file bytes. */
     private static final String GOLDEN_SHA =
-            "d98ce19fe44732d7e099646a5bd67a435fb90e13f7a38da77d0c1e795ca01e01";
+            "aca73f22257b4295d9d66af9288f472600c920847a76e326bc9a90fceffde5fe";
     private static final String GOLDEN_RESOURCE = "hyperpool-stopbased-golden.exmas_rides.csv";
 
     @Test

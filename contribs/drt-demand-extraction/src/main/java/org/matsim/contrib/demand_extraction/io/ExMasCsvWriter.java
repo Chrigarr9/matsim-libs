@@ -300,7 +300,10 @@ public final class ExMasCsvWriter {
 
 	private static void writeRidesHeader(BufferedWriter writer) throws IOException {
 		// Header with all ride attributes and flattened request attributes
-		// Note: predecessors removed (not needed for optimization), successors kept for path cover
+		// Note: predecessors and successors both removed. The path cover recomputes successors
+		// dynamically over the MIP-selected ride set (solver_input_builder overwrote the exported
+		// column unconditionally), so the static edges were dead weight in the CSV; the pass that
+		// produced them survives only for `reposTimeMeanOutgoing`.
 		// Stop-based columns added at the end for backward compatibility
 		// Extension-2 per-pax columns (requestTags, hubIds) are APPENDED at the
 		// END of the header — never inserted in the middle — so existing
@@ -311,14 +314,14 @@ public final class ExMasCsvWriter {
 		// occupancy) is appended AFTER requestTags/hubIds — required by the
 		// class-aware path cover (rev-3 §7.4b).
 		// chained_timebin Task 4: `reposTimeMeanOutgoing` (mean outgoing repos
-		// time across successors) is appended AFTER peak_pax — required by the
-		// chained time-bin repos-time resolver.
+		// time across the kept top-K successors) is appended AFTER peak_pax —
+		// required by the chained time-bin repos-time resolver.
 		// Task 3 (DuckDB tagging): `hubLegRoles` is appended AFTER hubIds and
 		// BEFORE peak_pax so downstream DuckDB can tag each pax leg role.
 		writer.write("rideIndex,degree,kind,variant," +
 				"requestIndices,personIds,groupIds,requestTimes,isCommutes,isEducations," +
 				"originsOrdered,destinationsOrdered," +
-				"passengerTravelTimes,passengerDistances,passengerDirectDistances,delays,detours,remainingBudgets,maxCosts,maxCostsPerKm,shapleyValues,successors," +
+				"passengerTravelTimes,passengerDistances,passengerDirectDistances,delays,detours,remainingBudgets,maxCosts,maxCostsPerKm,shapleyValues," +
 				"startTime,endTime,rideTravelTime,rideDistance," +
 				"pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty," +
 				"dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty," +
@@ -394,14 +397,6 @@ public final class ExMasCsvWriter {
 				String maxCosts = ride.getMaxCosts() != null ? formatDoubleArray(ride.getMaxCosts(), "%.4f") : "[]";
 				String maxCostsPerKm = ride.getMaxCostsPerKm() != null ? formatDoubleArray(ride.getMaxCostsPerKm()) : "[]";
 				String shapleyValues = ride.getShapleyValues() != null ? formatDoubleArray(ride.getShapleyValues(), "%.4f") : "[]";
-				String successors;
-				if (ride.getSuccessors() != null) {
-					int[] sortedSucc = ride.getSuccessors().clone();
-					Arrays.sort(sortedSucc);
-					successors = formatIntArray(sortedSucc);
-				} else {
-					successors = "[]";
-				}
 
 				// Format stop-based columns
 				String variant = ride.getVariant().name();
@@ -434,11 +429,11 @@ public final class ExMasCsvWriter {
 				}
 
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s,%s,%d,%.2f",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s,%s,%d,%.2f",
 						ride.getIndex(), ride.getDegree(), ride.getKind(), variant,
 						reqIndices, personIds, groupIds, requestTimes, isCommutes, isEducations,
 						origins, destinations,
-						pttimes, pdists, pdirects, delays, detours, budgets, maxCosts, maxCostsPerKm, shapleyValues, successors,
+						pttimes, pdists, pdirects, delays, detours, budgets, maxCosts, maxCostsPerKm, shapleyValues,
 						ride.getStartTime(), ride.getEndTime(),
 						ride.getRideTravelTime(), ride.getRideDistance(),
 						pickupLinkId, pickupX, pickupY, pickupPenalty,
