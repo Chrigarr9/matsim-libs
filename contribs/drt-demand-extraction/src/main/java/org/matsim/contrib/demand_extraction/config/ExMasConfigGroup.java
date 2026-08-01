@@ -418,10 +418,15 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// 10 feasible successors and 80.3% fewer than 50 — the heap is rarely full, so raising K adds
 	// nothing to average over.
 	//
-	// Note who consumes this: only Python's DIRECT gurobi/highs fleet path (resolve_repos_time).
-	// The colgen path ignores the column entirely and pads every ride by a flat timebin_size, so
-	// K cannot affect a colgen fleet number at all. Do not tune K hoping to move a fleet estimate;
-	// on colgen the lever is timebin_size, not this.
+	// Note who consumes this: BOTH Python fleet paths, as of 2026-08-01. The direct gurobi/highs
+	// path reads it via resolve_repos_time; the colgen path reads it via
+	// DuckDBRidePool.build_repos_time, the SQL mirror of that same function. Until then colgen
+	// ignored the column entirely and padded every ride by a flat timebin_size, which is why the
+	// 2026-08-01 K calibration could not discriminate at fleet level.
+	// Even now the value is only an UPPER bound: a ride ending beside a depot can reposition
+	// through it more cheaply than its mean successor, so both paths take
+	// min(java_mean, depot_pad). Do not tune K hoping to move a fleet estimate -- the heap is
+	// rarely full, so K is not the lever.
 	private int maxSuccessors = 50;
 
 	// Spatial pre-filter for the predecessor/successor pass (default true).
