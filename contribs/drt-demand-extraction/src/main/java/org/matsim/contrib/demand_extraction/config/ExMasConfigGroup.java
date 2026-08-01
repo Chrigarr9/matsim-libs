@@ -411,14 +411,17 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// 0 or -1 => keep all (no pruning). Default: 50
 	//
 	// K = 50 is calibrated, not arbitrary: since the successor column was dropped, this K solely
-	// determines reposTimeMeanOutgoing, the input to the chained_timebin fleet estimator. The
-	// Lyon 10% calibration (docs/paper1/methodology-review/2026-08-01-repos-time-k-calibration.md)
-	// swept K in {10, 50, 200} over one identical candidate stream: a 20x K range moves the mean
+	// determines reposTimeMeanOutgoing. The Lyon 10% calibration
+	// (docs/paper1/methodology-review/2026-08-01-repos-time-k-calibration.md) swept K in
+	// {10, 50, 200} over one identical candidate stream: a 20x K range moves the mean
 	// repositioning time by 1.2% (415.9 / 419.5 / 421.0 s), because 59.6% of rides have fewer than
 	// 10 feasible successors and 80.3% fewer than 50 — the heap is rarely full, so raising K adds
-	// nothing to average over. At fleet level all three K land within the MIP's own alternate-optima
-	// noise. K is therefore not the lever on fleet accuracy; do not tune it hoping to move the
-	// estimate. See the doc for the structural bias that does dominate.
+	// nothing to average over.
+	//
+	// Note who consumes this: only Python's DIRECT gurobi/highs fleet path (resolve_repos_time).
+	// The colgen path ignores the column entirely and pads every ride by a flat timebin_size, so
+	// K cannot affect a colgen fleet number at all. Do not tune K hoping to move a fleet estimate;
+	// on colgen the lever is timebin_size, not this.
 	private int maxSuccessors = 50;
 
 	// Spatial pre-filter for the predecessor/successor pass (default true).
