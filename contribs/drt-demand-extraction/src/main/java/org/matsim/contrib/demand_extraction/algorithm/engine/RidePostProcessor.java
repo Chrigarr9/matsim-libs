@@ -44,6 +44,36 @@ import it.unimi.dsi.fastutil.objects.Object2DoubleOpenCustomHashMap;
  * - maxCosts: maximum fare per passenger before utility equals best alternative
  * - shapleyValues: distance contribution per passenger
  * - predecessors/successors: feasible ride sequencing edges
+ *
+ * <h2>The two-distance contract (READ BEFORE CONSUMING maxCostsPerKm)</h2>
+ *
+ * Every passenger of every ride carries TWO distances, produced by TWO different
+ * time-optimal routers, and they disagree per trip in both directions:
+ * <ul>
+ *   <li>{@code DrtRequest.directDistance} ({@code passengerDirectDistances} in the
+ *       CSV): the solo reference route from the Phase-1 TripRouter at the trip's
+ *       exact departure time. This is the BILLING basis — the Python optimizer
+ *       charges {@code price_per_km * directDistance} everywhere (income, pkm
+ *       objective, subsidy).</li>
+ *   <li>{@code passengerDistances}: this ride's own routed in-vehicle distance
+ *       from the extraction's network cache (canonical time-bin departure).
+ *       Because both routers minimize TIME, not kilometers, a solo route can be
+ *       LONGER in km than the billed direct distance (fast motorway; measured
+ *       Lyon 25%: 21.6% of solos, up to 3.7x) and a pooled route can be SHORTER
+ *       (slow back roads).</li>
+ * </ul>
+ *
+ * {@code maxCosts} is the ABSOLUTE acceptable fare in EUR for this ride (it
+ * already prices in the ride's detour/delay via the remaining budget).
+ * {@code maxCostsPerKm} divides it by {@code passengerDistances} — the ROUTED
+ * distance, NOT the billing basis. Consequently it must never be compared
+ * against a per-direct-km price: doing so mixes distance bases and mis-filters
+ * (it wrongly rejected 27% of the Lyon 25% pool at 0.20 EUR/km before the
+ * 2026-08-10 fix; ExmasCommuters now tests
+ * {@code price_per_km * directDistance <= maxCosts} in absolute euros).
+ * {@code maxCostsPerKm} is kept for reporting only. Note the request-level
+ * export ({@code drt_requests.csv} maxCostPerKm) divides by directDistance
+ * instead — the two per-km columns are intentionally NOT on the same basis.
  */
 public final class RidePostProcessor {
     private static final Logger log = LogManager.getLogger(RidePostProcessor.class);
