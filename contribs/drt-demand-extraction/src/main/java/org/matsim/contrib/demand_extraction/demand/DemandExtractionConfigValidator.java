@@ -109,6 +109,10 @@ public class DemandExtractionConfigValidator {
 		log.info("  Destination flexibility (default): {}s absolute, {}% relative",
 				getDefaultFromMapString(exMasConfig.getPositiveFlexibilityAbsoluteMap(), 0.0),
 				getDefaultFromMapString(exMasConfig.getPositiveFlexibilityRelativeMap(), 0.5) * 100);
+		if (!exMasConfig.getFlexRelativeByClass().isEmpty()) {
+			log.info("  Per-class rel overrides (origin AND destination): {}",
+					exMasConfig.getFlexRelativeByClass());
+		}
 		log.info("Routing Settings:");
 		log.info("  PT optimization: {}", exMasConfig.isPtOptimizeDepartureTime() ? "enabled" : "disabled");
 		log.info("  Routing: mode-specific disutility wrapped in DeterministicTravelDisutility "

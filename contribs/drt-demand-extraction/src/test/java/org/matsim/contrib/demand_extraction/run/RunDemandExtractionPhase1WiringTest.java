@@ -144,7 +144,8 @@ class RunDemandExtractionPhase1WiringTest {
 				b.extensionParentsTopKMetric, b.extensionParentsSelectionRule,
 				b.extensionParentsMmrLambda, b.extensionParentsTier2NodeCap,
 				b.checkpointForkBelowMinDegree,
-				b.expandConnectingBothSides, b.maxDetourFactorByClass, b.maxHubWait,
+				b.expandConnectingBothSides, b.maxDetourFactorByClass, b.flexRelByClass,
+				b.maxHubWait,
 				b.hubSyncTwoSided, b.hubSyncMaxAdvance, b.pairgenTopK,
 				b.hyperPoolVehicleCapacity);
 	}
@@ -188,6 +189,7 @@ class RunDemandExtractionPhase1WiringTest {
 		boolean checkpointForkBelowMinDegree = false;
 		boolean expandConnectingBothSides = false;
 		java.util.Map<String, Double> maxDetourFactorByClass = new java.util.HashMap<>();
+		java.util.Map<String, Double> flexRelByClass = new java.util.HashMap<>();
 		double maxHubWait = Double.NaN;
 		boolean hubSyncTwoSided = false;
 		double hubSyncMaxAdvance = Double.NaN;

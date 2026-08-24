@@ -157,6 +157,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// Not XML-serialized — set programmatically (mirrors pruningCoverageKByDegree).
 	private Map<String, Double> maxDetourFactorByClass = new HashMap<>();
 
+	// Per-class relative-flexibility (rel) override. Key = requestTag (bare or "tag:ROLE",
+	// resolved most-specific-first like maxDetourFactorByClass); value = rel factor applied
+	// to the request's absolute detour cap when deriving the departure/arrival time windows.
+	// Requests whose tag is absent fall back to the FlexibilityCalculator maps (default 0.5).
+	// Not XML-serialized — set programmatically (mirrors maxDetourFactorByClass).
+	private Map<String, Double> flexRelativeByClass = new HashMap<>();
+
 	private Integer maxAbsoluteDetour = null; // Absolute detour cap (seconds). If set, limits the max detour time.
 
 	// Sampling settings
@@ -1013,6 +1020,18 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	public void clearMaxDetourFactorByClass() {
 		this.maxDetourFactorByClass = new HashMap<>();
+	}
+
+	public Map<String, Double> getFlexRelativeByClass() {
+		return Collections.unmodifiableMap(flexRelativeByClass);
+	}
+
+	public void setFlexRelativeByClass(Map<String, Double> m) {
+		this.flexRelativeByClass = new HashMap<>(m);
+	}
+
+	public void clearFlexRelativeByClass() {
+		this.flexRelativeByClass = new HashMap<>();
 	}
 
 	@StringGetter("maxAbsoluteDetour")

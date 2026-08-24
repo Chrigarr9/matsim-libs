@@ -663,8 +663,15 @@ public class DrtRequestFactory {
 		double budgetDerivedMaxWait = caps[2];
 
 		// Temporal flexibility (departure/arrival windows) — independent from detour.
-		double originFlex = flexibilityCalculator.calculateOriginFlexibility(person, trip.getOriginActivity(), maxAbsoluteDetour);
-		double destFlex = flexibilityCalculator.calculateDestinationFlexibility(person, trip.getDestinationActivity(), maxAbsoluteDetour);
+		// EXT-4 rel half: a class-keyed rel override (flexRelativeByClass) replaces the
+		// FlexibilityCalculator's relative factor; absent classes keep the map default.
+		double flexRelClass = resolveClassFactor(exmasConfig.getFlexRelativeByClass(),
+				Double.NaN, draft.requestTag, draft.hubLegRole);
+		Double flexRelOverride = Double.isNaN(flexRelClass) ? null : flexRelClass;
+		double originFlex = flexibilityCalculator.calculateOriginFlexibility(
+				person, trip.getOriginActivity(), maxAbsoluteDetour, flexRelOverride);
+		double destFlex = flexibilityCalculator.calculateDestinationFlexibility(
+				person, trip.getDestinationActivity(), maxAbsoluteDetour, flexRelOverride);
 		double earliestDep = requestTime - originFlex;
 		double latestArr = requestTime + destFlex + drtAttrs.travelTime();
 

@@ -163,6 +163,31 @@ class RunLyonEqasimDemandExtractionParseArgsTest {
     }
 
     @Test
+    void defaultsLeaveFlexRelByClassEmpty() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+        });
+        assertTrue(p.flexRelByClass.isEmpty(),
+                "flex-rel-by-class empty by default");
+    }
+
+    @Test
+    void parsesFlexRelByClassSpec() {
+        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+                "--sample", "1",
+                "--scenario-dir", "/tmp/scenario",
+                "--travel-times", "/tmp/tt.tsv",
+                "--flex-rel-by-class", "rural_intra=1.0,urban_intra=0.75,connecting=0.85",
+        });
+        assertEquals(3, p.flexRelByClass.size());
+        assertEquals(1.0, p.flexRelByClass.get("rural_intra"), 0.0);
+        assertEquals(0.75, p.flexRelByClass.get("urban_intra"), 0.0);
+        assertEquals(0.85, p.flexRelByClass.get("connecting"), 0.0);
+    }
+
+    @Test
     void defaultLeavesMaxHubWaitUnset() {
         var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
                 "--sample", "1",

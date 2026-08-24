@@ -120,6 +120,9 @@ public class RunLyonEqasimDemandExtraction {
 		/** Merged run (Paper-2): per-request-class max-detour-factor overrides
 		 *  (class-key → factor). Empty = use the single global maxDetourFactor. */
 		public final java.util.Map<String, Double> maxDetourFactorByClass;
+		/** Merged run (Paper-2, EXT-4 rel half): per-request-class relative-flexibility
+		 *  overrides (class-key → rel). Empty = FlexibilityCalculator default (0.5). */
+		public final java.util.Map<String, Double> flexRelByClass;
 		/** Hub-sync v1 (Paper-2): continuation-leg hub-departure window width in
 		 *  seconds. NaN = unset (config default 0.0 = legacy fixed-buffer). */
 		public final double maxHubWait;
@@ -157,6 +160,7 @@ public class RunLyonEqasimDemandExtraction {
 				boolean checkpointForkBelowMinDegree,
 				boolean expandConnectingBothSides,
 				java.util.Map<String, Double> maxDetourFactorByClass,
+				java.util.Map<String, Double> flexRelByClass,
 				double maxHubWait,
 				boolean hubSyncTwoSided,
 				double hubSyncMaxAdvance,
@@ -197,6 +201,7 @@ public class RunLyonEqasimDemandExtraction {
 			this.checkpointForkBelowMinDegree = checkpointForkBelowMinDegree;
 			this.expandConnectingBothSides = expandConnectingBothSides;
 			this.maxDetourFactorByClass = maxDetourFactorByClass;
+			this.flexRelByClass = flexRelByClass;
 			this.maxHubWait = maxHubWait;
 			this.hubSyncTwoSided = hubSyncTwoSided;
 			this.hubSyncMaxAdvance = hubSyncMaxAdvance;
@@ -241,6 +246,7 @@ public class RunLyonEqasimDemandExtraction {
 		boolean checkpointForkBelowMinDegree = false;
 		boolean expandConnectingBothSides = false;
 		java.util.Map<String, Double> maxDetourFactorByClass = new java.util.HashMap<>();
+		java.util.Map<String, Double> flexRelByClass = new java.util.HashMap<>();
 		double maxHubWait = Double.NaN;
 		boolean hubSyncTwoSided = false;
 		double hubSyncMaxAdvance = Double.NaN;
@@ -288,6 +294,7 @@ public class RunLyonEqasimDemandExtraction {
 				case "--checkpoint-fork-below-min-degree" -> checkpointForkBelowMinDegree = true;
 				case "--expand-connecting-both-sides" -> expandConnectingBothSides = true;
 				case "--max-detour-factor-by-class" -> maxDetourFactorByClass = parseClassFactorMap(args[++i]);
+				case "--flex-rel-by-class" -> flexRelByClass = parseClassFactorMap(args[++i]);
 				case "--max-hub-wait" -> maxHubWait = Double.parseDouble(args[++i]);
 				case "--hub-sync-twosided" -> hubSyncTwoSided = true;
 				case "--hub-sync-max-advance" -> hubSyncMaxAdvance = Double.parseDouble(args[++i]);
@@ -306,7 +313,7 @@ public class RunLyonEqasimDemandExtraction {
 				extensionParentsTopK, extensionParentsTopKMinDegree, extensionParentsTopKMetric,
 				extensionParentsSelectionRule, extensionParentsMmrLambda, extensionParentsTier2NodeCap,
 				checkpointForkBelowMinDegree,
-				expandConnectingBothSides, maxDetourFactorByClass, maxHubWait,
+				expandConnectingBothSides, maxDetourFactorByClass, flexRelByClass, maxHubWait,
 				hubSyncTwoSided, hubSyncMaxAdvance, pairgenTopK, hyperPoolVehicleCapacity);
 	}
 
@@ -684,6 +691,10 @@ public class RunLyonEqasimDemandExtraction {
 		if (!p.maxDetourFactorByClass.isEmpty()) {
 			log.info("  Override: maxDetourFactorByClass = {}", p.maxDetourFactorByClass);
 			exMas.setMaxDetourFactorByClass(p.maxDetourFactorByClass);
+		}
+		if (!p.flexRelByClass.isEmpty()) {
+			log.info("  Override: flexRelativeByClass = {}", p.flexRelByClass);
+			exMas.setFlexRelativeByClass(p.flexRelByClass);
 		}
 		if (!Double.isNaN(p.maxHubWait)) {
 			log.info("  Override: maxHubWaitSeconds = {}", p.maxHubWait);

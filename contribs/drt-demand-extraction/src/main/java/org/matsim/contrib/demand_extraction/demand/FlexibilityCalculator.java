@@ -59,11 +59,33 @@ public class FlexibilityCalculator {
 	 * Relevant context is the Destination Activity.
 	 */
 	public double calculateDestinationFlexibility(Person person, Activity destinationActivity, double maxDetour) {
-		return calculate(person, destinationActivity, 
+		return calculate(person, destinationActivity,
 				config.getPositiveFlexibilityAttribute(),
 				posAbsMap,
 				posRelMap,
 				maxDetour);
+	}
+
+	/**
+	 * Per-class variant (EXT-4 rel half): a non-null {@code relOverride} — the request
+	 * class's calibrated rel factor — replaces the map-derived relative factor while the
+	 * absolute component keeps its map default. Null falls back to the attribute path.
+	 */
+	public double calculateOriginFlexibility(Person person, Activity originActivity, double maxDetour,
+			Double relOverride) {
+		if (relOverride != null) {
+			return negAbsMap.getOrDefault("default", 0.0) + relOverride * maxDetour;
+		}
+		return calculateOriginFlexibility(person, originActivity, maxDetour);
+	}
+
+	/** Per-class variant of {@link #calculateDestinationFlexibility}; see the origin variant. */
+	public double calculateDestinationFlexibility(Person person, Activity destinationActivity, double maxDetour,
+			Double relOverride) {
+		if (relOverride != null) {
+			return posAbsMap.getOrDefault("default", 0.0) + relOverride * maxDetour;
+		}
+		return calculateDestinationFlexibility(person, destinationActivity, maxDetour);
 	}
 
 	private double calculate(Person person, Activity activity, String attribute, 
