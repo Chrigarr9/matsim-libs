@@ -345,6 +345,65 @@ class RunDemandExtractionPhase2ArgsTest {
 				"no flag -> probe stays disabled");
 	}
 
+	// ------------------------------------------------------------------ //
+	// --enable-stop-based / --enable-hyperpooling / --max-walk-distance-  //
+	// meters CLI wiring (stop-based Phase 2 on a door-to-door v2 dump)    //
+	// ------------------------------------------------------------------ //
+
+	@Test
+	void applyPhase2KnobOverridesEnablesStopBasedAndHyperPool() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		RunDemandExtractionPhase2.applyPhase2KnobOverrides(
+				new String[]{"--enable-stop-based", "--enable-hyperpooling",
+						"--max-walk-distance-meters", "1000"}, cfg);
+		assertTrue(cfg.isEnableStopBased(), "--enable-stop-based should flip enableStopBased");
+		assertTrue(cfg.isEnableHyperPooling(), "--enable-hyperpooling should flip enableHyperPooling");
+		assertEquals(1000.0, cfg.getMaxWalkDistanceMeters(), 1e-9,
+				"--max-walk-distance-meters 1000 should set the walk cap");
+	}
+
+	@Test
+	void applyPhase2KnobOverridesLeavesStopBasedOffWhenAbsent() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		RunDemandExtractionPhase2.applyPhase2KnobOverrides(new String[]{}, cfg);
+		org.junit.jupiter.api.Assertions.assertFalse(cfg.isEnableStopBased(),
+				"enableStopBased should stay false when the flag is absent");
+		org.junit.jupiter.api.Assertions.assertFalse(cfg.isEnableHyperPooling(),
+				"enableHyperPooling should stay false when the flag is absent");
+	}
+
+	@Test
+	void parseArgsToleratesStopBasedFlagsWithoutMisreadingNext() {
+		// Two valueless flags + one value flag; parseArgs must still find --network.
+		String[] args = {
+				"--phase1-dir", "/tmp/dump",
+				"--enable-stop-based",
+				"--enable-hyperpooling",
+				"--max-walk-distance-meters", "1000",
+				"--network", "/tmp/net.xml.gz",
+				"--travel-times", "/tmp/tt.tsv",
+				"--output-dir", "/tmp/out"
+		};
+		RunDemandExtractionPhase2.Phase2Args parsed = RunDemandExtractionPhase2.parseArgs(args);
+		assertEquals(java.nio.file.Path.of("/tmp/net.xml.gz"), parsed.networkXml());
+		assertEquals(java.nio.file.Path.of("/tmp/out"), parsed.outputDir());
+	}
+
+	@Test
+	void cliEnabledStopBasedOnV1DumpIsRejectedByGuard() {
+		// The override + guard order in main(): overrides FIRST, then the v1-dump gate.
+		// This test locks the combination: a CLI-enabled stop-based run on a v1 dump throws.
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		RunDemandExtractionPhase2.applyPhase2KnobOverrides(
+				new String[]{"--enable-stop-based"}, cfg);
+		org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+				() -> RunDemandExtractionPhase2.assertDumpSupportsConfig(1, cfg),
+				"CLI-enabled stop-based on a v1 dump must be rejected");
+	}
+
 	// Canonical-requests publishing moved to ExtractionDataManager.publishCanonicalRequests;
 	// its behavior is covered by ExtractionDataManagerTest.
 }

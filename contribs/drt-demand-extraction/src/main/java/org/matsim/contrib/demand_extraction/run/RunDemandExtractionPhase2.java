@@ -75,9 +75,11 @@ public final class RunDemandExtractionPhase2 {
 				     "--max-ordering-nodes-after-first-valid", "--predecessors-filter-time",
 				     "--predecessors-spatial-prefilter", "--predecessors-prefilter-max-speed-mps",
 				     "--predecessors-filter-distance-factor",
+				     "--max-walk-distance-meters",
 				     "--ordering-probe-dir",
 				     "--ordering-probe-min-degree" -> i++; // value tokens applied later (knob overrides / applyOrderingProbe)
-				case "--checkpoint-fork-below-min-degree", "--trust-checkpoint-journal" -> { } // valueless boolean flags — applied via applyPhase2KnobOverrides
+				case "--checkpoint-fork-below-min-degree", "--trust-checkpoint-journal",
+				     "--enable-stop-based", "--enable-hyperpooling" -> { } // valueless boolean flags — applied via applyPhase2KnobOverrides
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
 		}
@@ -125,6 +127,14 @@ public final class RunDemandExtractionPhase2 {
 				// knob), so CLI is the only way to override it away from the class default (-1 =
 				// unlimited) in a fresh Phase-2 JVM. Mirrors --pairgen-top-k above.
 				case "--hyperpool-vehicle-capacity" -> cfg.setHyperPoolMaxVehicleCapacity(Integer.parseInt(args[++i]));
+				// Stop-based / HyperPool generation toggles. Must be re-applied here because Phase 2
+				// rebuilds ExMasConfigGroup from phase1_config.xml, and a dump written by a
+				// door-to-door Phase 1 has both OFF in that snapshot. Sound to enable at Phase 2
+				// on a v2 dump only — assertDumpSupportsConfig rejects v1 dumps, whose
+				// scoring_contexts.bin lacks the per-request maxWalkDistance caps these need.
+				case "--enable-stop-based" -> cfg.setEnableStopBased(true);
+				case "--enable-hyperpooling" -> cfg.setEnableHyperPooling(true);
+				case "--max-walk-distance-meters" -> cfg.setMaxWalkDistanceMeters(Double.parseDouble(args[++i]));
 				// Plan A3: per-degree checkpoint/resume. Set ⇒ the engine writes stubs +
 				// pair universe + connection-cache journal at each barrier, and resumes from
 				// the dir if a matching manifest is already present. Off ("") reproduces master.
@@ -286,8 +296,10 @@ public final class RunDemandExtractionPhase2 {
 		Injector injector = Guice.createInjector(new Phase2Module(p2));
 
 		ExMasConfigGroup exMasCfg = injector.getInstance(ExMasConfigGroup.class);
-		assertDumpSupportsConfig(dump.scoringContextsVersion(), exMasCfg);
+		// Overrides BEFORE the dump-version gate: --enable-stop-based/--enable-hyperpooling
+		// arrive via CLI, and the gate must see them to reject a v1 dump.
 		applyPhase2KnobOverrides(args, exMasCfg);
+		assertDumpSupportsConfig(dump.scoringContextsVersion(), exMasCfg);
 		// Enumeration analytics: always persist per-degree EnumerationStats + degree-2 menu depth
 		// under <outputDir>/drt_demand/stats. Programmatic (non-persisted) config carrier, read by
 		// the engine (menu depth) and the extender (enumeration_stats.csv).
