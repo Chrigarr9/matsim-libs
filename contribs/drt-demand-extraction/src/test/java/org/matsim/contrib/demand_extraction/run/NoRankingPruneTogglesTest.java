@@ -13,16 +13,17 @@ import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideMetricScali
 import org.matsim.contrib.demand_extraction.algorithm.selection.RideLayerSelection;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
-import org.matsim.core.config.Config;
-import org.matsim.core.config.ConfigUtils;
 
 /**
- * Pins that {@code --coverage-k 0} is a clean no-op pruning toggle: the runner sets
- * {@code RATIO_THRESHOLD} with {@code interDegreeKeepFraction=1.0} (keep everything), and
- * {@link RideLayerSelection#prune} under that config returns ALL rides unmodified.
+ * Pins that {@code RATIO_THRESHOLD} with {@code interDegreeKeepFraction=1.0} (the
+ * exmas-overlay equivalent of the old {@code --coverage-k 0} CLI toggle) is a clean
+ * no-op: {@link RideLayerSelection#prune} under that config returns ALL rides unmodified.
  *
- * <p>This test calls the REAL {@code applyAlgorithmAndPruning} production method so a future
- * change to its logic will break this test rather than silently bypass it.
+ * <p>The translation from an orthogonal {@code --algorithm}/{@code --coverage-k} CLI
+ * triple into these {@code ExMasConfigGroup} fields ({@code applyAlgorithmAndPruning})
+ * was removed 2026-08-19 (spec D4): {@code pruningMode} / {@code interDegreeKeepFraction}
+ * are now ordinary exmas-overlay params set directly, so this test exercises
+ * {@link RideLayerSelection#prune} against the config states directly instead.
  */
 class NoRankingPruneTogglesTest {
 
@@ -56,41 +57,6 @@ class NoRankingPruneTogglesTest {
 		Map<Integer, DrtRequest> m = new HashMap<>();
 		for (int i = 0; i <= 5; i++) m.put(i, req(i));
 		return m;
-	}
-
-	// ---- toggle pin ---------------------------------------------------------
-
-	/**
-	 * Verifies that the real {@code applyAlgorithmAndPruning} sets {@code RATIO_THRESHOLD}
-	 * with fraction 1.0 when {@code coverageK == 0}, and sets {@code COVERAGE_TOPK} with the
-	 * supplied K when {@code coverageK > 0}.
-	 */
-	@Test
-	void coverageKZeroSetsRatioThresholdAtOne_andPositiveKSetsCoverageTopK() {
-		// --- OFF branch (coverageK = 0) ---
-		Config offConfig = ConfigUtils.createConfig(new ExMasConfigGroup());
-		RunLyonEqasimDemandExtraction.CliArgs offArgs = new RunLyonEqasimDemandExtraction.CliArgs();
-		offArgs.coverageK = 0;
-		// gateScale=-1.0 (default) and NaN intercept/slope → heuristic gate disabled; no NPE.
-
-		RunLyonEqasimDemandExtraction.applyAlgorithmAndPruning(offConfig, offArgs);
-
-		ExMasConfigGroup offCfg = ConfigUtils.addOrGetModule(offConfig, ExMasConfigGroup.class);
-		assertEquals(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD, offCfg.getPruningMode(),
-				"coverageK=0 must set RATIO_THRESHOLD");
-		assertEquals(1.0, offCfg.getInterDegreeKeepFraction(), 1e-9,
-				"coverageK=0 must set interDegreeKeepFraction=1.0 (keep everything)");
-
-		// --- ON branch (coverageK > 0) contrast case ---
-		Config onConfig = ConfigUtils.createConfig(new ExMasConfigGroup());
-		RunLyonEqasimDemandExtraction.CliArgs onArgs = new RunLyonEqasimDemandExtraction.CliArgs();
-		onArgs.coverageK = 20;
-
-		RunLyonEqasimDemandExtraction.applyAlgorithmAndPruning(onConfig, onArgs);
-
-		ExMasConfigGroup onCfg = ConfigUtils.addOrGetModule(onConfig, ExMasConfigGroup.class);
-		assertEquals(ExMasConfigGroup.PruningMode.COVERAGE_TOPK, onCfg.getPruningMode(),
-				"coverageK>0 must set COVERAGE_TOPK");
 	}
 
 	// ---- no-drop pin --------------------------------------------------------

@@ -1,258 +1,126 @@
 package org.matsim.contrib.demand_extraction.run;
 
-import org.junit.jupiter.api.Test;
-import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup.FleetSide;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+
+/**
+ * The trimmed {@code parseArgs} keeps only location flags. Every result-affecting ExMAS
+ * knob was removed 2026-08-19 (spec D4) in favor of the {@code --exmas-config} overlay,
+ * and -- unlike the old {@code default -> log.warn(...)} CLI -- an unrecognized flag now
+ * fails loudly rather than being silently dropped.
+ */
 class RunLyonEqasimDemandExtractionParseArgsTest {
 
-    @Test
-    void defaultsLeaveStopBasedKnobsOff() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-        });
-        assertFalse(p.enableStopBased, "stop-based off by default");
-        assertFalse(p.enableHyperPooling, "hyper-pool off by default");
-        assertFalse(p.enableBudgetAwareConstraints, "budget-aware off by default");
-        assertTrue(Double.isNaN(p.maxWalkDistanceMeters),
-                "max-walk-distance NaN sentinel by default");
-    }
+	@Test
+	void parsesAllLocationFlags() {
+		var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+				"--sample", "10",
+				"--scenario-dir", "/tmp/scenario",
+				"--prefix", "lyon_drt_area_",
+				"--travel-times", "/tmp/tt.tsv",
+				"--output-dir", "/tmp/out",
+				"--exmas-config", "/tmp/out/exmas-config.xml",
+		});
+		assertEquals(10, p.sample);
+		assertEquals("/tmp/scenario", p.scenarioDir);
+		assertEquals("lyon_drt_area_", p.prefix);
+		assertEquals("/tmp/tt.tsv", p.travelTimesPath);
+		assertEquals("/tmp/out", p.outputDir);
+		assertEquals("/tmp/out/exmas-config.xml", p.exmasConfig);
+	}
 
-    @Test
-    void parsesAllFourNewFlags() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-                "--enable-stop-based",
-                "--enable-hyperpooling",
-                "--enable-budget-aware-constraints",
-                "--max-walk-distance-meters", "1000",
-        });
-        assertTrue(p.enableStopBased);
-        assertTrue(p.enableHyperPooling);
-        assertTrue(p.enableBudgetAwareConstraints);
-        assertEquals(1000.0, p.maxWalkDistanceMeters, 0.0);
-    }
+	@Test
+	void prefixDefaultsToLyonDrtArea() {
+		var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+				"--sample", "1",
+				"--scenario-dir", "/tmp/scenario",
+				"--travel-times", "/tmp/tt.tsv",
+		});
+		assertEquals("lyon_drt_area_", p.prefix);
+	}
 
-    @Test
-    void defaultsLeaveRequestClassificationsPathNull() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-        });
-        assertNull(p.requestClassificationsPath,
-                "request-classifications path null by default");
-    }
+	@Test
+	void exmasConfigIsNullWhenAbsent() {
+		var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+				"--sample", "1",
+				"--scenario-dir", "/tmp/scenario",
+				"--travel-times", "/tmp/tt.tsv",
+		});
+		assertNull(p.exmasConfig);
+	}
 
-    @Test
-    void parsesRequestClassificationsFlag() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-                "--request-classifications", "/tmp/cls.csv",
-        });
-        assertEquals("/tmp/cls.csv", p.requestClassificationsPath);
-    }
+	@Test
+	void toleratesTheLowMemoryFlagAsANoOp() {
+		// main() strips --low-memory before calling parseArgs in the real flow; parseArgs
+		// itself tolerates it too so it stays safe to call on the raw two-phase CLI surface.
+		var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+				"--sample", "1",
+				"--scenario-dir", "/tmp/scenario",
+				"--travel-times", "/tmp/tt.tsv",
+				"--low-memory",
+		});
+		assertEquals(1, p.sample);
+	}
 
-    @Test
-    void defaultsLeaveFleetSideNull() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-        });
-        assertNull(p.fleetSide, "fleet-side null by default (Kelheim / Paper-1 path)");
-    }
+	@Test
+	void toleratesOrchestratorOnlyFlagsWithoutMisreadingTheirValues() {
+		// RunDemandExtractionTwoPhase strips these before forwarding, but parseArgs must
+		// not choke (or misread the next flag as a value) if it ever sees the full surface.
+		var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+				"--sample", "1",
+				"--scenario-dir", "/tmp/scenario",
+				"--travel-times", "/tmp/tt.tsv",
+				"--phase1-heap", "110g",
+				"--phase2-heap", "110g",
+				"--java", "/opt/jdk/bin/java",
+				"--network", "/tmp/net.xml.gz",
+				"--phase1-dump-dir", "/tmp/dump",
+		});
+		assertEquals(1, p.sample);
+		assertEquals("/tmp/scenario", p.scenarioDir);
+	}
 
-    @Test
-    void parsesFleetSideUrban() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-                "--fleet-side", "URBAN",
-        });
-        assertEquals(FleetSide.URBAN, p.fleetSide);
-    }
+	@Test
+	void unknownFlagFailsLoudlyInsteadOfBeingSilentlyDropped() {
+		IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+				() -> RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+						"--sample", "1",
+						"--scenario-dir", "/tmp/scenario",
+						"--travel-times", "/tmp/tt.tsv",
+						"--max-detour-factr", "1.5",
+				}));
+		assertTrue(ex.getMessage().contains("--max-detour-factr"),
+				"the error must name the offending flag: " + ex.getMessage());
+	}
 
-    @Test
-    void parsesFleetSideRuralCaseInsensitive() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-                "--fleet-side", "rural",
-        });
-        assertEquals(FleetSide.RURAL, p.fleetSide);
-    }
+	@Test
+	void removedResultAffectingFlagFailsLoudly() {
+		// --algorithm was one of the ~50 result-affecting flags removed 2026-08-19; it
+		// must not silently no-op the way the old default-branch log.warn did.
+		IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+				() -> RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+						"--sample", "1",
+						"--scenario-dir", "/tmp/scenario",
+						"--travel-times", "/tmp/tt.tsv",
+						"--algorithm", "bamas",
+				}));
+		assertTrue(ex.getMessage().contains("--algorithm"));
+	}
 
-    @Test
-    void defaultsLeaveMetropolePolygonNull() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-        });
-        assertNull(p.metropolePolygonPath, "metropole-polygon null by default");
-    }
-
-    @Test
-    void parsesMetropolePolygonFlag() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-                "--metropole-polygon", "/tmp/metropole.shp",
-        });
-        assertEquals("/tmp/metropole.shp", p.metropolePolygonPath);
-    }
-
-    @Test
-    void defaultsLeaveExpandConnectingBothSidesFalse() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-        });
-        assertFalse(p.expandConnectingBothSides,
-                "expand-connecting-both-sides off by default");
-    }
-
-    @Test
-    void parsesExpandConnectingBothSidesFlag() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-                "--expand-connecting-both-sides",
-        });
-        assertTrue(p.expandConnectingBothSides);
-    }
-
-    @Test
-    void defaultsLeaveMaxDetourFactorByClassEmpty() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-        });
-        assertTrue(p.maxDetourFactorByClass.isEmpty(),
-                "max-detour-factor-by-class empty by default");
-    }
-
-    @Test
-    void parsesMaxDetourFactorByClassSpec() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-                "--max-detour-factor-by-class", "connecting=1.05,rural_intra=1.3",
-        });
-        assertEquals(2, p.maxDetourFactorByClass.size());
-        assertEquals(1.05, p.maxDetourFactorByClass.get("connecting"), 0.0);
-        assertEquals(1.3, p.maxDetourFactorByClass.get("rural_intra"), 0.0);
-    }
-
-    @Test
-    void defaultsLeaveFlexRelByClassEmpty() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-        });
-        assertTrue(p.flexRelByClass.isEmpty(),
-                "flex-rel-by-class empty by default");
-    }
-
-    @Test
-    void parsesFlexRelByClassSpec() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-                "--flex-rel-by-class", "rural_intra=1.0,urban_intra=0.75,connecting=0.85",
-        });
-        assertEquals(3, p.flexRelByClass.size());
-        assertEquals(1.0, p.flexRelByClass.get("rural_intra"), 0.0);
-        assertEquals(0.75, p.flexRelByClass.get("urban_intra"), 0.0);
-        assertEquals(0.85, p.flexRelByClass.get("connecting"), 0.0);
-    }
-
-    @Test
-    void defaultLeavesMaxHubWaitUnset() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-        });
-        assertTrue(Double.isNaN(p.maxHubWait),
-                "max-hub-wait unset (NaN) by default → config default 0.0 applies");
-    }
-
-    @Test
-    void parsesMaxHubWait() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-                "--max-hub-wait", "300",
-        });
-        assertEquals(300.0, p.maxHubWait, 0.0);
-    }
-
-    @Test
-    void defaultsLeaveHubSyncTwoSidedOff() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-        });
-        assertFalse(p.hubSyncTwoSided, "hub-sync-twosided off by default");
-        assertTrue(Double.isNaN(p.hubSyncMaxAdvance),
-                "hub-sync-max-advance unset (NaN) by default → config default 900 applies");
-    }
-
-    @Test
-    void parsesHubSyncTwoSidedAndMaxAdvance() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-                "--hub-sync-twosided",
-                "--hub-sync-max-advance", "600",
-        });
-        assertTrue(p.hubSyncTwoSided);
-        assertEquals(600.0, p.hubSyncMaxAdvance, 0.0);
-    }
-
-    @Test
-    void defaultLeavesPairgenTopKZero() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-        });
-        assertEquals(0, p.pairgenTopK,
-                "pairgen-top-k unset (0) by default → setter clamps to no-op (uncapped)");
-    }
-
-    @Test
-    void parsesPairgenTopK() {
-        var p = RunLyonEqasimDemandExtraction.parseArgs(new String[] {
-                "--sample", "1",
-                "--scenario-dir", "/tmp/scenario",
-                "--travel-times", "/tmp/tt.tsv",
-                "--pairgen-top-k", "32",
-        });
-        assertEquals(32, p.pairgenTopK);
-    }
+	@Test
+	void deprecatedDeterministicRoutingFlagIsNowUnknown() {
+		// Formerly a no-op (log.warn + ignore); the whole default-branch silent-drop path
+		// is gone, so this legacy flag now fails loudly like any other unknown flag.
+		assertThrows(IllegalArgumentException.class,
+				() -> RunLyonEqasimDemandExtraction.parseArgs(new String[] {
+						"--sample", "1",
+						"--scenario-dir", "/tmp/scenario",
+						"--travel-times", "/tmp/tt.tsv",
+						"--deterministic-routing",
+				}));
+	}
 }

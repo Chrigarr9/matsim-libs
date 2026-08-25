@@ -61,8 +61,8 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 	// EPSG:2154 / Lambert-93. Centroid produced by build_cutter_polygon.py.
 	private static final double FILTER_CENTER_X = 870540.4;
 	private static final double FILTER_CENTER_Y = 6526302.7;
-	/** Default trip-filter radius (km). Exposed so RunLyonEqasimDemandExtraction.CliArgs
-	 *  can seed its own default to the same canonical value, avoiding duplicated literals. */
+	/** Default trip-filter radius (km) for the legacy (non-null) {@link FilterConfig}
+	 *  path and {@link #fromEnv()}'s default. */
 	public static final double TRIP_FILTER_RADIUS_KM = 40.0;
 
 	// Exclusion zone: drop trips whose O AND D both lie within the Métropole de Lyon.
@@ -303,6 +303,15 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 		// estimator for that mode is ZeroUtilityEstimator (a stub) which makes
 		// the baseline score meaningless.
 		exMas.setExcludedTripModes(Set.of("car_passenger"));
+
+		if (filter == null) {
+			// No FilterConfig: the trip-filter focus/radius/exclusion-zone params are
+			// ordinary exmas params now (spec D4) and are set by the ExMasConfigOverlay
+			// applied AFTER createConfig() returns. Leave the class defaults in place.
+			exMas.setScoringAdapter("eqasim");
+			log.info("Demand extraction: scoringAdapter=eqasim, tripFilter=(set by exmas overlay)");
+			return;
+		}
 
 		exMas.setTripFilterRadiusKm(filter.radiusKm());
 		exMas.setTripFilterCenterX(filter.centerX());
