@@ -58,16 +58,26 @@ class ExMasConfigGroupMapParamTest {
 	@Test
 	void serializationIsDeterministic() {
 		// Order must not depend on HashMap iteration, or the fingerprint is unstable.
+		//
+		// The key sets below are chosen so that HashMap iteration order DIFFERS from
+		// sorted order, which is what makes this test able to fail. Verified on JDK 25:
+		//   {"connecting","rural_intra"} iterates [rural_intra, connecting]
+		//   {16,4}                       iterates [16, 4]
+		// Do not "simplify" these to {"a","b"} or {4,5}: both of those happen to
+		// iterate in sorted order already, so the assertions would still pass after
+		// deleting the .sorted() call and the test would prove nothing.
 		ExMasConfigGroup a = new ExMasConfigGroup();
-		a.setMaxDetourFactorByClassAsString("b=2.0,a=1.0");
+		a.setMaxDetourFactorByClassAsString("rural_intra=1.2,connecting=1.3");
 		ExMasConfigGroup b = new ExMasConfigGroup();
-		b.setMaxDetourFactorByClassAsString("a=1.0,b=2.0");
+		b.setMaxDetourFactorByClassAsString("connecting=1.3,rural_intra=1.2");
 		assertEquals(a.getMaxDetourFactorByClassAsString(),
 				b.getMaxDetourFactorByClassAsString());
-		// The equality check alone is not conclusive for a 2-key {"a","b"} map: plain
-		// (unsorted) HashMap iteration happens to land on "a=1.0,b=2.0" regardless of
-		// insertion order for this specific key pair, so that check alone would pass
-		// even without sorting. Pin the exact key-sorted string to actually prove it.
-		assertEquals("a=1.0,b=2.0", a.getMaxDetourFactorByClassAsString());
+		assertEquals("connecting=1.3,rural_intra=1.2", a.getMaxDetourFactorByClassAsString());
+
+		// Integer keys must sort numerically, not lexicographically: "16" < "4" as
+		// strings, so a string-ordered encoding would yield "16=8,4=32" here.
+		ExMasConfigGroup c = new ExMasConfigGroup();
+		c.setPruningCoverageKByDegreeAsString("16=8,4=32");
+		assertEquals("4=32,16=8", c.getPruningCoverageKByDegreeAsString());
 	}
 }
