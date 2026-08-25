@@ -154,7 +154,8 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	// Per-class maxDetourFactor override. Key = requestTag; value = factor (e.g. 1.05 for connecting,
 	// 1.3 for rural_intra). Requests whose tag is absent fall back to maxDetourFactor (global).
-	// Not XML-serialized — set programmatically (mirrors pruningCoverageKByDegree).
+	// XML-serialized via getMaxDetourFactorByClassAsString() as "key=value,key=value" (mirrors
+	// pruningCoverageKByDegree).
 	private Map<String, Double> maxDetourFactorByClass = new HashMap<>();
 
 	// Per-class relative-flexibility (rel) override. Key = requestTag (bare or "tag:ROLE",
@@ -325,7 +326,8 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	// Per-degree K override for COVERAGE_TOPK pruning.
 	// Key = output ride degree (3, 4, 5, ...). If empty, pruningCoverageK is used for all degrees.
-	// Not XML-serialized — set programmatically for K-schedule sweeps.
+	// XML-serialized via getPruningCoverageKByDegreeAsString() as "degree=K,degree=K" for
+	// K-schedule sweeps.
 	private Map<Integer, Integer> pruningCoverageKByDegree = new HashMap<>();
 
 	// Quality metric used to rank rides inside a pruning pass.
@@ -1022,6 +1024,34 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.maxDetourFactorByClass = new HashMap<>();
 	}
 
+	/**
+	 * Comma-separated {@code key=value} encoding of {@link #getMaxDetourFactorByClass()},
+	 * so the map survives a config XML round trip. Entries are sorted by key: HashMap
+	 * iteration order is unspecified, and RunFingerprint hashes this string, so an
+	 * unsorted encoding would make the extraction fingerprint unstable across JVMs.
+	 */
+	@StringGetter("maxDetourFactorByClass")
+	public String getMaxDetourFactorByClassAsString() {
+		return maxDetourFactorByClass.entrySet().stream()
+				.sorted(Map.Entry.comparingByKey())
+				.map(e -> e.getKey() + "=" + e.getValue())
+				.collect(java.util.stream.Collectors.joining(","));
+	}
+
+	@StringSetter("maxDetourFactorByClass")
+	public void setMaxDetourFactorByClassAsString(String spec) {
+		Map<String, Double> parsed = new HashMap<>();
+		for (String entry : splitSpec(spec)) {
+			String[] kv = entry.split("=", 2);
+			if (kv.length != 2) {
+				throw new IllegalArgumentException(
+						"Invalid maxDetourFactorByClass entry (expected k=v): " + entry);
+			}
+			parsed.put(kv[0].trim(), Double.parseDouble(kv[1].trim()));
+		}
+		this.maxDetourFactorByClass = parsed;
+	}
+
 	public Map<String, Double> getFlexRelativeByClass() {
 		return Collections.unmodifiableMap(flexRelativeByClass);
 	}
@@ -1295,6 +1325,38 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 
 	public void clearPruningCoverageKByDegree() {
 		this.pruningCoverageKByDegree = new HashMap<>();
+	}
+
+	/** Comma-separated {@code degree=K} encoding; see {@link #getMaxDetourFactorByClassAsString()}. */
+	@StringGetter("pruningCoverageKByDegree")
+	public String getPruningCoverageKByDegreeAsString() {
+		return pruningCoverageKByDegree.entrySet().stream()
+				.sorted(Map.Entry.comparingByKey())
+				.map(e -> e.getKey() + "=" + e.getValue())
+				.collect(java.util.stream.Collectors.joining(","));
+	}
+
+	@StringSetter("pruningCoverageKByDegree")
+	public void setPruningCoverageKByDegreeAsString(String spec) {
+		Map<Integer, Integer> parsed = new HashMap<>();
+		for (String entry : splitSpec(spec)) {
+			String[] kv = entry.split("=", 2);
+			if (kv.length != 2) {
+				throw new IllegalArgumentException(
+						"Invalid pruningCoverageKByDegree entry (expected k=v): " + entry);
+			}
+			parsed.put(Integer.parseInt(kv[0].trim()), Integer.parseInt(kv[1].trim()));
+		}
+		this.pruningCoverageKByDegree = parsed;
+	}
+
+	/** Splits a {@code k=v,k=v} spec, tolerating blanks. Empty spec -> no entries. */
+	private static java.util.List<String> splitSpec(String spec) {
+		if (spec == null || spec.isBlank()) {
+			return java.util.List.of();
+		}
+		return java.util.Arrays.stream(spec.split(","))
+				.map(String::trim).filter(s -> !s.isEmpty()).toList();
 	}
 
 	@StringGetter("pruningQualityMetric")
@@ -1879,6 +1941,11 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"List of modes requiring private vehicles for subtour constraints (comma-separated). Default: 'car,bike'");
 		map.put("maxDetourFactor",
 				"Maximum detour factor. Maximum travel time = factor * direct travel time. 1.5 means 50% longer. Default: 1.5");
+		map.put("maxDetourFactorByClass",
+				"Per-class maxDetourFactor override (comma-separated key=value, e.g. "
+				+ "'connecting=1.3,rural_intra=1.2'). Key = requestTag; value = factor. Requests "
+				+ "whose tag is absent fall back to maxDetourFactor (global). Empty = no overrides. "
+				+ "Default: \"\"");
 		map.put("maxAbsoluteDetour", "Absolute detour cap (seconds). If set, limits the max detour time regardless of factor. Default: null");
 		map.put("requestSampleSize", "Fraction of requests to keep (0.0-1.0). Default: 1.0 (all requests)");
 		map.put("requestCount", "Absolute number of requests to keep. Overrides requestSampleSize if set. Default: null");
@@ -1959,6 +2026,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("pruningCoverageK",
 				"Coverage pruner (COVERAGE_TOPK mode): per-request retention cap. Each request keeps up to "
 				+ "K ride options per degree, ranked by pruningQualityMetric. Default: 20.");
+		map.put("pruningCoverageKByDegree",
+				"Per-degree K override for COVERAGE_TOPK pruning (comma-separated degree=K, e.g. "
+				+ "'4=32,5=16'). Key = output ride degree; value = K for that degree. Degrees not "
+				+ "listed fall back to pruningCoverageK. Empty = no overrides. Default: \"\"");
 		map.put("pruningQualityMetric",
 				"Quality metric for ranking rides inside the pruner: ABS_SAVINGS (meters saved) or "
 				+ "RATIO_SAVINGS (1 - rideDistance / sum(directDistance)). Default: ABS_SAVINGS.");
