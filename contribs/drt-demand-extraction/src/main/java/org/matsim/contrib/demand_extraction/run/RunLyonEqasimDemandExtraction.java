@@ -1,12 +1,17 @@
 package org.matsim.contrib.demand_extraction.run;
 
+import java.net.URISyntaxException;
+import java.net.URL;
 import java.nio.file.Path;
 import java.util.Set;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.checkpoint.RunRecord;
+import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.scenarios.LyonEqasimScenarioFixture;
 import org.matsim.core.config.Config;
+import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.controler.Controler;
 
 /**
@@ -161,10 +166,43 @@ public class RunLyonEqasimDemandExtraction {
 		Config config = fixture.createConfig(outDir);
 		ExMasConfigOverlay.apply(config, p.exmasConfig);
 
+		// Task 20 (spec 6.2, risk row 1): the run record is written UNCONDITIONALLY -- whether or
+		// not checkpointing (--checkpoint-dir) is on -- so Python always has a fingerprint to read
+		// and never has to recompute one. Written before controler.run() so a crashed run still
+		// records what it was trying to do. No pre-existing requests CSV exists yet at this point
+		// (the single-JVM Controler path derives requests live from the population), so requests
+		// is null; network is resolved from the loaded config's own network input file.
+		ExMasConfigGroup exMasCfg = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
+		RunRecord.write(outDir, exMasCfg, null, Path.of(p.travelTimesPath),
+				resolveNetworkPath(config), "bamas");
+
 		Controler controler = fixture.createControler(config);
 		controler.run();
 
 		log.info("\n=== Lyon eqasim DRT demand extraction complete ===");
 		log.info("Output: {}", outDir.toAbsolutePath());
+	}
+
+	/**
+	 * Resolve the loaded {@link Config}'s network input file to an absolute {@link Path}, relative
+	 * to the config's own context (so a network path given relative to the cut config's directory
+	 * resolves correctly regardless of the JVM's working directory). Returns {@code null} when the
+	 * network input is unset or its URL cannot be turned into a filesystem path (e.g. a non-{@code
+	 * file:} context) -- {@link RunRecord#write} treats a {@code null} input as "omit from the
+	 * hash", matching {@link org.matsim.contrib.demand_extraction.algorithm.bamas.checkpoint.RunFingerprint}'s
+	 * existing null-path handling.
+	 */
+	private static Path resolveNetworkPath(Config config) {
+		URL networkUrl = config.network().getInputFileURL(config.getContext());
+		if (networkUrl == null) {
+			return null;
+		}
+		try {
+			return Path.of(networkUrl.toURI());
+		} catch (URISyntaxException | IllegalArgumentException e) {
+			log.warn("Could not resolve network path {} for the run record: {}",
+					networkUrl, e.getMessage());
+			return null;
+		}
 	}
 }

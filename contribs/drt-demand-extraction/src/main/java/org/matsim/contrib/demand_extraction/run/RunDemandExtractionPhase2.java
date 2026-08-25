@@ -11,6 +11,7 @@ import org.apache.logging.log4j.Logger;
 import org.matsim.contrib.demand_extraction.algorithm.AlgorithmResult;
 import org.matsim.contrib.demand_extraction.algorithm.ExMasAlgorithm;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.BamasAlgorithm;
+import org.matsim.contrib.demand_extraction.algorithm.bamas.checkpoint.RunRecord;
 import org.matsim.contrib.demand_extraction.algorithm.domain.Ride;
 import org.matsim.contrib.demand_extraction.algorithm.engine.RidePostProcessor;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
@@ -324,6 +325,13 @@ public final class RunDemandExtractionPhase2 {
 					a.travelTimesTsv(),     // --travel-times arg
 					a.networkXml());        // --network arg
 		}
+		// Task 20 (spec 6.2, risk row 1): the run record is written UNCONDITIONALLY -- whether or
+		// not --checkpoint-dir is set -- so Python always has a fingerprint to read and never has
+		// to recompute one. Written before algorithm.run() so a crashed run still records what it
+		// was trying to do. Same three routing-input paths as setFingerprintInputs() above, so a
+		// checkpointing run's manifest.txt fingerprint and this record's fingerprint agree.
+		RunRecord.write(a.outputDir, exMasCfg, layout.requestsCsv(), a.travelTimesTsv, a.networkXml,
+				"bamas");
 		// Take a heap snapshot RIGHT before the algorithm starts. Together with
 		// Phase 1's "Used heap at dump" line this gives the operator the
 		// memory-released-by-JVM-split metric:

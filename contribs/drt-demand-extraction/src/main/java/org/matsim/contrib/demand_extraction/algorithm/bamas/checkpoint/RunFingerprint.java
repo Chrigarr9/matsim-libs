@@ -239,7 +239,11 @@ public final class RunFingerprint {
 
 	// ------------------------------------------------------------------
 
-	private static String fileDigest(Path path) {
+	/**
+	 * Package-private so {@link RunRecord} can reuse it for the {@code inputs} hashes it writes
+	 * into {@code _extraction_run.json} -- one SHA-256-of-a-file helper, not two.
+	 */
+	static String fileDigest(Path path) {
 		if (path == null) {
 			return "null";
 		}
