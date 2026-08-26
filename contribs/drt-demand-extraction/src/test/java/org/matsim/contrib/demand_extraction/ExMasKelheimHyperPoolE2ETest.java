@@ -312,7 +312,16 @@ public class ExMasKelheimHyperPoolE2ETest {
 		exMasConfig.setMaxDetourFactor(1.5);
 		exMasConfig.setMaxPoolingDegree(5); // Reduced to 5 to prevent OOM with 3x population
 
-		// AGGRESSIVE PRUNING to control memory usage with large population
+		// AGGRESSIVE PRUNING to control memory usage with large population.
+		// Pinned explicitly (2026-08-26): this test previously relied on the
+		// ExMasConfigGroup class defaults for heuristicPruningEnabled (true), pruningMode
+		// (COVERAGE_TOPK), and pruningCoverageK (20) while only overriding the
+		// distance-savings gate below. The class default is now "no pruning"
+		// (heuristicPruningEnabled=false), which would make this 3x-duplicated-population
+		// test enumerate unpruned and OOM/hang.
+		exMasConfig.setHeuristicPruningEnabled(true);
+		exMasConfig.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
+		exMasConfig.setPruningCoverageK(20);
 		exMasConfig.setPruningDistanceSavingsLogScale(0.15); // Enable distance-based pruning (increasing with degree)
 		exMasConfig.setPruningDistanceSavingsMinDegree(3); // Apply distance pruning from degree 3+
 

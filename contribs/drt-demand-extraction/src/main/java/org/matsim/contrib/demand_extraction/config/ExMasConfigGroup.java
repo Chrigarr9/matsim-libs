@@ -276,15 +276,18 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// ===========================================
 	// Pruning & selection — distance gate + post-extension / extension-parent selection
 	// ===========================================
-	private boolean pruningEnabled = true;
+	// Default is NO PRUNING (2026-08-26 project-owner decision): a config that omits a
+	// pruning key must get the full ride database, never silent ranking-pruning. Any
+	// scenario/study that wants pruning must set these keys EXPLICITLY.
+	private boolean pruningEnabled = false;
 	// Degree-aware distance savings pruning (applied vs serving requests separately)
 	// requiredSaving(d) = min(maxSaving, max(0, pruningDistanceSavingsLogScale * log2(d)))
 	// Keep ride iff: rideDistance <= (1 - requiredSaving(d)) * sum(request distances)
 	// Semantics:
-	// - scale < 0 : disable this pruning gate
+	// - scale < 0 : disable this pruning gate (default — no pruning)
 	// - scale = 0 : legacy behavior (non-improving filter): rideDistance <= sum(request distances)
 	// - scale > 0 : require additional distance savings that increases with degree
-	private double pruningDistanceSavingsLogScale = 0.0;
+	private double pruningDistanceSavingsLogScale = -1.0;
 	// Clamp for requiredSaving(d) to avoid impossible constraints at high degrees.
 	private double pruningDistanceSavingsMax = 0.75;
 	// Apply distance-savings pruning only for rides with degree >= this value.
@@ -309,20 +312,22 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	private double pairKeepTopFraction = 1.0;
 
 	// Inter-degree pruning: keep only the top fraction of rides after EACH degree extension.
-	// Applied directly (no sqrt scaling). 1.0 = disabled. 0.10 = keep top 10%.
-	// Used only when pruningMode == RATIO_THRESHOLD (legacy).
-	private double interDegreeKeepFraction = 0.10;
+	// Applied directly (no sqrt scaling). 1.0 = disabled = keep everything (default).
+	// 0.10 = keep top 10%. Used only when pruningMode == RATIO_THRESHOLD.
+	private double interDegreeKeepFraction = 1.0;
 
 	// Pruner algorithm selection.
-	//   RATIO_THRESHOLD  — legacy: keep top (interDegreeKeepFraction) of each degree by savingsRatio.
+	//   RATIO_THRESHOLD  — keep top (interDegreeKeepFraction) of each degree by savingsRatio.
+	//                      Default (2026-08-26): with interDegreeKeepFraction=1.0 this is a
+	//                      no-op, i.e. no pruning, unless a study sets the fraction explicitly.
 	//   COVERAGE_TOPK    — per-request top-K by quality metric; every request keeps up to K options.
-	// Default is COVERAGE_TOPK (see .project-memory/pruning-quality-analysis-2026-04-17.md).
 	public enum PruningMode { RATIO_THRESHOLD, COVERAGE_TOPK }
-	private PruningMode pruningMode = PruningMode.COVERAGE_TOPK;
+	private PruningMode pruningMode = PruningMode.RATIO_THRESHOLD;
 
 	// Coverage pruner: per-request top-K cap. 20 is Pareto-minimal in cascade simulation
 	// (dominates legacy RATIO_THRESHOLD at interDegreeKeepFraction=0.10 on all metrics).
-	// Used only when pruningMode == COVERAGE_TOPK.
+	// Used only when pruningMode == COVERAGE_TOPK (not the default; unused unless a study
+	// explicitly opts into COVERAGE_TOPK).
 	private int pruningCoverageK = 20;
 
 	// Per-degree K override for COVERAGE_TOPK pruning.
@@ -2028,9 +2033,11 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		map.put("heuristicsProcessCount",
 				"Parallelism for Shapley/predecessor calculations. -1 = all processors, 1 = sequential. Default: -1");
 		map.put("heuristicPruningEnabled",
-				"Enable heuristic pruning during ride extension to avoid combinatorial explosion. Default: true");
+				"Enable heuristic pruning during ride extension to avoid combinatorial explosion. "
+				+ "Default: false (no pruning) — a config must set pruning keys explicitly; an "
+				+ "omitted key must never silently prune.");
 		map.put("pruningDistanceSavingsLogScale",
-				"Degree-aware distance savings pruning: requiredSaving(d)=scale*log2(d), clamped; keep iff rideDistance <= (1-requiredSaving)*sum(request distances). scale<0 disables; scale=0 matches legacy non-improving (rideDistance <= sumDistances). Default: 0.0");
+				"Degree-aware distance savings pruning: requiredSaving(d)=scale*log2(d), clamped; keep iff rideDistance <= (1-requiredSaving)*sum(request distances). scale<0 disables; scale=0 matches legacy non-improving (rideDistance <= sumDistances). Default: -1.0 (disabled)");
 		map.put("pruningDistanceSavingsMax",
 				"Maximum requiredSaving(d) clamp for distance savings pruning (0-0.99). Default: 0.9");
 		map.put("pruningDistanceSavingsMinDegree",
@@ -2052,16 +2059,18 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				+ "re-route bit-identically (cross-engine value identity, see "
 				+ "CrossEngineRoutingDeterminismTest). Default: 0.7");
 		map.put("interDegreeKeepFraction",
-				"Inter-degree pruning (legacy RATIO_THRESHOLD mode only): keep only the top fraction of rides "
+				"Inter-degree pruning (RATIO_THRESHOLD mode only): keep only the top fraction of rides "
 				+ "(by savingsRatio) after EACH degree extension. Applied directly (no sqrt scaling). "
 				+ "Survivors become base sets for next degree AND final output. "
-				+ "1.0 = disabled. 0.10 = keep top 10%. Default: 0.10");
+				+ "1.0 = disabled (keep everything). 0.10 = keep top 10%. Default: 1.0 (disabled)");
 		map.put("pruningMode",
-				"Pruner algorithm: RATIO_THRESHOLD (legacy per-degree top-X% by savingsRatio) or "
-				+ "COVERAGE_TOPK (per-request top-K by quality metric). Default: COVERAGE_TOPK.");
+				"Pruner algorithm: RATIO_THRESHOLD (per-degree top-X% by savingsRatio) or "
+				+ "COVERAGE_TOPK (per-request top-K by quality metric). Default: RATIO_THRESHOLD, "
+				+ "which together with interDegreeKeepFraction=1.0 means no pruning.");
 		map.put("pruningCoverageK",
 				"Coverage pruner (COVERAGE_TOPK mode): per-request retention cap. Each request keeps up to "
-				+ "K ride options per degree, ranked by pruningQualityMetric. Default: 20.");
+				+ "K ride options per degree, ranked by pruningQualityMetric. Unused unless pruningMode is "
+				+ "explicitly set to COVERAGE_TOPK. Default: 20.");
 		map.put("pruningCoverageKByDegree",
 				"Per-degree K override for COVERAGE_TOPK pruning (comma-separated degree=K, e.g. "
 				+ "'4=32,5=16'). Key = output ride degree; value = K for that degree. Degrees not "

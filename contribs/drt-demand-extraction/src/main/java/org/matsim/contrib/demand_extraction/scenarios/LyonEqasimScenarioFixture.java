@@ -282,18 +282,22 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 		exMas.setAlgorithmProcessCount(-1);
 		exMas.setHeuristicsProcessCount(-1);
 
-		// Heuristic pruning (Bavaria 30km baseline). Algorithm configurators
-		// applied after this method may override these.
-		exMas.setHeuristicPruningEnabled(true);
-		exMas.setPruningDistanceSavingsLogScale(0.15);
+		// Heuristic pruning: NO PRUNING by default (2026-08-26 project-owner decision).
+		// This fixture must state its pruning explicitly so an omitted key elsewhere never
+		// silently falls back to ranking-pruning. Algorithm configurators applied after this
+		// method may override these to opt a study into pruning.
+		exMas.setHeuristicPruningEnabled(false);
+		exMas.setPruningDistanceSavingsLogScale(-1.0);
 		exMas.setPruningDistanceSavingsMax(0.75);
 		exMas.setPruningDistanceSavingsMinDegree(2);
 
 		exMas.setMaxSuccessors(50);
 
-		// Post-extension pruning (Pareto-minimal coverage TopK; cascade analysis
-		// 2026-04-17). Algorithm configurators applied after this method may override.
-		exMas.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
+		// Post-extension pruning: RATIO_THRESHOLD + interDegreeKeepFraction=1.0 (class
+		// default) is the no-op/no-pruning combination. pruningCoverageK is left at 20 but
+		// is unused in RATIO_THRESHOLD mode. Algorithm configurators applied after this
+		// method may override to opt in to COVERAGE_TOPK.
+		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 		exMas.setPruningCoverageK(20);
 		exMas.setPruningQualityMetric(ExMasConfigGroup.PruningQualityMetric.ABS_SAVINGS);
 

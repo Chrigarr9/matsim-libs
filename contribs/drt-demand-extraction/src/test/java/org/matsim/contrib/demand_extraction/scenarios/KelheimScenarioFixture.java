@@ -109,6 +109,18 @@ public class KelheimScenarioFixture implements ExMasScenarioFixture {
 		exMasConfig.setMaxPoolingDegree(10);
 
 		exMasConfig.setPtOptimizeDepartureTime(true);
+
+		// Pruning: state explicitly, pinned to this fixture's pre-2026-08-26 EFFECTIVE
+		// behavior (it never set these before and silently inherited the old
+		// ExMasConfigGroup class defaults: heuristicPruningEnabled=true,
+		// pruningDistanceSavingsLogScale=0.0, pruningMode=COVERAGE_TOPK,
+		// pruningCoverageK=20). The class default is now "no pruning"
+		// (heuristicPruningEnabled=false), so an omitted key here would make this fixture's
+		// full-Kelheim-scenario tests enumerate unpruned and run orders of magnitude slower.
+		exMasConfig.setHeuristicPruningEnabled(true);
+		exMasConfig.setPruningDistanceSavingsLogScale(0.0);
+		exMasConfig.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
+		exMasConfig.setPruningCoverageK(20);
 	}
 
 	@Override
