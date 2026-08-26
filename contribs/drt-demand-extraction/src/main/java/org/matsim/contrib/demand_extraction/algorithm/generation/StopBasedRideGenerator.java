@@ -20,6 +20,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.stops.StopFinder;
 import org.matsim.contrib.demand_extraction.algorithm.stops.WalkingDistanceCalculator;
+import org.matsim.contrib.demand_extraction.algorithm.validation.BookingHorizonRule;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
@@ -59,6 +60,9 @@ public final class StopBasedRideGenerator {
 	private final AtomicInteger failedWalkDistanceExceeded = new AtomicInteger();
 	private final AtomicInteger failedBudgetExceeded = new AtomicInteger();
 	private final AtomicInteger failedWaitTimeExceeded = new AtomicInteger();
+	// Booking-time rule (Task 4): rejected because the ride would depart before a
+	// spontaneous member has booked. <= 0 horizon disables the rule (legacy behaviour).
+	private final AtomicInteger failedBookingHorizon = new AtomicInteger();
 	private final AtomicInteger skippedSingleRides = new AtomicInteger();
 	private final AtomicInteger skippedHubLegRides = new AtomicInteger();
 	private final AtomicLong totalAccessWalkDistance = new AtomicLong();
@@ -207,6 +211,18 @@ public final class StopBasedRideGenerator {
 
 		DrtRequest[] requests = doorToDoor.getRequests();
 		int degree = doorToDoor.getDegree();
+
+		// Booking-time rule (Task 4): the stop-based ride departs at the same physical
+		// moment as the source door-to-door ride (Step 8 below re-stamps startTime from
+		// doorToDoor.getStartTime()), so that is the rideStartTime to check. horizon<=0
+		// makes BookingHorizonRule.isAdmissible a no-op — byte-identical legacy behaviour.
+		if (!BookingHorizonRule.isAdmissible(doorToDoor.getStartTime(), requests,
+				config.getSpontaneousBookingHorizon())) {
+			failedBookingHorizon.incrementAndGet();
+			log.trace("Ride {} rejected: booking horizon violated (start={})",
+					doorToDoor.getIndex(), doorToDoor.getStartTime());
+			return null;
+		}
 
 		// Step 1: Collect passenger origins and calculate max walk distances
 		List<Coord> origins = new ArrayList<>(degree);
@@ -376,6 +392,17 @@ public final class StopBasedRideGenerator {
 
 		DrtRequest[] requests = doorToDoor.getRequests();
 		int degree = doorToDoor.getDegree();
+
+		// Booking-time rule (Task 4): same check as the legacy path (see there for
+		// rationale); horizon<=0 is a no-op, preserving legacy behaviour byte-identical.
+		if (!BookingHorizonRule.isAdmissible(doorToDoor.getStartTime(), requests,
+				config.getSpontaneousBookingHorizon())) {
+			failedBookingHorizon.incrementAndGet();
+			log.trace("Ride {} rejected: booking horizon violated (start={}, budget-aware)",
+					doorToDoor.getIndex(), doorToDoor.getStartTime());
+			return null;
+		}
+
 		double hardCap = config.getMaxWalkDistanceMeters();
 		double[] remainingBudgetsD2D = doorToDoor.getRemainingBudgets();
 		double[] passengerTravelTimesD2D = doorToDoor.getPassengerTravelTimes();
@@ -614,6 +641,7 @@ public final class StopBasedRideGenerator {
 		failedWalkDistanceExceeded.set(0);
 		failedBudgetExceeded.set(0);
 		failedWaitTimeExceeded.set(0);
+		failedBookingHorizon.set(0);
 		skippedSingleRides.set(0);
 		skippedHubLegRides.set(0);
 		totalAccessWalkDistance.set(0);
@@ -634,6 +662,7 @@ public final class StopBasedRideGenerator {
 		log.info("  Failed - walk distance exceeded: {}", failedWalkDistanceExceeded.get());
 		log.info("  Failed - wait time exceeded: {}", failedWaitTimeExceeded.get());
 		log.info("  Failed - budget exceeded: {}", failedBudgetExceeded.get());
+		log.info("  Failed - booking horizon violated: {}", failedBookingHorizon.get());
 
 		long passengers = totalPassengers.get();
 		if (passengers > 0) {
@@ -699,5 +728,10 @@ public final class StopBasedRideGenerator {
 	/** Number of D2D rides excluded from S2S conversion because they contain hub-leg copies (HYP-8). */
 	int getSkippedHubLegRides() {
 		return skippedHubLegRides.get();
+	}
+
+	/** Number of D2D rides rejected because the stop-based ride would depart before a spontaneous member booked. */
+	int getFailedBookingHorizon() {
+		return failedBookingHorizon.get();
 	}
 }

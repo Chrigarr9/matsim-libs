@@ -68,12 +68,18 @@ final class HyperPoolStage2TestFixtures {
 
     static DrtRequest request(int index, String personId, double requestTime,
             double maxWaitTime) {
+        return request(index, personId, requestTime, maxWaitTime, /* isCommute= */ true);
+    }
+
+    /** Full-control overload allowing a spontaneous (non-mandatory) request. */
+    static DrtRequest request(int index, String personId, double requestTime,
+            double maxWaitTime, boolean isCommute) {
         return DrtRequest.builder()
                 .index(index)
                 .personId(Id.createPersonId(personId))
                 .groupId(personId + "_g0")
                 .tripIndex(0)
-                .isCommute(true)
+                .isCommute(isCommute)
                 .isEducation(false)
                 .budget(5.0)
                 .bestModeScore(-2.0)
@@ -129,11 +135,17 @@ final class HyperPoolStage2TestFixtures {
      */
     static List<Ride> twoRideCluster(double pax0AccessWalk,
             double pax1RequestTime, double pax1MaxWait) {
+        return twoRideCluster(pax0AccessWalk, pax1RequestTime, pax1MaxWait, /* pax1IsCommute= */ true);
+    }
+
+    /** Full-control overload allowing pax1 to be a spontaneous (non-mandatory) request. */
+    static List<Ride> twoRideCluster(double pax0AccessWalk,
+            double pax1RequestTime, double pax1MaxWait, boolean pax1IsCommute) {
         StopLocation p1 = stop("p1", 0.0);
         StopLocation p2 = stop("p2", 500.0);
         StopLocation d = stop("d", 1000.0); // SHARED instance -> no dropoff dedup ambiguity
         DrtRequest r0 = request(0, "pax0", T0, 0.0);
-        DrtRequest r1 = request(1, "pax1", pax1RequestTime, pax1MaxWait);
+        DrtRequest r1 = request(1, "pax1", pax1RequestTime, pax1MaxWait, pax1IsCommute);
         List<Ride> rides = new ArrayList<>();
         rides.add(s2sRide(0, r0, p1, d, T0, pax0AccessWalk, 0.0));
         rides.add(s2sRide(1, r1, p2, d, T0 + 60.0, 0.0, 0.0));

@@ -27,6 +27,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.StopSequence;
 import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
 import org.matsim.contrib.demand_extraction.algorithm.generation.WalkBudgetProvider;
+import org.matsim.contrib.demand_extraction.algorithm.validation.BookingHorizonRule;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
@@ -105,6 +106,10 @@ public class HyperPoolGenerator {
     private int failedTemporalInfeasible = 0;
     private int failedWaitTimeExceeded = 0;
     private int failedCapacityExceeded = 0;
+    // Booking-time rule (Task 4): cluster rejected because the bundle would depart
+    // before a spontaneous member has booked. <= 0 horizon disables the rule
+    // (legacy behaviour, see BookingHorizonRule.isAdmissible).
+    private int failedBookingHorizon = 0;
     private int totalHyperPooledRides = 0;
     private int totalPassengersHyperPooled = 0;
     private double totalVktHyperPooled = 0.0;
@@ -1077,6 +1082,20 @@ public class HyperPoolGenerator {
 
         // Build passenger arrays
         DrtRequest[] requests = allRequests.toArray(new DrtRequest[0]);
+
+        // Booking-time rule (Task 4): rideStartTime is the physical moment the vehicle
+        // first departs to serve the bundle — the same `startTime` computed above (earliest
+        // departure among the cluster's source S2S rides) and stamped onto the built
+        // HyperPooledRide below. horizon<=0 makes BookingHorizonRule.isAdmissible a no-op,
+        // preserving legacy behaviour byte-identical. Rejected members are not lost: the
+        // un-bundled source S2S rides are exported independently regardless of clustering
+        // outcome (see HyperPoolRideStore), the same fallback every other rejection reason
+        // here already relies on.
+        if (!BookingHorizonRule.isAdmissible(startTime, requests, config.getSpontaneousBookingHorizon())) {
+            failedBookingHorizon++;
+            log.debug("Cluster rejected: booking horizon violated (startTime={})", startTime);
+            return null;
+        }
         StopLocation[] stopSequenceArray = sequence.getStops().toArray(new StopLocation[0]);
         int[] boardingIndices = new int[passengerCount];
         int[] alightingIndices = new int[passengerCount];
@@ -1243,6 +1262,7 @@ public class HyperPoolGenerator {
         failedTemporalInfeasible = 0;
         failedWaitTimeExceeded = 0;
         failedCapacityExceeded = 0;
+        failedBookingHorizon = 0;
         totalHyperPooledRides = 0;
         totalPassengersHyperPooled = 0;
         totalVktHyperPooled = 0.0;
@@ -1263,6 +1283,7 @@ public class HyperPoolGenerator {
         log.info("Clusters rejected - temporal infeasible: {}", failedTemporalInfeasible);
         log.info("Clusters rejected - wait time exceeded: {}", failedWaitTimeExceeded);
         log.info("Clusters rejected - capacity exceeded: {}", failedCapacityExceeded);
+        log.info("Clusters rejected - booking horizon violated: {}", failedBookingHorizon);
         log.info("Total hyper-pooled rides: {}", totalHyperPooledRides);
         log.info("Total passengers hyper-pooled: {}", totalPassengersHyperPooled);
 
@@ -1316,6 +1337,11 @@ public class HyperPoolGenerator {
     /** Clusters rejected because peak occupancy exceeds hyperPoolMaxVehicleCapacity (HYP-5). */
     public int getFailedCapacityExceeded() {
         return failedCapacityExceeded;
+    }
+
+    /** Clusters rejected because the bundle would depart before a spontaneous member booked. */
+    public int getFailedBookingHorizon() {
+        return failedBookingHorizon;
     }
 
     /**

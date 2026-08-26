@@ -290,6 +290,20 @@ final class StopBasedTestFixtures {
             BudgetValidator validator,
             WalkingDistanceCalculator walkCalc,
             WalkBudgetProvider walkBudgetProvider) {
+        return buildGenerator(buildExMasConfig(enableBudgetAware), stopFinder, validator,
+                walkCalc, walkBudgetProvider);
+    }
+
+    /**
+     * Full-control overload taking a caller-supplied {@link ExMasConfigGroup} (e.g. with
+     * {@code spontaneousBookingHorizon} set) instead of building one internally.
+     */
+    static StopBasedRideGenerator buildGenerator(
+            ExMasConfigGroup exMasConfig,
+            StopFinder stopFinder,
+            BudgetValidator validator,
+            WalkingDistanceCalculator walkCalc,
+            WalkBudgetProvider walkBudgetProvider) {
 
         // Use createWithRouting (real network needed for link lookups in the walk calculator),
         // but pre-populate the "stop"→"dropoff" segment so the cache never falls through to
@@ -305,8 +319,6 @@ final class StopBasedTestFixtures {
                 Id.createLinkId("stop"),
                 Id.createLinkId("dropoff"),
                 new TravelSegment(IN_VEHICLE_TIME_S, 1000.0, 0.0));
-
-        ExMasConfigGroup exMasConfig = buildExMasConfig(enableBudgetAware);
 
         return new StopBasedRideGenerator(
                 networkCache,
