@@ -137,10 +137,15 @@ public class DrtRequestFactory {
 		// cohort downstream.
 		String hubSetPath = exmasConfig.getHubSetGeoJsonPath();
 		FleetSide fleetSide = exmasConfig.getFleetSide();
-		// Paper-2 merged run: when both-sides expansion is on, fleetSide is
-		// legitimately null (the hub fan-out emits BOTH leg sides per hub via two
-		// internal expandConnecting calls, and off-fleet drop is skipped so both
-		// intra zones are kept).
+		// Paper-2 merged run: when both-sides expansion is on, fleetSide MAY be
+		// null (the hub fan-out emits BOTH leg sides per hub via two internal
+		// expandConnecting calls, off-fleet drop is a no-op, both intra zones
+		// are kept) OR non-null (Task 6, 2026-08-25 plan revised 2026-08-26:
+		// fleetSide=RURAL together with bothSides=true reuses the existing
+		// off-fleet tag-drop below to remove urban_intra from the merged run,
+		// while both-sides expansion below keys on the bothSides flag alone --
+		// see the "sides" selection in applyVirtualExpansion, which ignores
+		// fleetSide entirely once bothSides is true).
 		boolean bothSides = exmasConfig.isExpandConnectingBothSides();
 		if (hubSetPath != null && fleetSide == null && !bothSides) {
 			throw new IllegalStateException(
@@ -314,6 +319,10 @@ public class DrtRequestFactory {
 					// rural_intra is dropped. This is what makes the two-run
 					// partition exact (connecting is kept + expanded below;
 					// fleetSide == null leaves everything in place, Kelheim path).
+					// Task 6 (2026-08-25 plan): also reused, unmodified, by the merged
+					// bothSides=true run with fleetSide=RURAL to drop urban_intra
+					// wholesale while keeping rural_intra and both-sides connecting
+					// expansion intact.
 					if (isOffFleetTag(tagPreCheck, fleetSide)) {
 						filteredByOffFleetTag++;
 						continue;
@@ -347,8 +356,13 @@ public class DrtRequestFactory {
 					}
 				}
 
-				// Get group ID for this trip
-				String groupId = tripToGroupId.getOrDefault(tripIdx, person.getId().toString() + "_trip_" + tripIdx);
+				// Get group ID for this trip. D4' (Paper-2, 2026-08-25 plan Task 5):
+				// with spontaneousSingletonChains ON, a non-mandatory (non-commute,
+				// non-education) trip never joins a subtour chain group -- it is
+				// booked ad hoc, leg by leg, and carries no day-ahead return
+				// guarantee. Flag OFF (default) is byte-identical to today.
+				String groupId = resolveGroupId(tripToGroupId, tripIdx, person.getId().toString(),
+						exmasConfig.isSpontaneousSingletonChains(), isCommute, isEducation);
 
 				// Get PT accessibility metrics for this trip
 				Map<Integer, double[]> personPtMetrics = ptAccessibilityMetrics.get(person.getId());
@@ -487,6 +501,28 @@ public class DrtRequestFactory {
 			if (tagLevel != null) return tagLevel;
 		}
 		return globalFactor;
+	}
+
+	/**
+	 * D4' (Paper-2, 2026-08-25 plan Task 5): group-ID resolution for a single trip.
+	 * Static for testability (mirrors {@link #resolveClassFactor}).
+	 *
+	 * <p>With {@code spontaneousSingletonChains} ON, a non-mandatory trip (neither
+	 * commute nor education) never joins its {@link ChainIdentifier}-assigned subtour
+	 * group: it always gets the singleton fallback form
+	 * {@code personId + "_trip_" + tripIdx}, matching the existing no-chain fallback —
+	 * spontaneous trips are booked ad hoc, leg by leg, and carry no day-ahead return
+	 * guarantee. Flag OFF (default), or a commute/education trip regardless of the
+	 * flag, keeps the {@link ChainIdentifier} lookup (byte-identical to before this
+	 * change).
+	 */
+	static String resolveGroupId(Map<Integer, String> tripToGroupId, int tripIdx,
+			String personId, boolean spontaneousSingletonChains, boolean isCommute, boolean isEducation) {
+		String fallbackGroupId = personId + "_trip_" + tripIdx;
+		if (spontaneousSingletonChains && !isCommute && !isEducation) {
+			return fallbackGroupId;
+		}
+		return tripToGroupId.getOrDefault(tripIdx, fallbackGroupId);
 	}
 
 	double[] budgetDerivedCaps(double budget, Person person, DrtRequest draft) {
