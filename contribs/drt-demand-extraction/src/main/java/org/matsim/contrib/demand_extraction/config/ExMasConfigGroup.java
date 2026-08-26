@@ -162,7 +162,8 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// resolved most-specific-first like maxDetourFactorByClass); value = rel factor applied
 	// to the request's absolute detour cap when deriving the departure/arrival time windows.
 	// Requests whose tag is absent fall back to the FlexibilityCalculator maps (default 0.5).
-	// Not XML-serialized — set programmatically (mirrors maxDetourFactorByClass).
+	// XML-serialized via getFlexRelativeByClassAsString() as "key=value,key=value" (mirrors
+	// maxDetourFactorByClass).
 	private Map<String, Double> flexRelativeByClass = new HashMap<>();
 
 	private Integer maxAbsoluteDetour = null; // Absolute detour cap (seconds). If set, limits the max detour time.
@@ -1064,6 +1065,34 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.flexRelativeByClass = new HashMap<>();
 	}
 
+	/**
+	 * Comma-separated {@code key=value} encoding of {@link #getFlexRelativeByClass()},
+	 * so the map survives a config XML round trip. Entries are sorted by key: HashMap
+	 * iteration order is unspecified, and RunFingerprint hashes this string, so an
+	 * unsorted encoding would make the extraction fingerprint unstable across JVMs.
+	 */
+	@StringGetter("flexRelativeByClass")
+	public String getFlexRelativeByClassAsString() {
+		return flexRelativeByClass.entrySet().stream()
+				.sorted(Map.Entry.comparingByKey())
+				.map(e -> e.getKey() + "=" + e.getValue())
+				.collect(java.util.stream.Collectors.joining(","));
+	}
+
+	@StringSetter("flexRelativeByClass")
+	public void setFlexRelativeByClassAsString(String spec) {
+		Map<String, Double> parsed = new HashMap<>();
+		for (String entry : splitSpec(spec)) {
+			String[] kv = entry.split("=", 2);
+			if (kv.length != 2) {
+				throw new IllegalArgumentException(
+						"Invalid flexRelativeByClass entry (expected k=v): " + entry);
+			}
+			parsed.put(kv[0].trim(), Double.parseDouble(kv[1].trim()));
+		}
+		this.flexRelativeByClass = parsed;
+	}
+
 	@StringGetter("maxAbsoluteDetour")
 	public Integer getMaxAbsoluteDetour() {
 		return maxAbsoluteDetour;
@@ -1946,6 +1975,13 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				+ "'connecting=1.3,rural_intra=1.2'). Key = requestTag; value = factor. Requests "
 				+ "whose tag is absent fall back to maxDetourFactor (global). Empty = no overrides. "
 				+ "Default: \"\"");
+		map.put("flexRelativeByClass",
+				"Per-class relative-flexibility (rel) override (comma-separated key=value, e.g. "
+				+ "'connecting=0.3,rural_intra=0.6'). Key = requestTag (bare or 'tag:ROLE', resolved "
+				+ "most-specific-first like maxDetourFactorByClass); value = rel factor applied to the "
+				+ "request's absolute detour cap when deriving the departure/arrival time windows. "
+				+ "Requests whose tag is absent fall back to the FlexibilityCalculator maps (default "
+				+ "0.5). Empty = no overrides. Default: \"\"");
 		map.put("maxAbsoluteDetour", "Absolute detour cap (seconds). If set, limits the max detour time regardless of factor. Default: null");
 		map.put("requestSampleSize", "Fraction of requests to keep (0.0-1.0). Default: 1.0 (all requests)");
 		map.put("requestCount", "Absolute number of requests to keep. Overrides requestSampleSize if set. Default: null");
