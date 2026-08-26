@@ -918,7 +918,7 @@ public class DrtRequestFactory {
 					List<DrtRequest> copies = expandConnecting(
 							r, hubs, side, isInsideMetropole, network, router,
 							transferBuffer, maxHubWait, hubSyncTwoSided, hubSyncMaxAdvanceSeconds,
-							exmasConfig.getHubTopK(), dropStats);
+							exmasConfig.getHubTopK(), exmasConfig.isHubSyncWindowed(), dropStats);
 					// With v2 ACCESS variants a hub may yield >1 copy, so guard the
 					// "dropped at expansion" diagnostic against going negative.
 					int droppedExpansion = Math.max(0, hubs.size() - copies.size());
@@ -1162,6 +1162,33 @@ public class DrtRequestFactory {
 	}
 
 	/**
+	 * Convenience overload with explicit hubTopK but no D-W1/D-W6 window-sync
+	 * ({@code hubSyncWindowed = false}). Kept so the pre-Task-W3 call
+	 * sites/tests that pass {@code (… hubSyncMaxAdvanceSeconds, hubTopK,
+	 * stats)} compile and behave unchanged — the "previous signature as a
+	 * forwarder" from the Task W3 plan, threaded the same way Task W2
+	 * threaded {@code hubTopK}.
+	 */
+	static List<DrtRequest> expandConnecting(
+			DrtRequest original,
+			List<HubSetLoader.Hub> hubs,
+			FleetSide fleetSide,
+			Predicate<Coord> isInsideMetropole,
+			Network network,
+			LegRouter legRouter,
+			double transferBufferSeconds,
+			double maxHubWaitSeconds,
+			boolean hubSyncTwoSided,
+			double hubSyncMaxAdvanceSeconds,
+			int hubTopK,
+			ExpansionDropStats stats) {
+		return expandConnecting(original, hubs, fleetSide, isInsideMetropole,
+				network, legRouter, transferBufferSeconds, maxHubWaitSeconds,
+				hubSyncTwoSided, hubSyncMaxAdvanceSeconds, hubTopK,
+				/* hubSyncWindowed */ false, stats);
+	}
+
+	/**
 	 * @param maxHubWaitSeconds Paper-2 hub-sync v1: width (s) of the
 	 *        hub-departure window for CONTINUATION legs. {@code <= 0.0} reproduces
 	 *        the legacy fixed-buffer split exactly (backward-compat); {@code > 0.0}
@@ -1196,6 +1223,24 @@ public class DrtRequestFactory {
 	 *        top-K cut; hubs cut by the ranking increment
 	 *        {@link ExpansionDropStats#droppedByTopK} and record a
 	 *        {@code "topk_dropped"} detour row instead of being emitted.
+	 * @param hubSyncWindowed D-W1 + D-W6 (Task W3, ACCESS side only for now):
+	 *        when {@code true}, the ACCESS branch emits exactly ONE request
+	 *        per (trip, hub) at the nominal {@code requestTime} instead of
+	 *        the {@code hubSyncTwoSided} variant grid. The departure
+	 *        flexibility the variants enumerated becomes the request's
+	 *        {@code earliestDeparture} window instead: widened on the early
+	 *        side by {@code hubSyncMaxAdvanceSeconds}, combined ADDITIVELY
+	 *        with the existing budget-flex path (the more restrictive, i.e.
+	 *        earlier, of the two wins — {@code min}). {@code latestArrival}
+	 *        stays the unchanged person-anchored full-slack backout
+	 *        ({@code original.latestArrival - secondLeg - buffer}); per
+	 *        D-W6 there is deliberately NO {@code maxHubWaitSeconds} cap
+	 *        here — the wait cap is enforced solely by the MIP nesting
+	 *        constraint against the actual access arrival. {@code false}
+	 *        (default) leaves {@code hubSyncTwoSided}'s variant grid (or the
+	 *        single-leg v1 path) completely unchanged; takes precedence over
+	 *        {@code hubSyncTwoSided} when both are set. Has NO effect on the
+	 *        CONTINUATION branch (Task W4).
 	 */
 	static List<DrtRequest> expandConnecting(
 			DrtRequest original,
@@ -1209,6 +1254,7 @@ public class DrtRequestFactory {
 			boolean hubSyncTwoSided,
 			double hubSyncMaxAdvanceSeconds,
 			int hubTopK,
+			boolean hubSyncWindowed,
 			ExpansionDropStats stats) {
 		if (hubSyncTwoSided && maxHubWaitSeconds <= 0.0) {
 			throw new IllegalArgumentException(
@@ -1375,6 +1421,60 @@ public class DrtRequestFactory {
 				// leg time (routed at the original departure) exactly as today:
 				//   legLatestArrival = original.latestArrival − secondLeg − buffer.
 				double legLatestArrival = original.latestArrival - secondLeg[0] - transferBufferSeconds;
+
+				if (hubSyncWindowed) {
+					// D-W1 + D-W6 (Task W3): ONE request per (trip, hub) at the
+					// nominal requestTime — the KPI anchor, never shifted. The
+					// departure flexibility that the hubSyncTwoSided variant grid
+					// enumerated as discrete copies becomes the request's
+					// earliestDeparture window instead: widen the EARLY side by
+					// hubSyncMaxAdvanceSeconds, combined ADDITIVELY with the
+					// existing budget-flex path — if original.earliestDeparture is
+					// already earlier than requestTime (budget flex), the min of
+					// the two wins (the more restrictive/earlier bound survives).
+					// latestArrival is legLatestArrival, computed above exactly as
+					// today (person-anchored full-slack backout) — deliberately NO
+					// maxHubWaitSeconds cap here (D-W6): the wait cap lives solely
+					// in the MIP nesting constraint, never in the request window.
+					// directTravelTime/directDistance reuse pass 1's nominal-departure
+					// routing (firstLeg) — no re-routing, no seenAnchors, no offset loop.
+					double windowedEarliestDeparture = Math.min(
+							original.earliestDeparture,
+							original.requestTime - hubSyncMaxAdvanceSeconds);
+
+					// Temporal feasibility, window-aware. Every other emission branch
+					// guards against a hub that cannot fit; the windowed branch must too,
+					// or it emits requests whose latestArrival precedes their earliest
+					// possible arrival. The bound is the EARLIEST departure in the window,
+					// not the nominal one: a hub that is infeasible at requestTime but
+					// reachable with advance is exactly what D-W1 windowing exists to
+					// rescue, so a nominal-only check would defeat the feature. Leg time
+					// is pass 1's nominal-departure routing (no re-routing in windowed
+					// mode by design), so this is an estimate at the window's early edge.
+					if (windowedEarliestDeparture + firstLeg[0] > legLatestArrival) {
+						if (stats != null) {
+							stats.temporalInfeasible++;
+							recordDetour(stats, original, fleetSide, hub, ruralLegTime, urbanLegTime,
+									transferBufferSeconds, false, "temporal_infeasible");
+						}
+						continue;
+					}
+					b.requestTime(original.requestTime)
+					 .earliestDeparture(windowedEarliestDeparture)
+					 .directTravelTime(firstLeg[0]).directDistance(firstLeg[1])
+					 .latestArrival(legLatestArrival)
+					 .hubLegRole(DrtRequest.HubLegRole.ACCESS_LEG)
+					 .transferWaitSeconds(0.0);
+					DrtRequest windowedReq = b.build();
+					windowedReq.setScoringContext(original.getScoringContext());
+					copies.add(windowedReq);
+					if (stats != null) {
+						stats.kept++;
+						recordDetour(stats, original, fleetSide, hub, ruralLegTime, urbanLegTime,
+								transferBufferSeconds, true, "kept");
+					}
+					continue;
+				}
 
 				// Variant offsets. v1 (twosided off) → only offset 0, departing at
 				// the original requestTime → byte-identical to today. v2 (twosided
