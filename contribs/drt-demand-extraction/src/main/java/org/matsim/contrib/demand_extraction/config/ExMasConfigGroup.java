@@ -166,6 +166,17 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// maxDetourFactorByClass).
 	private Map<String, Double> flexRelativeByClass = new HashMap<>();
 
+	// Booking horizon for spontaneous (non-commute, non-education) requests, in seconds.
+	// A ride is admissible only if it starts no earlier than requestTime - horizon for
+	// every spontaneous member; mandatory (commute/education) members never bind this
+	// rule (treated as prebooked). <= 0 disables the rule entirely (legacy, byte-identical).
+	private double spontaneousBookingHorizon = 0.0;
+
+	// When true, a spontaneous request that fails the spontaneousBookingHorizon check is
+	// still emitted as a singleton (degree-1) chain instead of being dropped. Only
+	// meaningful when spontaneousBookingHorizon > 0.
+	private boolean spontaneousSingletonChains = false;
+
 	private Integer maxAbsoluteDetour = null; // Absolute detour cap (seconds). If set, limits the max detour time.
 
 	// Sampling settings
@@ -677,6 +688,10 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	 * {@code maxHubWaitSeconds > 0} when enabled (the step must be positive to
 	 * enumerate variants). Has NO effect on CONTINUATION legs (already wide via
 	 * {@link #maxHubWaitSeconds}).
+	 *
+	 * <p><b>Keeps its legacy meaning</b> when {@link #hubSyncWindowed} is {@code false}
+	 * (the default). When {@code hubSyncWindowed == true}, this flag is IGNORED - the
+	 * window-based hub sync mechanism replaces the sync-variant-copy ladder entirely.
 	 */
 	private boolean hubSyncTwoSided = false;
 
@@ -689,6 +704,24 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	 * {@code hubSyncTwoSided == false}.
 	 */
 	private double hubSyncMaxAdvanceSeconds = 900.0;
+
+	/**
+	 * Paper-2 window-based hub sync (design 2026-08-25): when {@code true}, replaces
+	 * the sync-variant-copy hub mechanism ({@link #hubSyncTwoSided}) with a single
+	 * windowed ACCESS/CONTINUATION leg pair per hub, deferring sync-slot alignment to
+	 * the MIP instead of enumerating variant rides. {@link #hubSyncTwoSided} is
+	 * ignored while this is {@code true}. Default {@code false} is byte-identical to
+	 * today's variant-copy behavior.
+	 */
+	private boolean hubSyncWindowed = false;
+
+	/**
+	 * Paper-2 hub top-K (D-W5): restricts each connecting request to at most the K
+	 * cheapest hubs (ranked by summed access+continuation direct travel time),
+	 * dropping the rest before emission. {@code 0} = unlimited (legacy, all hubs
+	 * emitted, byte-identical). Dissertation runs set 3.
+	 */
+	private int hubTopK = 0;
 
     public ExMasConfigGroup() {
         super(GROUP_NAME);
@@ -1197,7 +1230,27 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	public void setSearchHorizon(double searchHorizon) {
 		this.searchHorizon = searchHorizon;
 	}
-	
+
+	@StringGetter("spontaneousBookingHorizon")
+	public double getSpontaneousBookingHorizon() {
+		return spontaneousBookingHorizon;
+	}
+
+	@StringSetter("spontaneousBookingHorizon")
+	public void setSpontaneousBookingHorizon(double spontaneousBookingHorizon) {
+		this.spontaneousBookingHorizon = spontaneousBookingHorizon;
+	}
+
+	@StringGetter("spontaneousSingletonChains")
+	public boolean isSpontaneousSingletonChains() {
+		return spontaneousSingletonChains;
+	}
+
+	@StringSetter("spontaneousSingletonChains")
+	public void setSpontaneousSingletonChains(boolean spontaneousSingletonChains) {
+		this.spontaneousSingletonChains = spontaneousSingletonChains;
+	}
+
 	@StringGetter("maxPoolingDegree")
 	public int getMaxPoolingDegree() {
 		return maxPoolingDegree;
@@ -1933,6 +1986,26 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.hubSyncMaxAdvanceSeconds = hubSyncMaxAdvanceSeconds;
 	}
 
+	@StringGetter("hubSyncWindowed")
+	public boolean isHubSyncWindowed() {
+		return hubSyncWindowed;
+	}
+
+	@StringSetter("hubSyncWindowed")
+	public void setHubSyncWindowed(boolean hubSyncWindowed) {
+		this.hubSyncWindowed = hubSyncWindowed;
+	}
+
+	@StringGetter("hubTopK")
+	public int getHubTopK() {
+		return hubTopK;
+	}
+
+	@StringSetter("hubTopK")
+	public void setHubTopK(int hubTopK) {
+		this.hubTopK = hubTopK;
+	}
+
 	@StringGetter("requestClassificationsPath")
 	public String getRequestClassificationsPath() {
 		return requestClassificationsPath;
@@ -1987,6 +2060,14 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				+ "request's absolute detour cap when deriving the departure/arrival time windows. "
 				+ "Requests whose tag is absent fall back to the FlexibilityCalculator maps (default "
 				+ "0.5). Empty = no overrides. Default: \"\"");
+		map.put("spontaneousBookingHorizon",
+				"Booking horizon for spontaneous (non-commute, non-education) requests in seconds. "
+				+ "A ride is admissible only if it starts no earlier than requestTime - horizon for "
+				+ "every spontaneous member. <= 0 disables the rule (legacy). Default: 0");
+		map.put("spontaneousSingletonChains",
+				"When true, a spontaneous request that fails the spontaneousBookingHorizon check is "
+				+ "still emitted as a singleton (degree-1) chain instead of being dropped. Only "
+				+ "meaningful when spontaneousBookingHorizon > 0. Default: false");
 		map.put("maxAbsoluteDetour", "Absolute detour cap (seconds). If set, limits the max detour time regardless of factor. Default: null");
 		map.put("requestSampleSize", "Fraction of requests to keep (0.0-1.0). Default: 1.0 (all requests)");
 		map.put("requestCount", "Absolute number of requests to keep. Overrides requestSampleSize if set. Default: null");
@@ -2185,6 +2266,17 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				+ "so the urban shareability graph enumerates pooled continuation bundles at different "
 				+ "departure slots; transferWaitSeconds is set to 0 (served wait realized by bundling). "
 				+ "Default 0.0 = byte-identical to the legacy fixed-buffer behavior.");
+
+		map.put("hubSyncWindowed",
+				"Paper-2 window-based hub sync: when true, replaces the sync-variant-copy hub "
+				+ "mechanism (hubSyncTwoSided) with a single windowed ACCESS/CONTINUATION leg pair "
+				+ "per hub, deferring sync-slot alignment to the MIP. hubSyncTwoSided is ignored "
+				+ "while this is true. Default: false (legacy variant-copy behavior).");
+
+		map.put("hubTopK",
+				"Paper-2 hub top-K (D-W5): restricts each connecting request to at most the K "
+				+ "cheapest hubs (by summed access+continuation direct travel time), dropping the "
+				+ "rest before emission. 0 = unlimited (legacy, all hubs emitted). Default: 0.");
 
         return map;
     }
