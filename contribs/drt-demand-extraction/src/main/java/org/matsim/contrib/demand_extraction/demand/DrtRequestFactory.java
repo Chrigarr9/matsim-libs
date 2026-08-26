@@ -1239,8 +1239,22 @@ public class DrtRequestFactory {
 	 *        constraint against the actual access arrival. {@code false}
 	 *        (default) leaves {@code hubSyncTwoSided}'s variant grid (or the
 	 *        single-leg v1 path) completely unchanged; takes precedence over
-	 *        {@code hubSyncTwoSided} when both are set. Has NO effect on the
-	 *        CONTINUATION branch (Task W4).
+	 *        {@code hubSyncTwoSided} when both are set.
+	 *        <p>D-W1 + D-W6 (Task W4, CONTINUATION side): when {@code true},
+	 *        the CONTINUATION branch likewise emits exactly ONE request per
+	 *        (trip, hub): {@code requestTime == earliestDeparture ==} the
+	 *        earliest PHYSICAL hub arrival, obtained by routing the first
+	 *        (O-&gt;hub) leg AT the advance-shifted departure {@code
+	 *        original.requestTime - hubSyncMaxAdvanceSeconds} (one extra
+	 *        routing call; a routing failure falls back to pass 1's
+	 *        nominal-departure arrival, {@code original.requestTime +
+	 *        firstLeg[0]}). {@code latestArrival} stays the person's
+	 *        unmodified {@code original.latestArrival} — per D-W6 there is
+	 *        deliberately NO {@code maxHubWaitSeconds} cap here either; the
+	 *        wait cap lives solely in the MIP nesting constraint.
+	 *        {@code transferWaitSeconds = 0}. The legacy {@code
+	 *        maxHubWaitSeconds <= 0.0} fixed-buffer branch is left completely
+	 *        untouched.
 	 */
 	static List<DrtRequest> expandConnecting(
 			DrtRequest original,
@@ -1553,6 +1567,75 @@ public class DrtRequestFactory {
 				// CONTINUATION leg hub->D. The pax reaches the hub at
 				// requestTime + firstLeg (direct, unbuffered); each sub-branch
 				// computes that arrival for its own offset/departure.
+
+				if (hubSyncWindowed) {
+					// D-W1 + D-W6 (Task W4): ONE request per (trip, hub).
+					// requestTime == earliestDeparture == the earliest PHYSICAL
+					// hub arrival: depart the origin at the advance-widened
+					// departure and route the first (O->hub) leg AT that
+					// departure — the one place windowed mode is allowed an
+					// extra routing call, because leg travel time can depend on
+					// departure and pass 1 only routed the nominal departure. A
+					// routing failure at the shifted departure falls back to
+					// pass 1's nominal-departure arrival (original.requestTime
+					// + firstLeg[0]) rather than dropping the hub.
+					double shiftedDeparture = original.requestTime - hubSyncMaxAdvanceSeconds;
+					double[] shiftedFirstLeg = legRouter.route(
+							original.originLinkId, hubLinkId, shiftedDeparture);
+					double nominalHubArrival = original.requestTime + firstLeg[0];
+					double earliestPhysicalHubArrival;
+					if (shiftedFirstLeg == null || shiftedFirstLeg[0] <= 0.0
+							|| shiftedFirstLeg[1] <= 0.0) {
+						earliestPhysicalHubArrival = nominalHubArrival;
+					} else {
+						// The passenger may depart early OR at the nominal time, so the
+						// earliest arrival they can actually achieve is the better of the
+						// two. Departing early is normally faster, but a slower route at
+						// the shifted departure must not push the 'earliest' arrival LATER
+						// than simply leaving on time - that is not physical, and it would
+						// make DrtRequest.build() throw whenever the extra travel time
+						// exceeds the advance, aborting the whole extraction.
+						earliestPhysicalHubArrival = Math.min(
+								shiftedDeparture + shiftedFirstLeg[0], nominalHubArrival);
+					}
+
+					// Temporal feasibility: the NOMINAL chain (pass 1's
+					// nominal-departure hub arrival + secondLeg, unshifted) must
+					// still fit the person's latestArrival — the same
+					// "hubArrival + secondLeg > latestArrival" expression the
+					// hub-sync wide-window branch below applies per-variant,
+					// evaluated here at its k=0 (nominal, non-shifted) case.
+					if (nominalHubArrival + secondLeg[0] > original.latestArrival) {
+						if (stats != null) {
+							stats.temporalInfeasible++;
+							recordDetour(stats, original, fleetSide, hub, ruralLegTime, urbanLegTime,
+									transferBufferSeconds, false, "temporal_infeasible");
+						}
+						continue;
+					}
+
+					// latestArrival stays the person's original deadline
+					// (person-anchored, D-W6): NO + maxHubWaitSeconds cap here
+					// — the 300 s wait cap is enforced solely by the MIP
+					// nesting constraint against the ACTUAL access arrival,
+					// never baked into this single-leg window again.
+					b.directTravelTime(secondLeg[0]).directDistance(secondLeg[1])
+					 .requestTime(earliestPhysicalHubArrival)
+					 .earliestDeparture(earliestPhysicalHubArrival)
+					 .latestArrival(original.latestArrival)
+					 .hubLegRole(DrtRequest.HubLegRole.CONTINUATION_LEG)
+					 .transferWaitSeconds(0.0);
+					DrtRequest windowedReq = b.build();
+					windowedReq.setScoringContext(original.getScoringContext());
+					copies.add(windowedReq);
+					if (stats != null) {
+						stats.kept++;
+						recordDetour(stats, original, fleetSide, hub, ruralLegTime, urbanLegTime,
+								transferBufferSeconds, true, "kept");
+					}
+					continue;
+				}
+
 				if (maxHubWaitSeconds <= 0.0) {
 					// Legacy fixed-buffer split (backward-compat, byte-identical):
 					// departure pinned at hubArrival + buffer, buffer charged as wait.
