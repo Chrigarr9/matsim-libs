@@ -20,6 +20,7 @@ import org.matsim.contrib.demand_extraction.algorithm.domain.TravelSegment;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideRow;
 import org.matsim.contrib.demand_extraction.algorithm.bamas.ride.RideLayer;
 import org.matsim.contrib.demand_extraction.algorithm.network.MatsimNetworkCache;
+import org.matsim.contrib.demand_extraction.algorithm.validation.BookingHorizonRule;
 import org.matsim.contrib.demand_extraction.algorithm.validation.BudgetValidator;
 import org.matsim.contrib.demand_extraction.demand.DrtRequest;
 
@@ -40,6 +41,8 @@ public final class PairGenerator {
 	private final boolean useParallel;
 	private final boolean budgetAwareConstraints;
 	private final int pairgenTopK;
+	// Booking-time rule (Task 3): <= 0 disables the rule, byte-identical to legacy behaviour.
+	private final double spontaneousBookingHorizon;
 	private static final double EPSILON = 1e-9;
 	private final AtomicLong beelineRejected = new AtomicLong();
 
@@ -52,12 +55,17 @@ public final class PairGenerator {
 	}
 
 	public PairGenerator(MatsimNetworkCache network, BudgetValidator budgetValidator, double horizon, int algorithmProcessCount, boolean budgetAwareConstraints, int pairgenTopK) {
+		this(network, budgetValidator, horizon, algorithmProcessCount, budgetAwareConstraints, pairgenTopK, 0.0);
+	}
+
+	public PairGenerator(MatsimNetworkCache network, BudgetValidator budgetValidator, double horizon, int algorithmProcessCount, boolean budgetAwareConstraints, int pairgenTopK, double spontaneousBookingHorizon) {
 		this.network = network;
 		this.budgetValidator = budgetValidator;
 		this.horizon = horizon;
 		this.useParallel = algorithmProcessCount != 1;
 		this.budgetAwareConstraints = budgetAwareConstraints;
 		this.pairgenTopK = Math.max(0, pairgenTopK);
+		this.spontaneousBookingHorizon = spontaneousBookingHorizon;
 	}
 
 	/**
@@ -360,12 +368,16 @@ public final class PairGenerator {
 
 			if (fifoFeasible) {
 				PairCandidate fifo = tryFifoCandidate(reqI, reqJ, oo);
-				if (fifo != null) results.add(fifo);
+				if (fifo != null && BookingHorizonRule.isAdmissible(fifo.startTime(), reqI, reqJ, spontaneousBookingHorizon)) {
+					results.add(fifo);
+				}
 			}
 
 			if (lifoFeasible) {
 				PairCandidate lifo = tryLifoCandidate(reqI, reqJ, oo);
-				if (lifo != null) results.add(lifo);
+				if (lifo != null && BookingHorizonRule.isAdmissible(lifo.startTime(), reqI, reqJ, spontaneousBookingHorizon)) {
+					results.add(lifo);
+				}
 			}
 		}
 
