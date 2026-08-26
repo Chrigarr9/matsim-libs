@@ -3,6 +3,8 @@ package org.matsim.contrib.demand_extraction.demand;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -411,11 +413,13 @@ public class DrtRequestFactory {
 			this.lastExpansionDropStats = result.dropStats();
 			log.info("Virtual-trip expansion: {} connecting -> {} virtual legs "
 					+ "(|H|={}, fleetSide={}, dropped {} at expansion [{} unroutable rural-leg, "
-					+ "{} unroutable urban-leg, {} temporal-infeasible], {} non-positive leg budget)",
+					+ "{} unroutable urban-leg, {} temporal-infeasible, {} dropped-by-topK], "
+					+ "{} non-positive leg budget)",
 					result.connectingExpanded(), result.virtualEmitted(), hubs.size(),
 					bothSides ? "BOTH" : fleetSide,
 					result.virtualDroppedExpansion(), result.dropStats().unroutableRuralLeg,
 					result.dropStats().unroutableUrbanLeg, result.dropStats().temporalInfeasible,
+					result.dropStats().droppedByTopK,
 					result.virtualDroppedBudget());
 		}
 
@@ -914,7 +918,7 @@ public class DrtRequestFactory {
 					List<DrtRequest> copies = expandConnecting(
 							r, hubs, side, isInsideMetropole, network, router,
 							transferBuffer, maxHubWait, hubSyncTwoSided, hubSyncMaxAdvanceSeconds,
-							dropStats);
+							exmasConfig.getHubTopK(), dropStats);
 					// With v2 ACCESS variants a hub may yield >1 copy, so guard the
 					// "dropped at expansion" diagnostic against going negative.
 					int droppedExpansion = Math.max(0, hubs.size() - copies.size());
@@ -1035,6 +1039,11 @@ public class DrtRequestFactory {
 		int unroutableRuralLeg;
 		int unroutableUrbanLeg;
 		int temporalInfeasible;
+		/** D-W5 hub top-K (Task W2): hubs that routed successfully (both legs)
+		 *  but were cut because they ranked outside {@code hubTopK} best hubs
+		 *  for this trip. Disjoint from the unroutable/temporal counters above
+		 *  — a hub is only eligible for this cut once it has already routed. */
+		int droppedByTopK;
 		final List<HubDetour> detours = new ArrayList<>();
 	}
 
@@ -1130,6 +1139,29 @@ public class DrtRequestFactory {
 	}
 
 	/**
+	 * Convenience overload with explicit maxHubWait/hub-sync-v2 params but no
+	 * hub top-K cut ({@code hubTopK = 0}, unlimited). Kept so pre-D-W5 call
+	 * sites/tests that pass {@code (… hubSyncTwoSided, hubSyncMaxAdvanceSeconds,
+	 * stats)} compile and behave unchanged.
+	 */
+	static List<DrtRequest> expandConnecting(
+			DrtRequest original,
+			List<HubSetLoader.Hub> hubs,
+			FleetSide fleetSide,
+			Predicate<Coord> isInsideMetropole,
+			Network network,
+			LegRouter legRouter,
+			double transferBufferSeconds,
+			double maxHubWaitSeconds,
+			boolean hubSyncTwoSided,
+			double hubSyncMaxAdvanceSeconds,
+			ExpansionDropStats stats) {
+		return expandConnecting(original, hubs, fleetSide, isInsideMetropole,
+				network, legRouter, transferBufferSeconds, maxHubWaitSeconds,
+				hubSyncTwoSided, hubSyncMaxAdvanceSeconds, /* hubTopK */ 0, stats);
+	}
+
+	/**
 	 * @param maxHubWaitSeconds Paper-2 hub-sync v1: width (s) of the
 	 *        hub-departure window for CONTINUATION legs. {@code <= 0.0} reproduces
 	 *        the legacy fixed-buffer split exactly (backward-compat); {@code > 0.0}
@@ -1153,6 +1185,17 @@ public class DrtRequestFactory {
 	 * @param hubSyncMaxAdvanceSeconds Paper-2 hub-sync v2: upper bound on the
 	 *        access variant offset (max seconds a commuter may depart earlier);
 	 *        only consulted when {@code hubSyncTwoSided == true}.
+	 * @param hubTopK D-W5 (Task W2): the hub list is ranked per trip by
+	 *        {@code accessDirect + continuationDirect} (the two nominal-departure
+	 *        direct leg times routed once in pass 1) and only the {@code hubTopK}
+	 *        best-ranked hubs are emitted in pass 2. {@code hubTopK <= 0} means
+	 *        unlimited (every rankable hub survives) and is byte-identical to
+	 *        the pre-D-W5 behavior: same hubs, same emission order, same stats,
+	 *        same detour rows. Hubs that fail to route are handled exactly as
+	 *        before (unroutable/temporal counters), never folded into the
+	 *        top-K cut; hubs cut by the ranking increment
+	 *        {@link ExpansionDropStats#droppedByTopK} and record a
+	 *        {@code "topk_dropped"} detour row instead of being emitted.
 	 */
 	static List<DrtRequest> expandConnecting(
 			DrtRequest original,
@@ -1165,6 +1208,7 @@ public class DrtRequestFactory {
 			double maxHubWaitSeconds,
 			boolean hubSyncTwoSided,
 			double hubSyncMaxAdvanceSeconds,
+			int hubTopK,
 			ExpansionDropStats stats) {
 		if (hubSyncTwoSided && maxHubWaitSeconds <= 0.0) {
 			throw new IllegalArgumentException(
@@ -1210,7 +1254,27 @@ public class DrtRequestFactory {
 		// orientation x fleetSide cases — only roles/timing/metrics change.
 		boolean replaceOrigin = (role == DrtRequest.HubLegRole.CONTINUATION_LEG);
 
-		List<DrtRequest> copies = new ArrayList<>(hubs.size());
+		// D-W5 (Task W2) two-pass hub selection. Pass 1 routes BOTH legs of
+		// EVERY hub at the nominal departure exactly as before (unroutable
+		// handling untouched) and keeps the results in a small local record so
+		// pass 2 can reuse them without re-routing — the whole point of the
+		// split is to never pay for routing twice. Pass 1 owns the
+		// nominal-departure unroutable drops; the variant/offset re-routing
+		// failures and the temporal-infeasibility drops stay inside the
+		// pass-2 emission body, unchanged. Pass 2 emits only the
+		// hubTopK best-ranked hubs (ranked by accessDirect + continuationDirect,
+		// i.e. firstLeg + secondLeg direct time, ascending); hubTopK <= 0 means
+		// unlimited, in which case the top-K cut is skipped entirely (the
+		// survivor set stays null) and pass 2 runs the identical per-hub
+		// emission for every routed hub in the SAME order pass 1 routed
+		// them — the original hub-list order — so hubTopK <= 0 is
+		// byte-identical to the single-pass loop this replaces.
+		record HubRoutedLegs(HubSetLoader.Hub hub, Link hubLink, Id<Link> hubLinkId,
+				double[] firstLeg, double[] secondLeg, double ruralLegTime, double urbanLegTime) {
+			double rankScore() { return firstLeg[0] + secondLeg[0]; }
+		}
+
+		List<HubRoutedLegs> routed = new ArrayList<>(hubs.size());
 		for (HubSetLoader.Hub hub : hubs) {
 			Coord hubCoord = hub.coord();
 			Link hubLink = NetworkUtils.getNearestLink(network, hubCoord);
@@ -1245,6 +1309,51 @@ public class DrtRequestFactory {
 			// Diagnostics keep the rural/urban naming: map first/second by orientation.
 			double ruralLegTime = ruralEndIsOrigin ? firstLeg[0] : secondLeg[0];
 			double urbanLegTime = ruralEndIsOrigin ? secondLeg[0] : firstLeg[0];
+			routed.add(new HubRoutedLegs(hub, hubLink, hubLinkId, firstLeg, secondLeg,
+					ruralLegTime, urbanLegTime));
+		}
+
+		// Rank + slice to the hubTopK best (ascending accessDirect+continuationDirect
+		// == firstLeg+secondLeg direct time). hubTopK <= 0, or >= the rankable count,
+		// means no cut: survivingHubIds stays null so pass 2 below never consults it,
+		// which is what keeps hubTopK <= 0 byte-identical (including emission order)
+		// to the pre-D-W5 single-pass loop.
+		Set<String> survivingHubIds = null;
+		if (hubTopK > 0 && hubTopK < routed.size()) {
+			List<HubRoutedLegs> ranked = new ArrayList<>(routed);
+			ranked.sort(Comparator.comparingDouble(HubRoutedLegs::rankScore));
+			survivingHubIds = new HashSet<>();
+			for (int i = 0; i < hubTopK; i++) {
+				survivingHubIds.add(ranked.get(i).hub().id());
+			}
+		}
+
+		List<DrtRequest> copies = new ArrayList<>(hubs.size());
+		for (HubRoutedLegs hr : routed) {
+			HubSetLoader.Hub hub = hr.hub();
+			Coord hubCoord = hub.coord();
+			Link hubLink = hr.hubLink();
+			Id<Link> hubLinkId = hr.hubLinkId();
+			double[] firstLeg = hr.firstLeg();
+			double[] secondLeg = hr.secondLeg();
+			double ruralLegTime = hr.ruralLegTime();
+			double urbanLegTime = hr.urbanLegTime();
+
+			// D-W5 top-K cut: this hub routed both legs at the nominal
+			// departure in pass 1 but ranked outside the K best for this trip.
+			// Ranking deliberately considers ONLY that nominal-departure
+			// routability (the spec's rankability criterion), so a surviving hub
+			// can still be dropped further down by a variant/offset re-routing
+			// failure or by the temporal-infeasibility check, and a cut hub is
+			// never promoted in its place.
+			if (survivingHubIds != null && !survivingHubIds.contains(hub.id())) {
+				if (stats != null) {
+					stats.droppedByTopK++;
+					recordDetour(stats, original, fleetSide, hub, ruralLegTime, urbanLegTime,
+							transferBufferSeconds, false, "topk_dropped");
+				}
+				continue;
+			}
 
 			DrtRequest.Builder b = original.toBuilder().hubId(hub.id());
 			Coord hubLinkFrom = hubLink.getFromNode().getCoord();
