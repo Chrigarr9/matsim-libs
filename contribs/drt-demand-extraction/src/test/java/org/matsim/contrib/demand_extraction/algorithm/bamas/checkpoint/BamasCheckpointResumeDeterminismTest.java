@@ -108,7 +108,6 @@ class BamasCheckpointResumeDeterminismTest {
 		ExMasConfigGroup c = new ExMasConfigGroup();
 		c.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
 		c.setEnableStopBased(false);         // streaming pair-stub D2D path
-		c.setHeuristicPruningEnabled(false);
 		c.setPruningDistanceSavingsLogScale(-1.0);
 		c.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 		c.setInterDegreeKeepFraction(1.0);   // no pruning — keep the full cascade deterministic

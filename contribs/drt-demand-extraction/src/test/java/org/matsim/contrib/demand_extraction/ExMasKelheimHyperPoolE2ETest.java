@@ -303,8 +303,6 @@ public class ExMasKelheimHyperPoolE2ETest {
 
 		// Set DRT service quality parameters for budget calculation
 		exMasConfig.setMinDrtCostPerKm(0.0);
-		exMasConfig.setMinMaxDetourFactor(1.0);
-		exMasConfig.setMinMaxWaitingTime(0.0);
 		exMasConfig.setMinDrtAccessEgressDistance(0.0);
 
 		// Set ExMAS algorithm parameters - more conservative for larger scenario
@@ -314,12 +312,12 @@ public class ExMasKelheimHyperPoolE2ETest {
 
 		// AGGRESSIVE PRUNING to control memory usage with large population.
 		// Pinned explicitly (2026-08-26): this test previously relied on the
-		// ExMasConfigGroup class defaults for heuristicPruningEnabled (true), pruningMode
-		// (COVERAGE_TOPK), and pruningCoverageK (20) while only overriding the
-		// distance-savings gate below. The class default is now "no pruning"
-		// (heuristicPruningEnabled=false), which would make this 3x-duplicated-population
-		// test enumerate unpruned and OOM/hang.
-		exMasConfig.setHeuristicPruningEnabled(true);
+		// ExMasConfigGroup class defaults for pruningMode (COVERAGE_TOPK) and
+		// pruningCoverageK (20) while only overriding the distance-savings gate below.
+		// The class default is now "no pruning" (RATIO_THRESHOLD + interDegreeKeepFraction=1.0),
+		// which would make this 3x-duplicated-population test enumerate unpruned and OOM/hang.
+		// (heuristicPruningEnabled was never the pruning on/off switch -- pruningMode /
+		// pruningCoverageK / pruningDistanceSavingsLogScale below are the real switches.)
 		exMasConfig.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
 		exMasConfig.setPruningCoverageK(20);
 		exMasConfig.setPruningDistanceSavingsLogScale(0.15); // Enable distance-based pruning (increasing with degree)

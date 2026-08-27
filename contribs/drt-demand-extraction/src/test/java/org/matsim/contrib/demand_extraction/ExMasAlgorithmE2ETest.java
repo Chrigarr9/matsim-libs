@@ -41,7 +41,6 @@ public class ExMasAlgorithmE2ETest {
 	static final Consumer<Config> R1 = config -> {
 		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.EXMAS);
-		exMas.setHeuristicPruningEnabled(false);
 		exMas.setPruningDistanceSavingsLogScale(-1.0);
 		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 		exMas.setInterDegreeKeepFraction(1.0);
@@ -54,7 +53,6 @@ public class ExMasAlgorithmE2ETest {
 	static final Consumer<Config> R2 = config -> {
 		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
-		exMas.setHeuristicPruningEnabled(false);
 		exMas.setPruningDistanceSavingsLogScale(-1.0);
 		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 		exMas.setInterDegreeKeepFraction(1.0);
@@ -68,7 +66,6 @@ public class ExMasAlgorithmE2ETest {
 	static final Consumer<Config> R6 = config -> {
 		ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
-		exMas.setHeuristicPruningEnabled(true);
 		exMas.setPruningDistanceSavingsLogScale(0.25);
 		exMas.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
 		exMas.setPruningCoverageK(20);

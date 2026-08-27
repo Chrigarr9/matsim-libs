@@ -126,7 +126,6 @@ class D3VsD4FeasibilityComparisonTest {
 		exMasConfig.setCalcShapleyValues(false);
 		// R2 = BAMAS, no pruning.
 		exMasConfig.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
-		exMasConfig.setHeuristicPruningEnabled(false);
 		exMasConfig.setPruningDistanceSavingsLogScale(-1.0);
 		exMasConfig.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 		exMasConfig.setInterDegreeKeepFraction(1.0);

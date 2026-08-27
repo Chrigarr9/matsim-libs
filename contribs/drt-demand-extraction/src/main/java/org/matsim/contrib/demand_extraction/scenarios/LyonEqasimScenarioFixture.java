@@ -263,8 +263,6 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 		exMas.setMinAge(13);
 
 		exMas.setMinDrtCostPerKm(0.0);
-		exMas.setMinMaxDetourFactor(1.0);
-		exMas.setMinMaxWaitingTime(0.0);
 		exMas.setMinDrtAccessEgressDistance(100.0);
 
 		exMas.setSearchHorizon(3600.0);
@@ -286,7 +284,6 @@ public class LyonEqasimScenarioFixture implements ExMasScenarioFixture {
 		// This fixture must state its pruning explicitly so an omitted key elsewhere never
 		// silently falls back to ranking-pruning. Algorithm configurators applied after this
 		// method may override these to opt a study into pruning.
-		exMas.setHeuristicPruningEnabled(false);
 		exMas.setPruningDistanceSavingsLogScale(-1.0);
 		exMas.setPruningDistanceSavingsMax(0.75);
 		exMas.setPruningDistanceSavingsMinDegree(2);

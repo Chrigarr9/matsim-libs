@@ -219,20 +219,18 @@ class KelheimHyperPoolStubParityTest {
         exMasConfig.setPrivateVehicleModes(privateVehicles);
 
         exMasConfig.setMinDrtCostPerKm(0.0);
-        exMasConfig.setMinMaxDetourFactor(1.0);
-        exMasConfig.setMinMaxWaitingTime(0.0);
         exMasConfig.setMinDrtAccessEgressDistance(0.0);
         exMasConfig.setSearchHorizon(600.0);
         exMasConfig.setMaxDetourFactor(1.5);
         exMasConfig.setMaxPoolingDegree(5);
 
         // Pruning: this test previously relied on the ExMasConfigGroup class defaults for
-        // heuristicPruningEnabled (true), pruningMode (COVERAGE_TOPK), and pruningCoverageK
-        // (20) while only overriding the distance-savings gate below. The class default is
-        // now "no pruning" (heuristicPruningEnabled=false), so those must be stated
-        // explicitly here to keep this frozen-golden byte-identity test's ride enumeration
-        // unchanged.
-        exMasConfig.setHeuristicPruningEnabled(true);
+        // pruningMode (COVERAGE_TOPK) and pruningCoverageK (20) while only overriding the
+        // distance-savings gate below. The class default is now "no pruning" (RATIO_THRESHOLD
+        // + interDegreeKeepFraction=1.0), so those must be stated explicitly here to keep this
+        // frozen-golden byte-identity test's ride enumeration unchanged. (heuristicPruningEnabled
+        // was never the pruning on/off switch -- pruningMode/pruningCoverageK/
+        // pruningDistanceSavingsLogScale below are the real switches, and were already pinned.)
         exMasConfig.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
         exMasConfig.setPruningCoverageK(20);
         exMasConfig.setPruningDistanceSavingsLogScale(0.15);

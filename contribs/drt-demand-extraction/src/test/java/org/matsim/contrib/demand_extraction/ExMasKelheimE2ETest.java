@@ -25,7 +25,6 @@ public class ExMasKelheimE2ETest {
 		new KelheimScenarioFixture().runFullPipeline(outputDir, config -> {
 			ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 			exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
-			exMas.setHeuristicPruningEnabled(true);
 			exMas.setPruningDistanceSavingsLogScale(0.25);
 			exMas.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
 			exMas.setPruningCoverageK(20);

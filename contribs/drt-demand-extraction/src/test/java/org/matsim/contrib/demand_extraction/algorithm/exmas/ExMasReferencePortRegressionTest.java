@@ -38,7 +38,6 @@ public class ExMasReferencePortRegressionTest {
 			ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(cfg, ExMasConfigGroup.class);
 			// R1 = vanilla ExMAS reference, no pruning.
 			exMas.setAlgorithm(ExMasConfigGroup.Algorithm.EXMAS);
-			exMas.setHeuristicPruningEnabled(false);
 			exMas.setPruningDistanceSavingsLogScale(-1.0);
 			exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 			exMas.setInterDegreeKeepFraction(1.0);

@@ -622,8 +622,6 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 		
 		// DRT service quality parameters for budget calculation (aligned with E2E test)
 		exMasConfig.setMinDrtCostPerKm(0.0);
-		exMasConfig.setMinMaxDetourFactor(1.0);
-		exMasConfig.setMinMaxWaitingTime(0.0);
 		exMasConfig.setMinDrtAccessEgressDistance(100.0);  // Changed from 100.0 to match test
 		
 		// ExMAS algorithm parameters (aligned with E2E test)
@@ -642,7 +640,6 @@ private static Config loadKelheimConfig(String scenarioPath, int sampleSize, boo
 
 		// Pruning settings: heuristic pruning controls combinatorial growth during ride
 		// extension
-		exMasConfig.setHeuristicPruningEnabled(true);
 		// Degree-aware distance-savings pruning:
 		// requiredSaving(d) = scale * log2(d) (clamped).
 		// scale < 0 disables; scale = 0 matches legacy non-improving (rideDistance <=

@@ -183,7 +183,6 @@ class LyonDistanceGateSweepTest {
 			// R3 setup: BAMAS + heuristic gate ON, post-extension pruner OFF (no per-degree K during enumeration).
 			// (Scale is overridden below to the swept value; the base value here is irrelevant.)
 			exMasConfig.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
-			exMasConfig.setHeuristicPruningEnabled(true);
 			exMasConfig.setPruningDistanceSavingsLogScale(0.15);
 			exMasConfig.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 			exMasConfig.setInterDegreeKeepFraction(1.0);

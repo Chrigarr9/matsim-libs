@@ -161,8 +161,6 @@ class DrtRequestFactoryMaxWalkDistanceTest {
         privateVehicles.add(TransportMode.bike);
         exMas.setPrivateVehicleModes(privateVehicles);
         exMas.setMinDrtCostPerKm(0.0);
-        exMas.setMinMaxDetourFactor(1.0);
-        exMas.setMinMaxWaitingTime(0.0);
         exMas.setMinDrtAccessEgressDistance(0.0);
         exMas.setMaxDetourFactor(2.0);
         exMas.setSearchHorizon(0.0);

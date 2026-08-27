@@ -12,13 +12,7 @@ import org.matsim.core.config.ReflectiveConfigGroup;
 public class ExMasConfigGroup extends ReflectiveConfigGroup {
     public static final String GROUP_NAME = "exmas";
 
-    private static final String BUDGET_CALCULATION_MODE = "budgetCalculationMode";
     private static final String DRT_MODE = "drtMode";
-
-    public enum BudgetCalculationMode {
-        TRIP_LEVEL,
-        SUBTOUR_SUM
-    }
 
     /**
      * Stage-1 ride-generation algorithm. Selects the {@link
@@ -44,7 +38,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
         NON_COMMUTES
     }
 
-    private BudgetCalculationMode budgetCalculationMode = BudgetCalculationMode.TRIP_LEVEL;
     private String drtMode = "drt";
 
     // Commute identification settings
@@ -142,11 +135,8 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// During optimization, these constraints can be relaxed until the utility
 	// budget is "spent"
 	private double minDrtCostPerKm = 0.0; // Minimum fare per kilometer (€/km)
-	private double minMaxDetourFactor = 1.0; // Minimum detour factor (1.0 = direct route)
 	private double minDrtAccessEgressDistance = 0.0; // Minimum access/egress distance (meters)
-	private double minMaxWaitingTime = 0.0; // Minimum maximum waiting time (minutes)
-	
-	
+
 	// Maximum detour factor: Maximum acceptable detour as factor of direct travel time
 	// Example: 1.5 means maximum travel time = 1.5 * direct travel time
 
@@ -290,7 +280,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// Default is NO PRUNING (2026-08-26 project-owner decision): a config that omits a
 	// pruning key must get the full ride database, never silent ranking-pruning. Any
 	// scenario/study that wants pruning must set these keys EXPLICITLY.
-	private boolean pruningEnabled = false;
 	// Degree-aware distance savings pruning (applied vs serving requests separately)
 	// requiredSaving(d) = min(maxSaving, max(0, pruningDistanceSavingsLogScale * log2(d)))
 	// Keep ride iff: rideDistance <= (1 - requiredSaving(d)) * sum(request distances)
@@ -795,16 +784,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		this.algorithmProcessCount = algorithmProcessCount;
 	}
 
-    @StringGetter(BUDGET_CALCULATION_MODE)
-    public BudgetCalculationMode getBudgetCalculationMode() {
-        return budgetCalculationMode;
-    }
-
-    @StringSetter(BUDGET_CALCULATION_MODE)
-    public void setBudgetCalculationMode(BudgetCalculationMode budgetCalculationMode) {
-        this.budgetCalculationMode = budgetCalculationMode;
-    }
-
     @StringGetter(DRT_MODE)
     public String getDrtMode() {
         return drtMode;
@@ -988,26 +967,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter("minDrtCostPerKm")
 	public void setMinDrtCostPerKm(double minDrtCostPerKm) {
 		this.minDrtCostPerKm = minDrtCostPerKm;
-	}
-
-	@StringGetter("minMaxDetourFactor")
-	public double getMinMaxDetourFactor() {
-		return minMaxDetourFactor;
-	}
-
-	@StringSetter("minMaxDetourFactor")
-	public void setMinMaxDetourFactor(double minMaxDetourFactor) {
-		this.minMaxDetourFactor = minMaxDetourFactor;
-	}
-
-	@StringGetter("minMaxWaitingTime")
-	public double getMinMaxWaitingTime() {
-		return minMaxWaitingTime;
-	}
-
-	@StringSetter("minMaxWaitingTime")
-	public void setMinMaxWaitingTime(double minMaxWaitingTime) {
-		this.minMaxWaitingTime = minMaxWaitingTime;
 	}
 
     @StringGetter("minDrtAccessEgressDistance")
@@ -1290,16 +1249,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	@StringSetter("heuristicsProcessCount")
 	public void setHeuristicsProcessCount(int heuristicsProcessCount) {
 		this.heuristicsProcessCount = heuristicsProcessCount;
-	}
-
-	@StringGetter("heuristicPruningEnabled")
-	public boolean isHeuristicPruningEnabled() {
-		return pruningEnabled;
-	}
-
-	@StringSetter("heuristicPruningEnabled")
-	public void setHeuristicPruningEnabled(boolean heuristicPruningEnabled) {
-		this.pruningEnabled = heuristicPruningEnabled;
 	}
 
 	@StringGetter("pruningDistanceSavingsLogScale")
@@ -2019,7 +1968,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
     @Override
     public Map<String, String> getComments() {
         Map<String, String> map = super.getComments();
-        map.put(BUDGET_CALCULATION_MODE, "Mode for calculating utility budget. Options: [TRIP_LEVEL, SUBTOUR_SUM]. Default: TRIP_LEVEL.");
         map.put(DRT_MODE, "The mode name of the DRT service to be optimized. Default: 'drt'.");
         map.put("homeActivityType", "Activity type prefix for home activities (used for commute identification). Default: 'home'");
         map.put("workActivityType", "Activity type prefix for work activities (used for commute identification). Default: 'work'");
@@ -2038,9 +1986,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				+ "Empty = all links admitted (no filtering). Example: 'car' or 'car,truck'. Default: 'car'");
 		map.put("minDrtCostPerKm",
 				"Minimum DRT cost per kilometer for budget calculation (€/km). Represents best possible pricing. Default: 0.0");
-		map.put("minMaxDetourFactor",
-				"Minimum maximum detour factor for budget calculation. 1.0 means direct route. Default: 1.0");
-		map.put("minMaxWaitingTime", "Minimum maximum waiting time for budget calculation (minutes). Default: 0.0");
 		map.put("minDrtAccessEgressDistance", "Access/egress distance for DRT trips (meters). Default: 0.0");
 		map.put("baseModes",
 				"List of baseline travel modes to compare against DRT (comma-separated). Default: 'car,pt,bike,walk'");
@@ -2113,10 +2058,6 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 				"Parallelism for core ExMAS pair generation and ride extension. -1 = all processors, 1 = sequential (more deterministic). Default: -1");
 		map.put("heuristicsProcessCount",
 				"Parallelism for Shapley/predecessor calculations. -1 = all processors, 1 = sequential. Default: -1");
-		map.put("heuristicPruningEnabled",
-				"Enable heuristic pruning during ride extension to avoid combinatorial explosion. "
-				+ "Default: false (no pruning) — a config must set pruning keys explicitly; an "
-				+ "omitted key must never silently prune.");
 		map.put("pruningDistanceSavingsLogScale",
 				"Degree-aware distance savings pruning: requiredSaving(d)=scale*log2(d), clamped; keep iff rideDistance <= (1-requiredSaving)*sum(request distances). scale<0 disables; scale=0 matches legacy non-improving (rideDistance <= sumDistances). Default: -1.0 (disabled)");
 		map.put("pruningDistanceSavingsMax",

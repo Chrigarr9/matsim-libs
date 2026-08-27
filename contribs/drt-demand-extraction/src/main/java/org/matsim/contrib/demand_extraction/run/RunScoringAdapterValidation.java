@@ -430,7 +430,6 @@ public class RunScoringAdapterValidation {
 		exMasConfig.setCalcShapleyValues(false); // Skip for speed
 		exMasConfig.setOpportunityCostModel(ExMasConfigGroup.OpportunityCostModel.LOG);
 		exMasConfig.setPtOptimizeDepartureTime(false);
-		exMasConfig.setHeuristicPruningEnabled(true);
 
 		Set<String> privateVehicles = new HashSet<>(Set.of("car", "bike"));
 		exMasConfig.setPrivateVehicleModes(privateVehicles);

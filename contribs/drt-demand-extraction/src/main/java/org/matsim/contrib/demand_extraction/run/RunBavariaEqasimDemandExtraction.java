@@ -461,8 +461,6 @@ public class RunBavariaEqasimDemandExtraction {
 
 		// DRT service quality floors for budget calculation (ported from 30km)
 		exMasConfig.setMinDrtCostPerKm(0.0);
-		exMasConfig.setMinMaxDetourFactor(1.0);
-		exMasConfig.setMinMaxWaitingTime(0.0);
 		exMasConfig.setMinDrtAccessEgressDistance(100.0);
 
 		// ExMAS algorithm parameters
@@ -483,7 +481,6 @@ public class RunBavariaEqasimDemandExtraction {
 		exMasConfig.setHeuristicsProcessCount(-1);
 
 		// Heuristic pruning — degree-aware distance savings (ported from 30km)
-		exMasConfig.setHeuristicPruningEnabled(true);
 		exMasConfig.setPruningDistanceSavingsLogScale(0.15);
 		exMasConfig.setPruningDistanceSavingsMax(0.75);
 		exMasConfig.setPruningDistanceSavingsMinDegree(2);

@@ -84,7 +84,6 @@ class LyonPruningAblationTest {
 	/** R3 = BAMAS + heuristic distance gate (scale=0.15), no post-extension pruning. */
 	private static void applyR3(ExMasConfigGroup exMas) {
 		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
-		exMas.setHeuristicPruningEnabled(true);
 		exMas.setPruningDistanceSavingsLogScale(0.15);
 		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 		exMas.setInterDegreeKeepFraction(1.0);
@@ -96,7 +95,6 @@ class LyonPruningAblationTest {
 	/** R4 = BAMAS + heuristic distance gate (scale=0.25), no post-extension pruning. */
 	private static void applyR4(ExMasConfigGroup exMas) {
 		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
-		exMas.setHeuristicPruningEnabled(true);
 		exMas.setPruningDistanceSavingsLogScale(0.25);
 		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 		exMas.setInterDegreeKeepFraction(1.0);
@@ -108,7 +106,6 @@ class LyonPruningAblationTest {
 	/** R5 = BAMAS + heuristic distance gate (scale=0.30), no post-extension pruning. */
 	private static void applyR5(ExMasConfigGroup exMas) {
 		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
-		exMas.setHeuristicPruningEnabled(true);
 		exMas.setPruningDistanceSavingsLogScale(0.30);
 		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 		exMas.setInterDegreeKeepFraction(1.0);
@@ -120,7 +117,6 @@ class LyonPruningAblationTest {
 	/** R6 = BAMAS + distance gate (scale=0.25) + COVERAGE_TOPK (K=20), predecessors on. */
 	private static void applyR6(ExMasConfigGroup exMas) {
 		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
-		exMas.setHeuristicPruningEnabled(true);
 		exMas.setPruningDistanceSavingsLogScale(0.25);
 		exMas.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
 		exMas.setPruningCoverageK(20);

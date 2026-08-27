@@ -363,8 +363,6 @@ public class ExMasClusteredHyperPoolE2ETest {
 
 		// DRT service quality
 		exMasConfig.setMinDrtCostPerKm(0.0);
-		exMasConfig.setMinMaxDetourFactor(1.0);
-		exMasConfig.setMinMaxWaitingTime(0.0);
 		exMasConfig.setMinDrtAccessEgressDistance(0.0);
 
 		// ExMAS algorithm - VERY permissive for large pooling and hyper-pooling

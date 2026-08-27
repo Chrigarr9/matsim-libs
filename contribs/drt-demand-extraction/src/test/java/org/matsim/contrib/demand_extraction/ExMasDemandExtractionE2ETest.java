@@ -197,8 +197,6 @@ public class ExMasDemandExtractionE2ETest {
 
 		// Set DRT service quality parameters for budget calculation
 		exMasConfig.setMinDrtCostPerKm(0.0); // Best possible pricing
-		exMasConfig.setMinMaxDetourFactor(1.0); // Direct route
-		exMasConfig.setMinMaxWaitingTime(0.0); // No waiting
 		exMasConfig.setMinDrtAccessEgressDistance(0.0); // Minimal access/egress distance
 
 

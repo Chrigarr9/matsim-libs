@@ -44,7 +44,6 @@ class ExMasR1R2LossReportTest {
 		return config -> {
 			ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 			exMas.setAlgorithm(ExMasConfigGroup.Algorithm.EXMAS);
-			exMas.setHeuristicPruningEnabled(false);
 			exMas.setPruningDistanceSavingsLogScale(-1.0);
 			exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 			exMas.setInterDegreeKeepFraction(1.0);
@@ -59,7 +58,6 @@ class ExMasR1R2LossReportTest {
 		return config -> {
 			ExMasConfigGroup exMas = ConfigUtils.addOrGetModule(config, ExMasConfigGroup.class);
 			exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
-			exMas.setHeuristicPruningEnabled(false);
 			exMas.setPruningDistanceSavingsLogScale(-1.0);
 			exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 			exMas.setInterDegreeKeepFraction(1.0);

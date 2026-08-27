@@ -70,7 +70,6 @@ class LyonResidualD4RegressionTest {
 	/** R1 (vanilla ExMAS reference, no pruning) configurator. */
 	private static void applyR1(ExMasConfigGroup exMas) {
 		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.EXMAS);
-		exMas.setHeuristicPruningEnabled(false);
 		exMas.setPruningDistanceSavingsLogScale(-1.0);
 		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 		exMas.setInterDegreeKeepFraction(1.0);
@@ -82,7 +81,6 @@ class LyonResidualD4RegressionTest {
 	/** R2 (BAMAS, no pruning) configurator. */
 	private static void applyR2(ExMasConfigGroup exMas) {
 		exMas.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
-		exMas.setHeuristicPruningEnabled(false);
 		exMas.setPruningDistanceSavingsLogScale(-1.0);
 		exMas.setPruningMode(ExMasConfigGroup.PruningMode.RATIO_THRESHOLD);
 		exMas.setInterDegreeKeepFraction(1.0);

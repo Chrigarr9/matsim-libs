@@ -168,7 +168,6 @@ class LyonKScheduleSweepTest {
 
 			// R6 setup: BAMAS + distance gate scale=0.25 + COVERAGE_TOPK K=20, predecessors on.
 			exMasConfig.setAlgorithm(ExMasConfigGroup.Algorithm.BAMAS);
-			exMasConfig.setHeuristicPruningEnabled(true);
 			exMasConfig.setPruningDistanceSavingsLogScale(0.25);
 			exMasConfig.setPruningMode(ExMasConfigGroup.PruningMode.COVERAGE_TOPK);
 			exMasConfig.setPruningCoverageK(20);

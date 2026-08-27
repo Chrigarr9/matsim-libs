@@ -175,8 +175,6 @@ class HyperPoolStubParityTest {
         exMasConfig.setPrivateVehicleModes(privateVehicles);
 
         exMasConfig.setMinDrtCostPerKm(0.0);
-        exMasConfig.setMinMaxDetourFactor(1.0);
-        exMasConfig.setMinMaxWaitingTime(0.0);
         exMasConfig.setMinDrtAccessEgressDistance(0.0);
         exMasConfig.setMaxDetourFactor(2.0);
         exMasConfig.setSearchHorizon(0.0);

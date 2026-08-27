@@ -767,8 +767,6 @@ public class RunBavaria30kmDemandExtraction {
 
 		// DRT service quality parameters for budget calculation (aligned with E2E test)
 		exMasConfig.setMinDrtCostPerKm(0.0);
-		exMasConfig.setMinMaxDetourFactor(1.0);
-		exMasConfig.setMinMaxWaitingTime(0.0);
 		exMasConfig.setMinDrtAccessEgressDistance(100.0);
 
 		// ExMAS algorithm parameters (aligned with E2E test)
@@ -793,7 +791,6 @@ public class RunBavaria30kmDemandExtraction {
 
 		// Pruning settings: heuristic pruning controls combinatorial growth during ride
 		// extension
-		exMasConfig.setHeuristicPruningEnabled(true);
 		// Degree-aware distance-savings pruning:
 		// requiredSaving(d) = scale * log2(d) (clamped).
 		// scale < 0 disables; scale = 0 matches legacy non-improving (rideDistance <=
@@ -807,7 +804,6 @@ public class RunBavaria30kmDemandExtraction {
 
 		if (noPruning) {
 			log.info("=== NO-PRUNING MODE: disabling all pruning for baseline comparison ===");
-			exMasConfig.setHeuristicPruningEnabled(false);
 			exMasConfig.setPruningDistanceSavingsLogScale(-1.0);
 			interDegreeKeep = 1.0; // disable inter-degree pruning in no-pruning mode
 		}

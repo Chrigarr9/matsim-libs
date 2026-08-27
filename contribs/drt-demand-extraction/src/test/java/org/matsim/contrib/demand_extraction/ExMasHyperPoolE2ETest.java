@@ -176,8 +176,6 @@ public class ExMasHyperPoolE2ETest {
 
 		// DRT service quality parameters
 		exMasConfig.setMinDrtCostPerKm(0.0);
-		exMasConfig.setMinMaxDetourFactor(1.0);
-		exMasConfig.setMinMaxWaitingTime(0.0);
 		exMasConfig.setMinDrtAccessEgressDistance(0.0);
 
 		// ExMAS algorithm parameters

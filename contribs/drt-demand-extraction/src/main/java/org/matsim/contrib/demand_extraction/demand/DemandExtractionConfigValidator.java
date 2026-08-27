@@ -90,7 +90,6 @@ public class DemandExtractionConfigValidator {
 		log.info("  Allowed network modes: {}",
 				exMasConfig.getDrtAllowedModes().isEmpty() ? "all" : exMasConfig.getDrtAllowedModes());
 		log.info("Budget Calculation:");
-		log.info("  Mode: {}", exMasConfig.getBudgetCalculationMode());
 		log.info("  Base modes: {}", exMasConfig.getBaseModes());
 		log.info("  Private vehicle modes: {}", exMasConfig.getPrivateVehicleModes());
 		log.info("Trip Filtering:");
