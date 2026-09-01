@@ -413,23 +413,25 @@ public class ExMasKelheimHyperPoolE2ETest {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// 36 baseline columns (incl. isEducations col 9, maxCostsPerKm col 18)
+				// 35 baseline columns (incl. isEducations col 9; the routed-basis
+				// maxCostsPerKm was DROPPED 2026-09-01, shifting everything after
+				// maxCosts down by one)
 				// + 2 Extension-2 per-pax columns (requestTags, hubIds)
 				// + 2 per-ride columns (peak_pax Task 7.2, reposTimeMeanOutgoing Task 4) appended.
-				Assertions.assertEquals(40, parts.length, "Each ride should have 40 fields");
+				Assertions.assertEquals(39, parts.length, "Each ride should have 39 fields");
 
 				int degree = Integer.parseInt(parts[1]);
 				String variant = parts[3]; // DOOR_TO_DOOR, STOP_TO_STOP, or HYPER_POOLED
 				String requestIndices = parts[4];
-				String remainingBudgets = parts[16]; // was 15, shifted by isEducations
+				String remainingBudgets = parts[16]; // unchanged: sits before the dropped column
 
-				// Stop-related fields (shifted by +2 due to isEducations + maxCostsPerKm)
-				String pickupStopLinkId = parts[25]; // was 23
-				String pickupStopX = parts[26];      // was 24
-				String pickupStopY = parts[27];      // was 25
-				String dropoffStopLinkId = parts[29]; // was 27
-				String accessWalkDistances = parts[33]; // was 31
-				String egressWalkDistances = parts[34]; // was 32
+				// Stop-related fields (each shifted by -1 by the maxCostsPerKm drop)
+				String pickupStopLinkId = parts[24];
+				String pickupStopX = parts[25];
+				String pickupStopY = parts[26];
+				String dropoffStopLinkId = parts[28];
+				String accessWalkDistances = parts[32];
+				String egressWalkDistances = parts[33];
 
 				// Track by degree and variant
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);

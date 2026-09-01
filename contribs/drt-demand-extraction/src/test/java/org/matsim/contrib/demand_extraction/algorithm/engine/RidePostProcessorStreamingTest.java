@@ -52,8 +52,6 @@ class RidePostProcessorStreamingTest {
             Ride e = enrich.apply(rides.get(i));
             assertArrayEquals(batch.get(i).getMaxCosts(), e.getMaxCosts(), 1e-9,
                     "maxCosts mismatch at ride " + i);
-            assertArrayEquals(batch.get(i).getMaxCostsPerKm(), e.getMaxCostsPerKm(), 1e-9,
-                    "maxCostsPerKm mismatch at ride " + i);
         }
     }
 

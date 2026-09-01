@@ -401,7 +401,7 @@ public class ExMasClusteredHyperPoolE2ETest {
 				// (requestTags, hubIds) + 2 per-ride columns appended at the end
 				// of exmas_rides.csv: peak_pax (Task 7.2) + reposTimeMeanOutgoing
 				// (chained_timebin Task 4).
-				Assertions.assertEquals(40, parts.length, "Each ride should have 40 fields");
+				Assertions.assertEquals(39, parts.length, "Each ride should have 39 fields");
 
 				String variant = parts[3];
 				if (variant.equals("DOOR_TO_DOOR")) doorToDoorCount++;

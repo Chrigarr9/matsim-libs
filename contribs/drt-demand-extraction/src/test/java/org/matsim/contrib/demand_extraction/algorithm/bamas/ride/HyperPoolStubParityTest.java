@@ -49,6 +49,11 @@ import org.matsim.examples.ExamplesUtils;
  * single-path output to that golden, so the original fat-vs-stub guarantee survives the deletion:
  * a regression that changed the stop-based/hyperpool output would change the SHA here.
  *
+ * <p>2026-09-01: the golden was re-frozen after the {@code maxCostsPerKm} column was dropped from
+ * the rides export. Only that one column was removed from every line — no ride value changed — so
+ * the regression guarantee carries over unbroken to SHA-256
+ * {@code 9883c353af2f20be804e1c655e9840fe27a91340d193fea75155224f2b4de9c7}.
+ *
  * <p>Single-threaded ({@code algorithmProcessCount=heuristicsProcessCount=1}) and
  * {@code routingRandomness=0} for byte reproducibility (see {@link #configureMonetaryConstants}).
  */
@@ -57,7 +62,7 @@ class HyperPoolStubParityTest {
 
     /** SHA-256 of the frozen golden — recorded for traceability; the test compares the file bytes. */
     private static final String GOLDEN_SHA =
-            "aca73f22257b4295d9d66af9288f472600c920847a76e326bc9a90fceffde5fe";
+            "9883c353af2f20be804e1c655e9840fe27a91340d193fea75155224f2b4de9c7";
     private static final String GOLDEN_RESOURCE = "hyperpool-stopbased-golden.exmas_rides.csv";
 
     @Test

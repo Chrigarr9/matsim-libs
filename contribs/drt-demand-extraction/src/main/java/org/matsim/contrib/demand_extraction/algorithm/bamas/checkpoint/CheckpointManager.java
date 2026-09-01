@@ -235,6 +235,12 @@ public final class CheckpointManager {
 	 * one per completed extension degree (drained before each {@link #writeDegree}). A clean journal
 	 * always has exactly this many committed barriers (each is fsync'd before its manifest update),
 	 * so a journal with fewer has been truncated/corrupted below the high-water mark.
+	 *
+	 * <p><b>Journal compaction does not disturb this arithmetic</b> (2026-09-01). A compacted
+	 * journal physically holds one BARRIER but reports the full logical count, because its
+	 * COMPACTION record carries the barriers it folded away — see the compaction section of
+	 * {@code ConnectionCacheJournal}. Without that record, bounding the journal would have made
+	 * every later resume look truncated and refuse.
 	 */
 	public int expectedJournalBarriers() {
 		return (baseWritten ? 1 : 0) + perDegree.size();

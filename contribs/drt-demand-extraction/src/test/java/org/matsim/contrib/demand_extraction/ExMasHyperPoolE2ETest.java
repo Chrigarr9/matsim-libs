@@ -275,7 +275,7 @@ public class ExMasHyperPoolE2ETest {
 				// 36 baseline columns + 2 Extension-2 per-pax columns
 				// (requestTags, hubIds) + 2 per-ride columns appended at the end
 				// of exmas_rides.csv: peak_pax (Task 7.2) + reposTimeMeanOutgoing (Task 4).
-				Assertions.assertEquals(40, parts.length, "Each ride should have 40 fields (with HyperPool)");
+				Assertions.assertEquals(39, parts.length, "Each ride should have 39 fields (with HyperPool)");
 
 				int degree = Integer.parseInt(parts[col.get("degree")]);
 				String variant = parts[col.get("variant")]; // DOOR_TO_DOOR, STOP_TO_STOP, or HYPER_POOLED

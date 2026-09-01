@@ -277,7 +277,7 @@ public class ExMasDemandExtractionE2ETest {
 				// 36 baseline columns (incl. HyperPool stop-based pooling fields)
 				// + 2 Extension-2 per-pax columns (requestTags, hubIds)
 				// + 2 per-ride columns (peak_pax Task 7.2, reposTimeMeanOutgoing Task 4) appended.
-				Assertions.assertEquals(40, parts.length, "Each ride should have 40 fields (with HyperPool stop fields)");
+				Assertions.assertEquals(39, parts.length, "Each ride should have 39 fields (with HyperPool stop fields)");
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();
@@ -286,10 +286,10 @@ public class ExMasDemandExtractionE2ETest {
 
 				ridesByDegree.put(degree, ridesByDegree.getOrDefault(degree, 0) + 1);
 
-				double duration = Double.parseDouble(parts[23]); // rideTravelTime
+				double duration = Double.parseDouble(parts[22]); // rideTravelTime (was 23 before the maxCostsPerKm drop)
 				Assertions.assertTrue(duration >= 0, "Duration should be non-negative");
 
-				double distance = Double.parseDouble(parts[24]); // rideDistance
+				double distance = Double.parseDouble(parts[23]); // rideDistance (was 24 before the maxCostsPerKm drop)
 				Assertions.assertTrue(distance >= 0, "Distance should be non-negative");
 
 				rideCount++;

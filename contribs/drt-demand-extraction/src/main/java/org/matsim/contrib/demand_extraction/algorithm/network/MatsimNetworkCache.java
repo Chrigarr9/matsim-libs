@@ -634,6 +634,28 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 	 * @throws IOException if writing fails
 	 */
 	public void snapshotToJournal(ConnectionCacheJournal.Writer writer) throws IOException {
+		snapshotToJournal(writer, 0L);
+	}
+
+	/**
+	 * As {@link #snapshotToJournal(ConnectionCacheJournal.Writer)}, but COMPACTS the journal instead
+	 * of appending when it has already grown past {@code compactionThresholdBytes}.
+	 *
+	 * <p>Because each barrier writes the whole live cache, an append-only journal costs
+	 * {@code barriers x liveCacheSize} on disk while carrying only {@code liveCacheSize} of
+	 * information — that is how it reached 83.5 GB and filled the disk at degree 14 of the 100% run
+	 * on 2026-08-31. Compaction rewrites the file as this one snapshot; the snapshot is the exact
+	 * payload the append would have written, so the resumed cache state is unchanged (see
+	 * {@link ConnectionCacheJournal.Writer#compactWithBarrier}). The check is made BEFORE writing,
+	 * so an over-threshold barrier costs one snapshot's worth of IO, not two.
+	 *
+	 * @param compactionThresholdBytes size at or above which to compact; {@code 0} = never compact
+	 */
+	public void snapshotToJournal(ConnectionCacheJournal.Writer writer, long compactionThresholdBytes)
+			throws IOException {
+		boolean compact = compactionThresholdBytes > 0
+				&& writer.sizeBytes() >= compactionThresholdBytes;
+
 		List<ConnectionCacheJournal.Segment> segments = new ArrayList<>();
 		List<ConnectionCacheJournal.Sssp> ssspKeys = new ArrayList<>();
 
@@ -655,7 +677,16 @@ public class MatsimNetworkCache implements TravelSegmentLookup {
 				linkStr(byIndex, PackedKeyCodec.ssspOrigin(k)),
 				PackedKeyCodec.ssspBin(k))));
 
-		writer.appendBarrier(segments, ssspKeys);
+		if (compact) {
+			long before = writer.sizeBytes();
+			writer.compactWithBarrier(segments, ssspKeys);
+			log.info("[checkpoint] compacted connection-cache journal: {} MB -> {} MB "
+					+ "({} segments, {} sssp keys, {} barriers covered)",
+					before >> 20, writer.sizeBytes() >> 20,
+					segments.size(), ssspKeys.size(), writer.committedBarriers());
+		} else {
+			writer.appendBarrier(segments, ssspKeys);
+		}
 	}
 
 	/**

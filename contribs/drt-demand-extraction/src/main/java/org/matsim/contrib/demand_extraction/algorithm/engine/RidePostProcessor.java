@@ -45,7 +45,7 @@ import it.unimi.dsi.fastutil.objects.Object2DoubleOpenCustomHashMap;
  * - shapleyValues: distance contribution per passenger
  * - predecessors/successors: feasible ride sequencing edges
  *
- * <h2>The two-distance contract (READ BEFORE CONSUMING maxCostsPerKm)</h2>
+ * <h2>The two-distance contract (READ BEFORE CONSUMING maxCosts)</h2>
  *
  * Every passenger of every ride carries TWO distances, produced by TWO different
  * time-optimal routers, and they disagree per trip in both directions:
@@ -64,16 +64,20 @@ import it.unimi.dsi.fastutil.objects.Object2DoubleOpenCustomHashMap;
  * </ul>
  *
  * {@code maxCosts} is the ABSOLUTE acceptable fare in EUR for this ride (it
- * already prices in the ride's detour/delay via the remaining budget).
- * {@code maxCostsPerKm} divides it by {@code passengerDistances} — the ROUTED
- * distance, NOT the billing basis. Consequently it must never be compared
- * against a per-direct-km price: doing so mixes distance bases and mis-filters
- * (it wrongly rejected 27% of the Lyon 25% pool at 0.20 EUR/km before the
- * 2026-08-10 fix; ExmasCommuters now tests
- * {@code price_per_km * directDistance <= maxCosts} in absolute euros).
- * {@code maxCostsPerKm} is kept for reporting only. Note the request-level
- * export ({@code drt_requests.csv} maxCostPerKm) divides by directDistance
- * instead — the two per-km columns are intentionally NOT on the same basis.
+ * already prices in the ride's detour/delay via the remaining budget). It is the
+ * ONLY willingness-to-pay quantity the rides export carries, on purpose: the
+ * consumer must divide it by the DIRECT km it bills on
+ * ({@code passengerDirectDistances}), never by {@code passengerDistances}.
+ *
+ * <p>A per-km column {@code maxCostsPerKm} (= {@code maxCosts / passengerDistances},
+ * the ROUTED basis) used to be exported alongside it and was DROPPED on 2026-09-01
+ * (ruling Christoph 2026-08-31). Mixing the two distance bases mis-filters: it
+ * wrongly rejected 27% of the Lyon 25% pool at 0.20 EUR/km before the 2026-08-10
+ * fix, and ExmasCommuters has since recomputed the per-km rate itself as
+ * {@code maxCosts / directDistance}, overwriting whatever Java exported. The
+ * column was therefore dead weight on a 29.7M-ride export. Note the REQUEST-level
+ * export ({@code drt_requests.csv} {@code maxCostPerKm}) survives and divides by
+ * {@code directDistance} — the billing basis — so it is not the same quantity.
  */
 public final class RidePostProcessor {
     private static final Logger log = LogManager.getLogger(RidePostProcessor.class);
@@ -176,7 +180,7 @@ public final class RidePostProcessor {
         // Position-indexed, NOT keyed by ride index: a HashMap<Integer,...> over 29.6M rides costs
         // ~56 B/entry in nodes and boxed keys before the value. The parallel passes and the
         // enrichment loop below both walk `rides` in order, so the list position IS the key.
-        MaxCostResult[] maxCostByPos = computeMaxCosts(rides);
+        double[][] maxCostByPos = computeMaxCosts(rides);
 		log.info("  Max costs computed in {} ms", System.currentTimeMillis() - maxCostStart);
 
 		double[][] shapleyByPos;
@@ -210,12 +214,11 @@ public final class RidePostProcessor {
             Ride ride = rides.get(pos);
             int rideId = ride.getIndex();
             double[] shapley = shapleyByPos != null ? shapleyByPos[pos] : null;
-            MaxCostResult maxCostResult = maxCostByPos[pos];
+            double[] maxCosts = maxCostByPos[pos];
             double reposMean = predsAndSuccs.reposTimeMeans().getOrDefault(rideId, -1.0);
 
             rides.set(pos, ride.toBuilder()
-                    .maxCosts(maxCostResult.maxCosts())
-                    .maxCostsPerKm(maxCostResult.maxCostsPerKm())
+                    .maxCosts(maxCosts)
                     .shapleyValues(shapley)
                     .reposTimeMeanOutgoing(reposMean)
                     .build());
@@ -228,11 +231,9 @@ public final class RidePostProcessor {
         return rides;
     }
 
-    private record MaxCostResult(double[] maxCosts, double[] maxCostsPerKm) {}
-
     /** Results in list-position order (see the note in {@link #process}). */
-    private MaxCostResult[] computeMaxCosts(List<Ride> rides) {
-        MaxCostResult[] byPos = new MaxCostResult[rides.size()];
+    private double[][] computeMaxCosts(List<Ride> rides) {
+        double[][] byPos = new double[rides.size()][];
         for (int pos = 0; pos < byPos.length; pos++) {
             byPos[pos] = computeMaxCostsForRide(rides.get(pos));
         }
@@ -240,15 +241,14 @@ public final class RidePostProcessor {
     }
 
     /**
-     * Per-ride maxCosts/maxCostsPerKm — the inner loop of {@link #computeMaxCosts}, factored out so
+     * Per-ride maxCosts — the inner loop of {@link #computeMaxCosts}, factored out so
      * the streaming enricher ({@link #streamingPerRideEnricher()}) computes the SAME values one ride
      * at a time without materializing the full list. maxCost is a pure function of the ride's own
      * budget/travel-time/distance, so this is cross-ride independent (unlike Shapley/predecessors).
      */
-    private MaxCostResult computeMaxCostsForRide(Ride ride) {
+    private double[] computeMaxCostsForRide(Ride ride) {
         double[] remainingBudgets = ride.getRemainingBudgets();
         double[] maxCosts = new double[ride.getDegree()];
-        double[] maxCostsPerKm = new double[ride.getDegree()];
         DrtRequest[] requests = ride.getRequests();
         double[] travelTimes = ride.getPassengerTravelTimes();
         double[] distances = ride.getPassengerDistances();
@@ -258,14 +258,9 @@ public final class RidePostProcessor {
             double budget = (remainingBudgets != null && remainingBudgets.length > i) ? remainingBudgets[i] : 0.0;
 
             maxCosts[i] = maxCostResolver.maxCost(budget, request, travelTimes[i], distances[i]);
-
-            // Derive per-km cost (source of truth for Python optimization pipeline)
-            maxCostsPerKm[i] = distances[i] > 0
-                ? maxCosts[i] / (distances[i] / 1000.0)
-                : Double.MAX_VALUE;
         }
 
-        return new MaxCostResult(maxCosts, maxCostsPerKm);
+        return maxCosts;
     }
 
     /**
@@ -281,7 +276,7 @@ public final class RidePostProcessor {
 
     /**
      * A per-ride enrichment equivalent to {@link #process} when {@link #isStreamingPostProcessSupported()}:
-     * computes this ride's maxCosts/maxCostsPerKm and leaves Shapley and the repositioning mean unset.
+     * computes this ride's maxCosts and leaves Shapley and the repositioning mean unset.
      * Stateless over the shared resolver; intended for {@code ExMasCsvWriter.writeRidesStreaming}.
      *
      * @throws IllegalStateException if a cross-ride pass is enabled (then the full {@link #process} is required)
@@ -293,10 +288,9 @@ public final class RidePostProcessor {
                     + "those passes are cross-ride and cannot be streamed per ride. Use process() instead.");
         }
         return ride -> {
-            MaxCostResult mc = computeMaxCostsForRide(ride);
+            double[] mc = computeMaxCostsForRide(ride);
             return ride.toBuilder()
-                    .maxCosts(mc.maxCosts())
-                    .maxCostsPerKm(mc.maxCostsPerKm())
+                    .maxCosts(mc)
                     .shapleyValues(null)
                     .reposTimeMeanOutgoing(-1.0)
                     .build();
