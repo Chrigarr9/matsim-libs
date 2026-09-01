@@ -296,7 +296,6 @@ class LyonMissingTripleRegressionTest {
 						Math.max(1.0, secondPassengerTime / second.getTravelTime()) })
 				.remainingBudgets(new double[] { 0.0, 0.0 })
 				.maxCosts(new double[] { 0.0, 0.0 })
-				.maxCostsPerKm(new double[] { 0.0, 0.0 })
 				.connectionTravelTimes(connectionTravelTimes)
 				.connectionDistances(connectionDistances)
 				.connectionNetworkUtilities(new double[] { 0.0, 0.0, 0.0 })

@@ -204,11 +204,12 @@ public class KelheimScenarioFixture implements ExMasScenarioFixture {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				String[] parts = line.split(",");
-				// 36 baseline columns + 4 Extension-2 columns appended at the end of
-				// exmas_rides.csv: per-pax requestTags + hubIds, per-ride peak_pax
-				// (Task 7.2) + reposTimeMeanOutgoing (Task 4) = 40 total.
-				check(parts.length == 40,
-						"Each ride should have 40 fields, got " + parts.length);
+				// 35 baseline columns (maxCostsPerKm dropped 2026-09-01) + 4 Extension-2
+				// columns appended at the end of exmas_rides.csv: per-pax requestTags +
+				// hubIds, per-ride peak_pax (Task 7.2) + reposTimeMeanOutgoing (Task 4)
+				// = 39 total.
+				check(parts.length == 39,
+						"Each ride should have 39 fields, got " + parts.length);
 
 				int degree = Integer.parseInt(parts[1]);
 				int maxDegree = exMasConfig.getMaxPoolingDegree();
@@ -217,10 +218,10 @@ public class KelheimScenarioFixture implements ExMasScenarioFixture {
 
 				ridesByDegree.merge(degree, 1, Integer::sum);
 
-				double duration = Double.parseDouble(parts[23]);
+				double duration = Double.parseDouble(parts[22]); // rideTravelTime (was 23 before the maxCostsPerKm drop)
 				check(duration >= 0, "Duration should be non-negative, got " + duration);
 
-				double distance = Double.parseDouble(parts[24]);
+				double distance = Double.parseDouble(parts[23]); // rideDistance (was 24 before the maxCostsPerKm drop)
 				check(distance >= 0, "Distance should be non-negative, got " + distance);
 
 				String budgetsStr = parts[14];

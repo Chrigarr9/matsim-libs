@@ -321,7 +321,7 @@ public final class ExMasCsvWriter {
 		writer.write("rideIndex,degree,kind,variant," +
 				"requestIndices,personIds,groupIds,requestTimes,isCommutes,isEducations," +
 				"originsOrdered,destinationsOrdered," +
-				"passengerTravelTimes,passengerDistances,passengerDirectDistances,delays,detours,remainingBudgets,maxCosts,maxCostsPerKm,shapleyValues," +
+				"passengerTravelTimes,passengerDistances,passengerDirectDistances,delays,detours,remainingBudgets,maxCosts,shapleyValues," +
 				"startTime,endTime,rideTravelTime,rideDistance," +
 				"pickupStopLinkId,pickupStopX,pickupStopY,pickupSnappingPenalty," +
 				"dropoffStopLinkId,dropoffStopX,dropoffStopY,dropoffSnappingPenalty," +
@@ -395,7 +395,6 @@ public final class ExMasCsvWriter {
 						? formatDoubleArray(ride.getRemainingBudgets(), "%.4f")
 						: "[]";
 				String maxCosts = ride.getMaxCosts() != null ? formatDoubleArray(ride.getMaxCosts(), "%.4f") : "[]";
-				String maxCostsPerKm = ride.getMaxCostsPerKm() != null ? formatDoubleArray(ride.getMaxCostsPerKm()) : "[]";
 				String shapleyValues = ride.getShapleyValues() != null ? formatDoubleArray(ride.getShapleyValues(), "%.4f") : "[]";
 
 				// Format stop-based columns
@@ -429,11 +428,11 @@ public final class ExMasCsvWriter {
 				}
 
 				writer.write(String.format(java.util.Locale.US,
-						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s,%s,%d,%.2f",
+						"%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s,%s,%d,%.2f",
 						ride.getIndex(), ride.getDegree(), ride.getKind(), variant,
 						reqIndices, personIds, groupIds, requestTimes, isCommutes, isEducations,
 						origins, destinations,
-						pttimes, pdists, pdirects, delays, detours, budgets, maxCosts, maxCostsPerKm, shapleyValues,
+						pttimes, pdists, pdirects, delays, detours, budgets, maxCosts, shapleyValues,
 						ride.getStartTime(), ride.getEndTime(),
 						ride.getRideTravelTime(), ride.getRideDistance(),
 						pickupLinkId, pickupX, pickupY, pickupPenalty,
