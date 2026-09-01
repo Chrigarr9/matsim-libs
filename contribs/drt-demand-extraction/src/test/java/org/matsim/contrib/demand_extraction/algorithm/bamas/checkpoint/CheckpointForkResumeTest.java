@@ -12,9 +12,12 @@ import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
 /**
  * Verifies the opt-in fork resume (Plan B Task B2): a checkpoint written strictly below
  * {@code extensionParentsTopKMinDegree} may be resumed under CHANGED parent-pruning knobs when
- * {@code checkpointForkBelowMinDegree} is on — because those knobs have not yet shaped any stub at
- * that degree. Default-off keeps today's strict full-hash guard; non-forkable changes (e.g. the
- * distance gate scale) are refused regardless of the flag.
+ * {@code allowCheckpointForkBelowMinDegree} is on — because those knobs have not yet shaped any
+ * stub at that degree. Default-off keeps today's strict full-hash guard; non-forkable changes (e.g.
+ * the distance gate scale) are refused regardless of the flag.
+ * <p>Provenance 2026-09-01 -- the flag was called {@code checkpointForkBelowMinDegree} and was
+ * settable only from the Phase-2 CLI; it is now a config param too (see
+ * {@link #configFileParamArmsTheFork()}).
  *
  * <p>Drives the testable {@link RunFingerprint#matchesForResume} directly (no algorithm run) plus a
  * {@link CheckpointManager.Manifest} round-trip through {@code writeManifest}/{@code readManifest}.
@@ -129,5 +132,54 @@ class CheckpointForkResumeTest {
 				java.nio.charset.StandardCharsets.UTF_8);
 		org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
 				() -> new CheckpointManager(dir, "x", "y").readManifest());
+	}
+
+	/**
+	 * 7. The fork is armable from a CONFIG FILE, not only from the Phase-2 CLI (2026-09-01).
+	 *
+	 * <p>{@code addParam} is precisely the entry point MATSim's XML reader calls for every
+	 * {@code <param name=... value=.../>} in a config, so driving it here exercises the same path a
+	 * phase-2 config XML takes. The assertion is end-to-end rather than getter-deep: the manifest
+	 * was written under a DIFFERENT forkable knob, so it is accepted only if the config-file value
+	 * genuinely reached the resume decision.
+	 */
+	@Test
+	void configFileParamArmsTheFork() {
+		ExMasConfigGroup x = cfg();
+		x.setExtensionParentsMmrLambda(0.0);
+		CheckpointManager.Manifest m = manifestFor(x, 3); // 3 < minDegree 4
+
+		ExMasConfigGroup y = cfg();
+		y.setExtensionParentsMmrLambda(0.5);          // a forkable knob, changed
+		y.addParam("allowCheckpointForkBelowMinDegree", "true"); // as an XML <param> would
+
+		assertTrue(y.isAllowCheckpointForkBelowMinDegree(),
+				"a config-file param must arm the flag");
+		assertTrue(RunFingerprint.matchesForResume(m, y, null, null, null, "bamas",
+						y.isAllowCheckpointForkBelowMinDegree()),
+				"the config-file value must reach the resume decision, not just the getter");
+	}
+
+	/**
+	 * 8. Arming the flag must NOT itself change the fingerprint. It is a persisted param now, so it
+	 * sits in {@code getParams()} — the map the hash is built from — and is kept out of the hash by
+	 * {@code RunFingerprint.EXCLUDED_PARAMS}. Were that exclusion ever dropped, the manifest below
+	 * (written with the flag OFF) would stop matching a resume that turns the flag ON, i.e. the knob
+	 * would break the very check it exists to relax. Both fingerprints are asserted, because the
+	 * fork path compares the base hash and the strict path the full one.
+	 */
+	@Test
+	void armingTheForkDoesNotPerturbEitherFingerprint() {
+		ExMasConfigGroup off = cfg();
+		CheckpointManager.Manifest m = manifestFor(off, 3);
+
+		ExMasConfigGroup on = cfg();
+		on.setAllowCheckpointForkBelowMinDegree(true);
+
+		assertEquals(m.fingerprint, RunFingerprint.compute(on, null, null, null, "bamas"),
+				"full hash must be blind to the fork flag");
+		assertEquals(m.baseFingerprint,
+				RunFingerprint.compute(on, null, null, null, "bamas", MIN_DEGREE - 1),
+				"base hash must be blind to the fork flag");
 	}
 }

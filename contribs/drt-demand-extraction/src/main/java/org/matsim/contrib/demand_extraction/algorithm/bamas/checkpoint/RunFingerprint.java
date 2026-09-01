@@ -41,7 +41,7 @@ import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
  * {@code CrossEngineRoutingDeterminismTest}), so a crash on one box may resume on another with a
  * different core count without changing stub/cache identity. <b>This exclusion is sound only while
  * that deterministic decorator is active on the fingerprint-bearing routing path</b>;
- * {@code RunFingerprintTest} pins {@link #EXCLUDED_PARAMS} to exactly the two keys below, so any
+ * {@code RunFingerprintTest} pins {@link #EXCLUDED_PARAMS} to exactly the keys listed there, so any
  * new exclusion must be a deliberate, reviewed edit rather than a silent under-refusal.
  * <p>(The earlier "Plan A made the output scheduling-independent" rationale was refuted by
  * {@code outputs/a3-killresume-gate-1pct/GATE_RESULTS.md}: BAMAS is NOT scheduling-independent in
@@ -85,7 +85,15 @@ public final class RunFingerprint {
 			// count (ConnectionCacheJournal's COMPACTION record), so the threshold cannot change a
 			// stub or a cache value; excluded for the same reason as checkpointDir, so that raising
 			// or lowering it mid-run never refuses an otherwise valid resume.
-			"checkpointJournalCompactionBytes");
+			"checkpointJournalCompactionBytes",
+			// The opt-in fork flag itself (2026-09-01; it was a plain non-serialised field until
+			// then, so it could never reach this map). It is a decision ABOUT the resume check, not
+			// an input to the algorithm: nothing downstream of matchesForResume reads it, so it
+			// cannot change a stub or a cache value. Excluding it is mandatory rather than merely
+			// sound — hashed, it would change the fingerprint the moment an operator armed it and
+			// so guarantee the mismatch the flag exists to forgive. The exclusion also keeps every
+			// pre-2026-09-01 fingerprint byte-identical, so older checkpoints still resume.
+			"allowCheckpointForkBelowMinDegree");
 
 	/**
 	 * Parent-pruning knobs that can be varied across forks of the same checkpoint, provided the
@@ -231,13 +239,14 @@ public final class RunFingerprint {
 	 * @param tt                travel-times TSV, or {@code null}
 	 * @param net               network file, or {@code null}
 	 * @param algoVersion       algorithm/version tag (e.g. {@code "bamas"})
-	 * @param forkBelowMinDegree opt-in fork flag ({@code config.isCheckpointForkBelowMinDegree()})
+	 * @param allowForkBelowMinDegree opt-in fork flag
+	 *                          ({@code config.isAllowCheckpointForkBelowMinDegree()})
 	 * @return true if the resume is compatible
 	 */
 	public static boolean matchesForResume(CheckpointManager.Manifest m, ExMasConfigGroup config,
-			Path req, Path tt, Path net, String algoVersion, boolean forkBelowMinDegree) {
+			Path req, Path tt, Path net, String algoVersion, boolean allowForkBelowMinDegree) {
 		int minDegree = config.getExtensionParentsTopKMinDegree();
-		if (forkBelowMinDegree && m.highestDegree < minDegree) {
+		if (allowForkBelowMinDegree && m.highestDegree < minDegree) {
 			// Both sides forkable-knob-free → match iff the non-forkable params agree.
 			return matches(m.baseFingerprint, compute(config, req, tt, net, algoVersion, m.highestDegree));
 		}

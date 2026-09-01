@@ -80,7 +80,9 @@ public final class RunDemandExtractionPhase2 {
 				     "--max-walk-distance-meters",
 				     "--ordering-probe-dir",
 				     "--ordering-probe-min-degree" -> i++; // value tokens applied later (knob overrides / applyOrderingProbe)
-				case "--checkpoint-fork-below-min-degree", "--trust-checkpoint-journal",
+				case "--allow-checkpoint-fork-below-min-degree",
+				     "--checkpoint-fork-below-min-degree", // deprecated alias, see applyPhase2KnobOverrides
+				     "--trust-checkpoint-journal",
 				     "--enable-stop-based", "--enable-hyperpooling" -> { } // valueless boolean flags — applied via applyPhase2KnobOverrides
 				default -> log.warn("Unknown argument: {}", args[i]);
 			}
@@ -155,10 +157,26 @@ public final class RunDemandExtractionPhase2 {
 				case "--algorithm-process-count" -> cfg.setAlgorithmProcessCount(Integer.parseInt(args[++i]));
 				case "--heuristics-process-count" -> cfg.setHeuristicsProcessCount(Integer.parseInt(args[++i]));
 				// Valueless boolean flag: opts a resume into accepting a pre-minDegree checkpoint
-				// under changed parent-pruning knobs. Must be re-asserted here because Phase 2
-				// rebuilds ExMasConfigGroup from phase1_config.xml (which never serialises this
-				// flag), so CLI is the only way to enable it in a fresh Phase-2 JVM.
-				case "--checkpoint-fork-below-min-degree" -> cfg.setCheckpointForkBelowMinDegree(true);
+				// under changed forkable knobs. Since 2026-09-01 the parameter is also settable
+				// from the phase-2 config XML (allowCheckpointForkBelowMinDegree), so the CLI is no
+				// longer the ONLY route — but it stays the convenient one for a fresh Phase-2 JVM
+				// resuming off an existing dump whose phase1_config.xml predates the param.
+				case "--allow-checkpoint-fork-below-min-degree" ->
+						cfg.setAllowCheckpointForkBelowMinDegree(true);
+				// Deprecated alias 2026-09-01 -- the flag's former spelling. Four recorded run
+				// scripts under Dissertation/scripts (run_rural_100pct_uncapped.sh,
+				// run_rural_100pct_stage2_fork.sh,
+				// run_rural_100pct_saintvulbas_rel1_pairtop32_d8_resume.sh,
+				// run_10pct_deg2_universe_dump.sh) pass the old spelling, so it must keep working
+				// verbatim; it warns rather than failing, because an abort here would break a
+				// resume of a week-long extraction over a rename.
+				case "--checkpoint-fork-below-min-degree" -> {
+					log.warn("--checkpoint-fork-below-min-degree is DEPRECATED (renamed 2026-09-01); "
+							+ "use --allow-checkpoint-fork-below-min-degree, or set the config param "
+							+ "allowCheckpointForkBelowMinDegree in the phase-2 config XML. "
+							+ "Honouring the old flag for now.");
+					cfg.setAllowCheckpointForkBelowMinDegree(true);
+				}
 				// Valueless boolean flag: trust an existing routing journal for the maxDegree<=2 dump even
 				// under a fingerprint mismatch (warn, don't refuse). Only for reusing a journal from the
 				// SAME routing inputs under a routing-irrelevant config change (e.g. degree bound /
@@ -166,7 +184,7 @@ public final class RunDemandExtractionPhase2 {
 				case "--trust-checkpoint-journal" -> cfg.setTrustCheckpointJournal(true);
 				// Cap the maximum pooling degree. With --max-degree 2 the engine emits the degree-2
 				// pair universe and finishes (no extension), writing exmas_rides.csv straight from the
-				// base checkpoint. Combined with --checkpoint-fork-below-min-degree this reuses an
+				// base checkpoint. Combined with --allow-checkpoint-fork-below-min-degree this reuses an
 				// existing pair-gen checkpoint (written below minDegree) to dump the degree-2 rides —
 				// WITH per-passenger delays — without re-running the multi-hour pair generation.
 				case "--max-degree" -> cfg.setMaxPoolingDegree(Integer.parseInt(args[++i]));

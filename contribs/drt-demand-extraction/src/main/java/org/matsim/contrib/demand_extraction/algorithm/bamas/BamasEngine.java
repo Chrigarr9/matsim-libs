@@ -381,7 +381,7 @@ public final class BamasEngine {
 				checkpointMgr.init();
 				if (checkpointMgr.hasManifest()) {
 					CheckpointManager.Manifest m = checkpointMgr.readManifest();
-					boolean fork = exMasConfig.isCheckpointForkBelowMinDegree();
+					boolean fork = exMasConfig.isAllowCheckpointForkBelowMinDegree();
 					if (!RunFingerprint.matchesForResume(m, exMasConfig,
 							fpRequestsPath, fpTravelTimesPath, fpNetworkPath, "bamas", fork)) {
 						if (exMasConfig.isTrustCheckpointJournal()) {
@@ -398,7 +398,7 @@ public final class BamasEngine {
 								"Checkpoint in " + exMasConfig.getCheckpointDir()
 								+ " is for a different config/requests (fingerprint mismatch) — "
 								+ "delete the checkpoint dir or use a fresh one before resuming. "
-								+ "(checkpointForkBelowMinDegree=" + fork
+								+ "(allowCheckpointForkBelowMinDegree=" + fork
 								+ "; fork resume only relaxes the parent-pruning knobs when the checkpoint"
 								+ " sits strictly below extensionParentsTopKMinDegree=" + minDegree + ".)");
 					}

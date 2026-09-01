@@ -139,18 +139,63 @@ class RunFingerprintTest {
 
 	/**
 	 * Guard: the excluded-param set is EXACTLY
-	 * {@code {algorithmProcessCount, checkpointDir, checkpointJournalCompactionBytes}}. Each
-	 * exclusion is sound only on stated grounds (deterministic routing; location-not-identity;
-	 * journal disk layout, not journal contents). Pinning the set means adding a new exclusion
-	 * fails here, forcing a deliberate review of whether that param truly cannot change stub/cache
-	 * identity — an unreviewed addition is a silent under-refusal that corrupts a resume.
+	 * {@code {algorithmProcessCount, checkpointDir, checkpointJournalCompactionBytes,
+	 * allowCheckpointForkBelowMinDegree}}. Each exclusion is sound only on stated grounds
+	 * (deterministic routing; location-not-identity; journal disk layout, not journal contents;
+	 * a decision ABOUT the resume check that nothing downstream reads). Pinning the set means
+	 * adding a new exclusion fails here, forcing a deliberate review of whether that param truly
+	 * cannot change stub/cache identity — an unreviewed addition is a silent under-refusal that
+	 * corrupts a resume.
 	 */
 	@Test
-	void excludedParamsAreExactlyTheThreeSoundExclusions() {
+	void excludedParamsAreExactlyTheFourSoundExclusions() {
 		assertEquals(
 				java.util.Set.of("algorithmProcessCount", "checkpointDir",
-						"checkpointJournalCompactionBytes"),
+						"checkpointJournalCompactionBytes",
+						"allowCheckpointForkBelowMinDegree"),
 				RunFingerprint.EXCLUDED_PARAMS);
+	}
+
+	/**
+	 * The fork flag became a persisted {@code @StringGetter} param on 2026-09-01 (so a phase-2
+	 * config XML can set it), which put it into {@code getParams()} — the very map hashed here.
+	 * It MUST NOT reach the hash: an armed flag that changed the fingerprint would guarantee the
+	 * mismatch it exists to forgive, and it would invalidate every checkpoint written before the
+	 * rename. This is the regression guard for that.
+	 */
+	@Test
+	void forkFlagDoesNotChangeFingerprint() {
+		ExMasConfigGroup c2 = config();
+		c2.setAllowCheckpointForkBelowMinDegree(true);
+		assertEquals(
+				RunFingerprint.compute(config(), null, null, null, "bamas-v1"),
+				RunFingerprint.compute(c2, null, null, null, "bamas-v1"));
+	}
+
+	/** Same guard on the fork (6-arg) path, where the flag is most likely to be set. */
+	@Test
+	void forkFlagDoesNotChangeFingerprintUnderForkBelowMinDegree() {
+		ExMasConfigGroup c2 = config();
+		c2.setAllowCheckpointForkBelowMinDegree(true);
+		int resumeHighestDegree = 2; // strictly below default minDegree (4)
+		assertEquals(
+				RunFingerprint.compute(config(), null, null, null, "bamas-v1", resumeHighestDegree),
+				RunFingerprint.compute(c2, null, null, null, "bamas-v1", resumeHighestDegree));
+	}
+
+	/**
+	 * The flag is a real config param now: it round-trips through the string registry (so a
+	 * phase-2 config XML can arm it) even though it is fingerprint-excluded. Both halves matter —
+	 * settable AND unhashed.
+	 */
+	@Test
+	void forkFlagIsAConfigParamButStillExcluded() {
+		ExMasConfigGroup cfg = new ExMasConfigGroup();
+		cfg.setAllowCheckpointForkBelowMinDegree(true);
+		assertEquals("true", cfg.getParams().get("allowCheckpointForkBelowMinDegree"),
+				"must be a persisted param, otherwise a config file cannot set it");
+		assertTrue(RunFingerprint.EXCLUDED_PARAMS.contains("allowCheckpointForkBelowMinDegree"),
+				"...and must be excluded from the hash, otherwise arming it breaks its own check");
 	}
 
 	/**

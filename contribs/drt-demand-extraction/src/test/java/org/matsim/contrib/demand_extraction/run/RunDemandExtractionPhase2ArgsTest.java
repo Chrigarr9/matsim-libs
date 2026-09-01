@@ -96,7 +96,8 @@ class RunDemandExtractionPhase2ArgsTest {
 	}
 
 	// ------------------------------------------------------------------ //
-	// B3: --checkpoint-fork-below-min-degree CLI wiring                   //
+	// B3: --allow-checkpoint-fork-below-min-degree CLI wiring             //
+	// (renamed 2026-09-01 from --checkpoint-fork-below-min-degree)        //
 	// ------------------------------------------------------------------ //
 
 	@Test
@@ -104,9 +105,25 @@ class RunDemandExtractionPhase2ArgsTest {
 		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
 				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
 		RunDemandExtractionPhase2.applyPhase2KnobOverrides(
+				new String[]{"--allow-checkpoint-fork-below-min-degree"}, cfg);
+		assertTrue(cfg.isAllowCheckpointForkBelowMinDegree(),
+				"flag should flip allowCheckpointForkBelowMinDegree to true");
+	}
+
+	/**
+	 * The pre-2026-09-01 spelling must keep arming the same field. Four recorded run scripts under
+	 * {@code Dissertation/scripts} still pass it (run_rural_100pct_uncapped.sh,
+	 * run_rural_100pct_stage2_fork.sh, run_rural_100pct_saintvulbas_rel1_pairtop32_d8_resume.sh,
+	 * run_10pct_deg2_universe_dump.sh); breaking them would abort a week-long resume over a rename.
+	 */
+	@Test
+	void applyPhase2KnobOverridesHonoursDeprecatedForkFlagAlias() {
+		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
+				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
+		RunDemandExtractionPhase2.applyPhase2KnobOverrides(
 				new String[]{"--checkpoint-fork-below-min-degree"}, cfg);
-		assertTrue(cfg.isCheckpointForkBelowMinDegree(),
-				"flag should flip checkpointForkBelowMinDegree to true");
+		assertTrue(cfg.isAllowCheckpointForkBelowMinDegree(),
+				"the deprecated alias must still arm the fork flag");
 	}
 
 	@Test
@@ -114,8 +131,8 @@ class RunDemandExtractionPhase2ArgsTest {
 		org.matsim.contrib.demand_extraction.config.ExMasConfigGroup cfg =
 				new org.matsim.contrib.demand_extraction.config.ExMasConfigGroup();
 		RunDemandExtractionPhase2.applyPhase2KnobOverrides(new String[]{}, cfg);
-		org.junit.jupiter.api.Assertions.assertFalse(cfg.isCheckpointForkBelowMinDegree(),
-				"flag should stay false when --checkpoint-fork-below-min-degree is absent");
+		org.junit.jupiter.api.Assertions.assertFalse(cfg.isAllowCheckpointForkBelowMinDegree(),
+				"flag should stay false when neither spelling is present");
 	}
 
 	@Test
@@ -123,13 +140,27 @@ class RunDemandExtractionPhase2ArgsTest {
 		// The valueless flag must not cause parseArgs to misread the following token.
 		String[] args = {
 				"--phase1-dir", "/tmp/dump",
-				"--checkpoint-fork-below-min-degree",
+				"--allow-checkpoint-fork-below-min-degree",
 				"--network", "/tmp/net.xml.gz",
 				"--travel-times", "/tmp/tt.tsv",
 				"--output-dir", "/tmp/out"
 		};
 		// Should not throw; if the flag wrongly consumed --network's value, the
 		// subsequent --network token would be missing and this would throw.
+		RunDemandExtractionPhase2.Phase2Args parsed = RunDemandExtractionPhase2.parseArgs(args);
+		assertEquals(java.nio.file.Path.of("/tmp/net.xml.gz"), parsed.networkXml());
+	}
+
+	/** The deprecated alias must also stay valueless in parseArgs (same non-consumption contract). */
+	@Test
+	void parseArgsToleratesDeprecatedForkFlagAliasWithoutConsuming() {
+		String[] args = {
+				"--phase1-dir", "/tmp/dump",
+				"--checkpoint-fork-below-min-degree",
+				"--network", "/tmp/net.xml.gz",
+				"--travel-times", "/tmp/tt.tsv",
+				"--output-dir", "/tmp/out"
+		};
 		RunDemandExtractionPhase2.Phase2Args parsed = RunDemandExtractionPhase2.parseArgs(args);
 		assertEquals(java.nio.file.Path.of("/tmp/net.xml.gz"), parsed.networkXml());
 	}
