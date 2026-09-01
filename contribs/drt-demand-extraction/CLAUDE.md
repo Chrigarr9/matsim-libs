@@ -111,6 +111,13 @@ destinationY`
   `pruningMaxRidesToKeepPerRequestSet`
 - Handoff pass: `maxSuccessors` (default 50), `predecessorsFilterTime` (default 1800 s),
   `predecessorsFilterDistanceFactor`, `connectionCacheExportMode`
+- Checkpoint/resume: `checkpointDir` (empty = off), `checkpointJournalCompactionBytes`
+  (default 20 GiB, `0` = never compact). Every barrier snapshots the whole live cache, so
+  an append-only `cache.journal` grows as barriers x cache size — 83.5 GB at degree 14 of
+  the 100% run on 2026-08-31, which filled the disk and killed it. Above the threshold the
+  barrier rewrites the journal as one snapshot instead; same replayed cache, same
+  committed-barrier count for the integrity gate. Both knobs are operational and excluded
+  from `RunFingerprint`.
 
 ## Low-memory two-phase mode
 

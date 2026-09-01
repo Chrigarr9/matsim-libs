@@ -70,6 +70,7 @@ public final class RunDemandExtractionPhase2 {
 				case "--extension-parents-top-k", "--extension-parents-top-k-min-degree",
 				     "--extension-parents-top-k-metric", "--extension-parents-selection-rule",
 				     "--extension-parents-mmr-lambda", "--checkpoint-dir",
+				     "--checkpoint-journal-compaction-bytes",
 				     "--algorithm-process-count", "--heuristics-process-count",
 				     "--max-degree", "--calc-predecessors", "--calc-shapley-values",
 				     "--cache-eviction-watermark", "--pairgen-top-k", "--hyperpool-vehicle-capacity",
@@ -140,6 +141,13 @@ public final class RunDemandExtractionPhase2 {
 				// pair universe + connection-cache journal at each barrier, and resumes from
 				// the dir if a matching manifest is already present. Off ("") reproduces master.
 				case "--checkpoint-dir" -> cfg.setCheckpointDir(args[++i]);
+				// Journal compaction threshold in BYTES (0 = never compact). The journal snapshots
+				// the whole live cache at every barrier, so an append-only file grows as
+				// barriers x cache size — 83.5 GB at degree 14 of the 100% run on 2026-08-31,
+				// which filled the disk and killed it. Compaction bounds the file without
+				// changing what a resume replays.
+				case "--checkpoint-journal-compaction-bytes" ->
+						cfg.setCheckpointJournalCompactionBytes(Long.parseLong(args[++i]));
 				// Thread-count overrides. Both = 1 makes the whole pipeline (algorithm +
 				// post-processing) bit-reproducible: the shared connection cache fills in a
 				// fixed order, so routes and post-processing aggregates are deterministic.

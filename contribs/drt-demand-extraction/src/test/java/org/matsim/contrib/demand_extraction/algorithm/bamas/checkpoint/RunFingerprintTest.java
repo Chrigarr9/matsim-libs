@@ -138,16 +138,33 @@ class RunFingerprintTest {
 	}
 
 	/**
-	 * Guard: the excluded-param set is EXACTLY {@code {algorithmProcessCount, checkpointDir}}. Both
-	 * exclusions are sound only on stated grounds (deterministic routing; location-not-identity).
-	 * Pinning the set means adding a new exclusion fails here, forcing a deliberate review of
-	 * whether that param truly cannot change stub/cache identity — an unreviewed addition is a
-	 * silent under-refusal that corrupts a resume.
+	 * Guard: the excluded-param set is EXACTLY
+	 * {@code {algorithmProcessCount, checkpointDir, checkpointJournalCompactionBytes}}. Each
+	 * exclusion is sound only on stated grounds (deterministic routing; location-not-identity;
+	 * journal disk layout, not journal contents). Pinning the set means adding a new exclusion
+	 * fails here, forcing a deliberate review of whether that param truly cannot change stub/cache
+	 * identity — an unreviewed addition is a silent under-refusal that corrupts a resume.
 	 */
 	@Test
-	void excludedParamsAreExactlyTheTwoSoundExclusions() {
-		assertEquals(java.util.Set.of("algorithmProcessCount", "checkpointDir"),
+	void excludedParamsAreExactlyTheThreeSoundExclusions() {
+		assertEquals(
+				java.util.Set.of("algorithmProcessCount", "checkpointDir",
+						"checkpointJournalCompactionBytes"),
 				RunFingerprint.EXCLUDED_PARAMS);
+	}
+
+	/**
+	 * The journal compaction threshold must not fingerprint: a compacted journal replays to the
+	 * same cache map and reports the same barrier count, so changing the threshold mid-run (e.g.
+	 * to rescue a filling disk) must not refuse the resume.
+	 */
+	@Test
+	void journalCompactionThresholdDoesNotChangeFingerprint() {
+		ExMasConfigGroup c2 = config();
+		c2.setCheckpointJournalCompactionBytes(1234L);
+		assertEquals(
+				RunFingerprint.compute(config(), null, null, null, "bamas-v1"),
+				RunFingerprint.compute(c2, null, null, null, "bamas-v1"));
 	}
 
 	/** The checkpoint dir path itself must not fingerprint (resume into a moved dir is legitimate). */

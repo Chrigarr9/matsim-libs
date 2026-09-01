@@ -376,6 +376,19 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 	// ===========================================
 	private String checkpointDir = "";
 
+	// ── connection-cache journal compaction threshold, in BYTES. 0 = never compact.
+	// Every checkpoint barrier writes a FULL snapshot of the live cache, so an append-only journal
+	// costs (barriers x liveCacheSize) on disk to carry liveCacheSize of information. On 2026-08-31
+	// that reached 83.5 GB at degree 14 of the 100% run, filled C: and killed the extraction. Above
+	// this threshold the barrier REWRITES the journal as a single fresh snapshot instead of
+	// appending one (ConnectionCacheJournal.Writer.compactWithBarrier) — same replayed cache state,
+	// same committed-barrier count for the integrity gate, bounded size. Default 20 GiB: comfortably
+	// above one 100% snapshot, far below a disk-filling accumulation.
+	// This is an OPERATIONAL knob, not an identity one — it changes nothing about which rides or
+	// cache values are produced, only how the same data is laid out on disk. It is therefore in
+	// RunFingerprint.EXCLUDED_PARAMS alongside checkpointDir, so changing it never refuses a resume.
+	private long checkpointJournalCompactionBytes = 20L * 1024 * 1024 * 1024;
+
 	// ── checkpoint FORK resume (Plan B2). When true AND the checkpoint sits strictly below
 	// extensionParentsTopKMinDegree, a resume is accepted even if the parent-pruning knobs changed
 	// (those knobs have not yet shaped any stub at that degree). PLAIN field on purpose — it is a
@@ -1485,6 +1498,28 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 		return checkpointDir != null && !checkpointDir.isEmpty();
 	}
 
+	/**
+	 * Size (bytes) at which the connection-cache journal is COMPACTED instead of appended to;
+	 * {@code 0} disables compaction (pure append, the pre-2026-09-01 behaviour).
+	 *
+	 * @see #checkpointJournalCompactionBytes
+	 */
+	@StringGetter("checkpointJournalCompactionBytes")
+	public long getCheckpointJournalCompactionBytes() {
+		return checkpointJournalCompactionBytes;
+	}
+
+	/** @see #getCheckpointJournalCompactionBytes() */
+	@StringSetter("checkpointJournalCompactionBytes")
+	public void setCheckpointJournalCompactionBytes(long checkpointJournalCompactionBytes) {
+		if (checkpointJournalCompactionBytes < 0) {
+			throw new IllegalArgumentException(
+					"checkpointJournalCompactionBytes must be >= 0 (0 = never compact), got "
+							+ checkpointJournalCompactionBytes);
+		}
+		this.checkpointJournalCompactionBytes = checkpointJournalCompactionBytes;
+	}
+
 	// Run-scoped directory for enumeration analytics CSVs (enumeration_stats.csv, menu-depth files).
 	// Deliberately NOT a persisted MATSim param (no @StringGetter/@StringSetter): it is an output
 	// location set programmatically by the runner, so it must never land in phase1_config.xml, the
@@ -2030,6 +2065,14 @@ public class ExMasConfigGroup extends ReflectiveConfigGroup {
 			"resumes byte-identically from the last completed degree. The journal is part of the " +
 			"resume contract (SSSP cache entries are not re-routable bit-exactly), so one knob writes " +
 			"stubs + pre-prune pair universe + journal together. Default: \"\"");
+		map.put("checkpointJournalCompactionBytes",
+			"Size in BYTES at which the connection-cache journal is compacted instead of appended " +
+			"to. Every barrier snapshots the whole live cache, so an append-only journal grows as " +
+			"(barriers x cache size) and reached 83.5 GB at degree 14 of the 100% run (2026-08-31, " +
+			"filled the disk). Above this size the barrier rewrites the journal as one fresh " +
+			"snapshot: same replayed cache state, same committed-barrier count, bounded size. " +
+			"0 = never compact (pure append). Operational only — excluded from the resume " +
+			"fingerprint like checkpointDir. Default: 21474836480 (20 GiB)");
 		map.put("searchHorizon",
 				"Time horizon for pairing requests in ExMAS algorithm (seconds). Requests within this window can be paired. Default: 600 (10 min)");
 		map.put("maxPoolingDegree",

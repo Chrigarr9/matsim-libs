@@ -47,7 +47,9 @@ import org.matsim.contrib.demand_extraction.config.ExMasConfigGroup;
  * {@code outputs/a3-killresume-gate-1pct/GATE_RESULTS.md}: BAMAS is NOT scheduling-independent in
  * general; determinism comes specifically from the disutility decorator above.)
  * <b>{@code checkpointDir} is excluded</b> because the checkpoint location is not part of the
- * algorithm identity (resuming a moved checkpoint dir is legitimate).
+ * algorithm identity (resuming a moved checkpoint dir is legitimate), and
+ * <b>{@code checkpointJournalCompactionBytes} is excluded</b> for the same reason one level down:
+ * it decides how the connection-cache journal is laid out on disk, never what it replays to.
  *
  * <p><b>Checkpoint fork (Plan B1):</b> the 6-arg {@link #compute(ExMasConfigGroup, Path, Path,
  * Path, String, int)} overload accepts a {@code resumeHighestDegree} parameter. When the checkpoint
@@ -77,7 +79,13 @@ public final class RunFingerprint {
 	 */
 	static final Set<String> EXCLUDED_PARAMS = Set.of(
 			"algorithmProcessCount",  // thread count — routing is deterministic via DeterministicTravelDisutility (CrossEngineRoutingDeterminismTest)
-			"checkpointDir");         // the checkpoint location itself
+			"checkpointDir",          // the checkpoint location itself
+			// journal compaction threshold — a DISK-LAYOUT knob for the same journal contents. A
+			// compacted journal replays to the same cache map and reports the same committed-barrier
+			// count (ConnectionCacheJournal's COMPACTION record), so the threshold cannot change a
+			// stub or a cache value; excluded for the same reason as checkpointDir, so that raising
+			// or lowering it mid-run never refuses an otherwise valid resume.
+			"checkpointJournalCompactionBytes");
 
 	/**
 	 * Parent-pruning knobs that can be varied across forks of the same checkpoint, provided the

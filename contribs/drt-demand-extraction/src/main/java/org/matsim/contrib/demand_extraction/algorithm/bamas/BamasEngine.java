@@ -963,13 +963,18 @@ public final class BamasEngine {
 	 * at a checkpoint barrier. No-op when checkpointing is off ({@code journal == null}). Wraps the
 	 * checked IO as unchecked so the barrier call sites stay uncluttered; an IO failure here aborts
 	 * the run (the checkpoint contract cannot be honored).
+	 *
+	 * <p>Once the journal exceeds {@code checkpointJournalCompactionBytes} the barrier REWRITES it
+	 * as a single snapshot rather than appending one more (2026-09-01) — the file otherwise grows as
+	 * barriers x cache size and killed the 100% run on a full disk at 83.5 GB. Resume semantics are
+	 * unchanged; see {@code ConnectionCacheJournal}'s compaction section.
 	 */
 	private void drainJournalBarrier(ConnectionCacheJournal.Writer journal) {
 		if (journal == null) {
 			return;
 		}
 		try {
-			network.snapshotToJournal(journal);
+			network.snapshotToJournal(journal, exMasConfig.getCheckpointJournalCompactionBytes());
 		} catch (java.io.IOException e) {
 			throw new java.io.UncheckedIOException("Cannot append to connection-cache journal", e);
 		}
